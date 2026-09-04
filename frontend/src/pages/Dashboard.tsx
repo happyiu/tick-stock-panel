@@ -2,12 +2,11 @@ import { useState, useEffect, useRef, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Activity, ArrowDownRight, ArrowUpRight, BarChart3, BellRing, Database, Flame, Gauge, Info, LineChart, Loader2, Play, RefreshCw, Sparkles, Target, Timer } from 'lucide-react'
+import { Activity, ArrowDownRight, ArrowUpRight, BarChart3, BellRing, Database, Gauge, Info, LineChart, Loader2, Play, RefreshCw, Sparkles, Target, Timer } from 'lucide-react'
 import { DatePicker } from '@/components/DatePicker'
-import { api, type MarketSnapshotRow, type OverviewDimensionRankItem, type OverviewMarket, type AlertEvent } from '@/lib/api'
+import { api, type OverviewMarket, type AlertEvent } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { fmtBigNum, fmtPct } from '@/lib/format'
-import { DimensionMembersDialog, dimensionKindForSourceField, type DimensionMembersTarget } from '@/components/DimensionMembersDialog'
 import { useDataStatus, useCapabilities, useSettings, usePreferences } from '@/lib/useSharedQueries'
 import { SealedBadge } from '@/components/SealedBadge'
 import { StockPreviewDialog, toNavItems, type NavItem } from '@/components/StockPreviewDialog'
@@ -284,8 +283,8 @@ function DistributionBars({ rows }: { rows: OverviewMarket['distribution'] }) {
   const maxCount = Math.max(...rows.map(r => r.count), 1)
   return (
     <div className="grid h-24 grid-cols-8 items-end gap-1 pt-1">
-      {rows.map((r, i) => {
-        const positive = i >= 4
+      {rows.slice().reverse().map((r, i) => {
+        const positive = i < 4
         return (
           <div key={r.label} className="flex h-full min-w-0 flex-col items-center justify-end gap-0.5">
             <div className="font-mono text-[9px] text-muted">{r.count || ''}</div>
@@ -368,43 +367,6 @@ function EmotionRadar({ radar, score }: { radar: OverviewMarket['radar']; score:
   )
 }
 
-function LadderMini({ limit }: { limit: OverviewMarket['limit'] }) {
-  const tiers = limit.tiers.filter(t => t.boards >= 2).slice(0, 6)
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between rounded bg-elevated/55 px-2 py-1.5 text-[11px]">
-        <span className="text-muted">封板率</span>
-        <span className="font-mono text-accent">{(limit.seal_rate ?? 0).toFixed(0)}%</span>
-      </div>
-      {tiers.length === 0 && <div className="rounded border border-dashed border-border py-5 text-center text-xs text-muted">暂无 2 板以上</div>}
-      {tiers.map(t => {
-        const stocks = t.stocks ?? []
-        const showStocks = stocks.length > 0 && stocks.length <= 3
-        return (
-          <div key={t.boards} className="rounded bg-elevated/35 px-2 py-1.5">
-            <div className="grid grid-cols-[42px_1fr_auto] items-center gap-2">
-              <span className={`font-mono text-sm font-bold ${t.boards >= 5 ? 'text-bull' : t.boards >= 3 ? 'text-accent' : 'text-secondary'}`}>{t.boards}板</span>
-              <div className="h-1.5 overflow-hidden rounded-full bg-base">
-                <div className="h-full rounded-full bg-bull/70" style={{ width: `${Math.min(100, t.count * 12)}%` }} />
-              </div>
-              <span className="font-mono text-xs text-foreground">{t.count}</span>
-            </div>
-            {showStocks && (
-              <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 pl-[50px]">
-                {stocks.map(s => (
-                  <span key={s.symbol} className="inline-flex items-center gap-0.5 text-[9px] text-secondary">
-                    {s.name || s.symbol}
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
 function MiniMetric({ label, value, cls = 'text-foreground' }: { label: string; value: string; cls?: string }) {
   return (
     <div className="rounded-md bg-elevated/45 px-2 py-1.5 border border-border/40">
@@ -412,174 +374,6 @@ function MiniMetric({ label, value, cls = 'text-foreground' }: { label: string; 
       <div className={`mt-0.5 font-mono text-xs font-semibold ${cls}`}>{value}</div>
     </div>
   )
-}
-
-function StockList({ title, rows, mode, onStockClick, activeSymbol }: {
-  title: string; rows: MarketSnapshotRow[]; mode: 'gain' | 'loss' | 'amount' | 'active';
-  onStockClick?: (symbol: string, name?: string) => void;
-  activeSymbol?: string;
-}) {
-  return (
-    <div className="rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
-      <div className="mb-1 flex items-center justify-between">
-        <h3 className="text-xs font-semibold text-foreground">{title}</h3>
-        <span className="text-[9px] text-muted">TOP {Math.min(rows.length, 8)}</span>
-      </div>
-      <div className="space-y-1">
-        {rows.slice(0, 8).map((r, idx) => (
-          <div
-            key={`${r.symbol}-${idx}`}
-            className={`grid grid-cols-[18px_1fr_auto] items-center gap-1.5 rounded-md px-1.5 py-1 cursor-pointer transition-colors border ${r.symbol === activeSymbol ? 'bg-accent/10 border-accent/30' : 'bg-elevated/40 border-transparent hover:bg-elevated hover:brightness-110 hover:border-border/60'}`}
-            onClick={() => onStockClick?.(r.symbol, r.name ?? undefined)}
-          >
-            <span className="text-center font-mono text-[10px] text-muted">{idx + 1}</span>
-            <div className="min-w-0">
-              <div className="flex items-center gap-1">
-                <span className="truncate text-[11px] text-foreground">{r.name || r.symbol}</span>
-                {(() => {
-                  const board = boardTag(r.symbol)
-                  return board ? (
-                    <span className={`shrink-0 inline-flex items-center justify-center h-3 px-1 rounded text-[8px] font-bold leading-none border ${board.color}`}>
-                      {board.label}
-                    </span>
-                  ) : null
-                })()}
-              </div>
-              <span className="font-mono text-[9px] text-muted">{r.symbol}</span>
-            </div>
-            <div className="text-right">
-              {mode === 'amount' ? (
-                <>
-                  <div className="font-mono text-[11px] text-foreground">{fmtBigNum(r.amount)}</div>
-                  <div className={`font-mono text-[9px] ${pctClass(r.change_pct)}`}>{fmtStockPct(r.change_pct)}</div>
-                </>
-              ) : mode === 'active' ? (
-                <>
-                  <div className="font-mono text-[11px] text-accent">{fmtPrice(r.turnover_rate, 1)}%</div>
-                  <div className={`font-mono text-[9px] ${pctClass(r.change_pct)}`}>{fmtStockPct(r.change_pct)}</div>
-                </>
-              ) : (
-                <>
-                  <div className={`font-mono text-[11px] font-semibold ${pctClass(r.change_pct)}`}>{fmtStockPct(r.change_pct)}</div>
-                  <div className="font-mono text-[9px] text-muted">{fmtPrice(r.close)}</div>
-                </>
-              )}
-            </div>
-          </div>
-        ))}
-        {rows.length === 0 && <div className="py-5 text-center text-xs text-muted">暂无数据</div>}
-      </div>
-    </div>
-  )
-}
-
-function RankColumn({ title, rows, tone, onStockClick, onDimensionClick, activeSymbol }: {
-  title: string; rows: OverviewDimensionRankItem[]; tone: 'bull' | 'bear';
-  onStockClick?: (symbol: string, name?: string) => void;
-  onDimensionClick?: (target: DimensionMembersTarget) => void;
-  activeSymbol?: string;
-}) {
-  return (
-    <div className="min-w-0 space-y-1">
-      <div className={`text-[10px] font-medium ${tone === 'bull' ? 'text-bull' : 'text-bear'}`}>{title}</div>
-      {rows.slice(0, 5).map((r, idx) => {
-        const kind = r.source_field ? dimensionKindForSourceField(r.source_field) : null
-        const clickable = !!(r.source_field && kind && onDimensionClick)
-        const isActive = r.leader?.symbol != null && r.leader.symbol === activeSymbol
-        return (
-        <div
-          key={`${title}-${r.name}-${idx}`}
-          onClick={() => clickable && onDimensionClick!({
-            kind: kind!,
-            value: r.name,
-            sourceField: r.source_field!,
-          })}
-          title={clickable ? `查看「${r.name}」成分股` : undefined}
-          className={`grid grid-cols-[14px_1fr_auto] items-center gap-1 rounded-md px-1.5 py-1 border transition-colors ${
-            isActive ? 'border-accent/30 bg-accent/10' : 'border-transparent bg-elevated/40'
-          } ${clickable ? 'cursor-pointer hover:border-accent/40 hover:bg-elevated/70' : 'hover:border-border/60'}`}
-        >
-          <span className="text-center font-mono text-[9px] text-muted">{idx + 1}</span>
-          <div className="min-w-0">
-            <div className="truncate text-[11px] text-foreground" title={r.name}>
-              {r.name}
-              {clickable && <span className="ml-1 text-[8px] text-muted/50">↗</span>}
-            </div>
-            <div className="mt-0.5 flex items-center gap-1">
-              <span className="shrink-0 font-mono text-[9px] text-muted">{r.count}只</span>
-              <span className="text-muted">·</span>
-              {r.leader?.symbol ? (
-                <button
-                  onClick={(e) => { e.stopPropagation(); onStockClick?.(r.leader!.symbol!, r.leader!.name ?? undefined) }}
-                  className="truncate text-[10px] font-medium text-secondary hover:text-accent cursor-pointer transition-colors"
-                  title={r.leader?.symbol ?? undefined}
-                >{r.leader?.name ?? '—'}</button>
-              ) : (
-                <span className="truncate text-[10px] text-muted">{r.leader?.name ?? '—'}</span>
-              )}
-              {r.leader?.change_pct != null && (
-                <span className={`shrink-0 font-mono text-[9px] tabular-nums ${pctClass(r.leader.change_pct)}`}>
-                  {fmtStockPct(r.leader.change_pct)}
-                </span>
-              )}
-              {r.leader?.symbol && (() => {
-                const board = boardTag(r.leader!.symbol!)
-                return board ? (
-                  <span className={`shrink-0 inline-flex items-center justify-center h-3 px-1 rounded text-[8px] font-bold leading-none border ${board.color}`}>
-                    {board.label}
-                  </span>
-                ) : null
-              })()}
-            </div>
-          </div>
-          <div className={`font-mono text-[10px] font-semibold ${pctClass(r.avg_pct)}`}>{fmtStockPct(r.avg_pct)}</div>
-        </div>
-        )
-      })}
-      {rows.length === 0 && <div className="rounded border border-dashed border-border py-4 text-center text-xs text-muted">暂无数据</div>}
-    </div>
-  )
-}
-
-function HotRankCard({ title, rank, configUrl, onStockClick, onDimensionClick, activeSymbol }: {
-  title: string; rank?: OverviewMarket['concept_rank']; configUrl: string;
-  onStockClick?: (symbol: string, name?: string) => void;
-  onDimensionClick?: (target: DimensionMembersTarget) => void;
-  activeSymbol?: string;
-}) {
-  const hasData = (rank?.leading?.length ?? 0) > 0 || (rank?.lagging?.length ?? 0) > 0
-  return (
-    <section className="rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
-      <SectionTitle icon={Flame} title={title} hint="领涨/领跌 · 点击板块看成分股" />
-      {hasData ? (
-        <div className="grid grid-cols-2 gap-2">
-          <RankColumn title="领涨" rows={rank?.leading ?? []} tone="bull" onStockClick={onStockClick} onDimensionClick={onDimensionClick} activeSymbol={activeSymbol} />
-          <RankColumn title="领跌" rows={rank?.lagging ?? []} tone="bear" onStockClick={onStockClick} onDimensionClick={onDimensionClick} activeSymbol={activeSymbol} />
-        </div>
-      ) : (
-        <div className="py-4 text-center">
-          <p className="text-[11px] text-muted">未配置扩展数据源</p>
-          <Link
-            to={configUrl}
-            className="mt-1.5 inline-block text-[11px] text-accent hover:text-accent/80 transition-colors"
-          >
-            前往配置 →
-          </Link>
-        </div>
-      )}
-    </section>
-  )
-}
-
-// 切股导航列表构建 (与列表展示行一致: StockList 只显示前 8)
-function stockListNav(rows: MarketSnapshotRow[]): NavItem[] {
-  return toNavItems(rows.slice(0, 8))
-}
-function rankNav(rank?: OverviewMarket['concept_rank']): NavItem[] {
-  const leaders = [...(rank?.leading ?? []), ...(rank?.lagging ?? [])]
-    .map(r => r.leader)
-    .filter((l): l is NonNullable<typeof l> & { symbol: string } => !!l?.symbol)
-  return toNavItems(leaders)
 }
 
 export function Dashboard() {
@@ -590,13 +384,11 @@ export function Dashboard() {
     symbol: string
     name?: string
     alert?: AlertEvent
-    /** 打开来源榜: 仅高亮来源榜的行 */
-    source?: 'gain' | 'loss' | 'amount' | 'active' | 'concept' | 'industry' | 'alert'
-    /** 切股导航列表 (来自来源榜) */
+    /** 打开监控告警: 用于高亮当前告警来源 */
+    source?: 'alert'
+    /** 切股导航列表 (来自监控告警) */
     navList?: NavItem[]
   } | null>(null)
-  // 板块成分股弹窗 (概念/行业热度卡片行点击)
-  const [dimensionTarget, setDimensionTarget] = useState<DimensionMembersTarget | null>(null)
   // 首次使用(无数据 + 未完成引导)自动弹窗: 同一会话只弹一次
   const [showWelcomeModal, setShowWelcomeModal] = useState(false)
   const dataStatus = useDataStatus({ staleTime: 60_000 })
@@ -882,29 +674,10 @@ export function Dashboard() {
             </section>
           </div>
 
-          <div className="grid grid-cols-1 gap-1.5 md:grid-cols-2">
-            <HotRankCard title="概念热度" rank={data.concept_rank} configUrl="/concept-analysis" activeSymbol={previewStock?.source === 'concept' ? previewStock.symbol : undefined}
-              onStockClick={(symbol, name) => setPreviewStock({ symbol, name, source: 'concept', navList: rankNav(data.concept_rank) })}
-              onDimensionClick={setDimensionTarget} />
-            <HotRankCard title="行业热度" rank={data.industry_rank} configUrl="/industry-analysis" activeSymbol={previewStock?.source === 'industry' ? previewStock.symbol : undefined}
-              onStockClick={(symbol, name) => setPreviewStock({ symbol, name, source: 'industry', navList: rankNav(data.industry_rank) })}
-              onDimensionClick={setDimensionTarget} />
-          </div>
-
-          <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 xl:grid-cols-4">
-            <StockList title="涨幅榜" rows={data.top_gainers} mode="gain" activeSymbol={previewStock?.source === 'gain' ? previewStock.symbol : undefined} onStockClick={(symbol, name) => setPreviewStock({ symbol, name, source: 'gain', navList: stockListNav(data.top_gainers) })} />
-            <StockList title="跌幅榜" rows={data.top_losers} mode="loss" activeSymbol={previewStock?.source === 'loss' ? previewStock.symbol : undefined} onStockClick={(symbol, name) => setPreviewStock({ symbol, name, source: 'loss', navList: stockListNav(data.top_losers) })} />
-            <StockList title="成交额榜" rows={data.turnover_leaders} mode="amount" activeSymbol={previewStock?.source === 'amount' ? previewStock.symbol : undefined} onStockClick={(symbol, name) => setPreviewStock({ symbol, name, source: 'amount', navList: stockListNav(data.turnover_leaders) })} />
-            <StockList title="活跃换手" rows={data.active_leaders} mode="active" activeSymbol={previewStock?.source === 'active' ? previewStock.symbol : undefined} onStockClick={(symbol, name) => setPreviewStock({ symbol, name, source: 'active', navList: stockListNav(data.active_leaders) })} />
-          </div>
         </main>
 
         <aside className="min-w-0 space-y-1.5">
-          <section className="rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
-            <SectionTitle icon={Flame} title="涨停梯队" hint={<span className="inline-flex items-center gap-1">{`涨停 ${data.limit.limit_up}`}{isSealedDegrade && <span className="text-[9px] px-1 rounded bg-yellow-500/10 text-yellow-600 dark:text-yellow-500">{hasDepth ? '未修正' : '降级'}</span>}</span>} />
-            <LadderMini limit={data.limit} />
-          </section>
-          <section className="rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
+          <section className="h-full rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
             <div className="mb-2 flex items-center justify-between gap-2">
               <div className="flex items-center gap-1.5">
                 <BellRing className="h-3.5 w-3.5 text-accent" />
@@ -938,14 +711,6 @@ export function Dashboard() {
         navList={previewStock?.navList}
         onNavigate={(sym, n) => setPreviewStock(prev => prev ? { ...prev, symbol: sym, name: n, alert: undefined } : prev)}
         onClose={() => setPreviewStock(null)}
-      />
-      <DimensionMembersDialog
-        target={dimensionTarget}
-        onClose={() => setDimensionTarget(null)}
-        onStockClick={(symbol, name) => {
-          setDimensionTarget(null)
-          setPreviewStock({ symbol, name })
-        }}
       />
     </div>
   )
