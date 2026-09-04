@@ -8,7 +8,7 @@ import { api, type KlineRow, type MinuteKlineRow, type WatchlistGroup, type Watc
 import { fetchMinuteBatchIncremental } from '@/lib/minuteBatchIncremental'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
-import { fmtPrice, fmtPct, fmtBigNum, priceColorClass, formatExtNumber } from '@/lib/format'
+import { fmtAssetPrice, fmtPrice, fmtPct, fmtBigNum, priceColorClass, formatExtNumber } from '@/lib/format'
 import { cn } from '@/lib/cn'
 import { computeGroupPcts, loadGroupStatsConfig, type GroupStatsConfigPatch } from '@/lib/watchlistGroupStats'
 import { PageHeader } from '@/components/PageHeader'
@@ -579,7 +579,7 @@ const StockCard = React.memo(function StockCard({
         {/* 第二行: 大价格 + 涨跌幅胶囊 */}
         <div className="flex items-end justify-between gap-2 mb-2">
           <span className={`text-xl tabular-nums tracking-tighter leading-none ${priceColorClass(pct)}`}>
-            {fmtPrice(price)}
+            {fmtAssetPrice(price, r.asset_type)}
           </span>
           {pct != null && (
             <span className={`shrink-0 inline-flex items-center px-1.5 py-[2px] rounded text-[11px] tabular-nums ${pctBg}`}>
@@ -1813,7 +1813,7 @@ export function Watchlist() {
                 // 实时行情列：price/pct/amount 使用 rt_ 回退（自选页有实时推送）
                 const numCls = 'px-2 py-1.5 text-right num tabular-nums'
                 if (key === 'price') {
-                  return <td className={`${numCls} ${priceColorClass(pct)}`}>{fmtPrice(price)}</td>
+                  return <td className={`${numCls} ${priceColorClass(pct)}`}>{fmtAssetPrice(price, r.asset_type)}</td>
                 }
                 if (key === 'pct') {
                   return <td className={`${numCls} ${priceColorClass(pct)}`}>{fmtPct(pct)}</td>

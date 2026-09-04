@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import random
 import time
+from contextlib import suppress
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -33,6 +34,25 @@ def list_alerts(
     events = alert_store.list_recent(
         _data_dir(request), days=days, limit=limit, source=source, type=type,
     )
+    # 老告警记录可能没有 asset_type: 按 symbol 补全一次;无法解析时保留缺省以便前端回退 2 位。
+    missing_symbols = {
+        str(event.get("symbol"))
+        for event in events
+        if event.get("symbol") and not event.get("asset_type")
+    }
+    if missing_symbols:
+        repo = request.app.state.repo
+        asset_types = {}
+        for symbol in missing_symbols:
+            with suppress(Exception):
+                asset_types[symbol] = repo.resolve_asset_type(symbol)
+        if asset_types:
+            events = [
+                {**event, "asset_type": asset_types.get(str(event.get("symbol")))}
+                if event.get("symbol") and not event.get("asset_type") and str(event.get("symbol")) in asset_types
+                else event
+                for event in events
+            ]
     if ext_columns and events:
         try:
             from app.api.screener import _load_ext_value_maps, _rows_with_ext
@@ -124,6 +144,7 @@ def seed_demo_alerts(request: Request, count: int = 12, recent: bool = True):
             "rule_name": message,
             "source": source,
             "type": ev_type,
+            "asset_type": "stock",
             "symbol": "" if source == "strategy" and ("只：" in message) else sym,
             "name": name,
             "message": message,
@@ -144,6 +165,7 @@ def seed_demo_alerts(request: Request, count: int = 12, recent: bool = True):
             "rule_id": ev.get("rule_id"),
             "symbol": ev["symbol"],
             "name": ev["name"],
+            "asset_type": ev.get("asset_type"),
             "message": ev["message"],
             "price": ev["price"],
             "change_pct": ev["change_pct"],
@@ -153,4 +175,3 @@ def seed_demo_alerts(request: Request, count: int = 12, recent: bool = True):
         qs.push_alerts(sse_alerts)
 
     return {"ok": True, "generated": len(events)}
-

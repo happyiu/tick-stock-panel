@@ -21,11 +21,11 @@ def _data_dir(request: Request) -> Path:
 
 
 def _reconcile_index_asset_type(rule: dict, repo) -> dict:
-    """纠正误存为 stock 的指数规则 (asset_type → index)。
+    """纠正误存为 stock 的单一资产规则 (asset_type → etf/index)。
 
     个股弹窗加监控 / 点位提醒等入口未传 asset_type, 指数 symbol 的规则被存成
-    stock, 导致监控中心显示「个股」、引擎在股票轮评估 (指数 symbol 永不命中)。
-    仅当规则全部 symbols 都 resolve 为指数时纠正 (股票+指数混合池不动)。
+    stock, 导致监控中心显示「个股」、引擎在对应资产轮评估不到。
+    仅当规则全部 symbols 都 resolve 为同一种 ETF/指数时纠正 (混合池不动)。
     """
     if rule.get("asset_type", "stock") != "stock" or rule.get("scope") != "symbols":
         return rule
@@ -33,8 +33,9 @@ def _reconcile_index_asset_type(rule: dict, repo) -> dict:
     if not symbols:
         return rule
     try:
-        if all(repo.resolve_asset_type(s) == "index" for s in symbols):
-            rule["asset_type"] = "index"
+        asset_types = {repo.resolve_asset_type(s) for s in symbols}
+        if len(asset_types) == 1 and asset_types <= {"etf", "index"}:
+            rule["asset_type"] = asset_types.pop()
     except Exception:  # noqa: BLE001
         pass
     return rule
@@ -515,6 +516,7 @@ def test_ladder(request: Request):
                 "symbol": sym,
                 "name": sym,
                 "type": warn_label,
+                "asset_type": rule.get("asset_type", "stock"),
                 "message": f"{warn_label} · 封单 {sv_text} ≤ {th_text}",
                 "severity": rule.get("severity", "warn"),
                 "sealed_value": cur_val,
@@ -631,6 +633,7 @@ def trigger_ladder(request: Request):
             "rule_name": rule.get("name", ""),
             "source": "ladder",
             "type": warn_label,
+            "asset_type": rule.get("asset_type", "stock"),
             "symbol": sym,
             "name": name_map.get(sym, sym),
             "message": f"{warn_label} · 封单 {sv_text} ≤ {th_text}",
@@ -658,6 +661,7 @@ def trigger_ladder(request: Request):
         sse_alerts = [{
             "source": ev["source"], "type": ev["type"], "rule_id": ev["rule_id"],
             "strategy_id": None, "symbol": ev["symbol"], "name": ev["name"],
+            "asset_type": ev.get("asset_type"),
             "message": ev["message"], "price": ev["price"], "change_pct": ev["change_pct"],
             "signals": ev["signals"], "severity": ev["severity"],
             "conditions": ev["conditions"], "logic": ev["logic"],

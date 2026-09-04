@@ -983,6 +983,7 @@ export function Screener() {
                 <>
                   <ScreenerTable
                     rows={displayRows}
+                    assetType={assetType}
                     columns={columns}
                     strategyIdToName={strategyIdToName}
                     symbolStrategyMap={symbolStrategyMap}

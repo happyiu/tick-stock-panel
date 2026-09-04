@@ -122,12 +122,14 @@ def get_levels(
     end = date.today()
     start = end - timedelta(days=days * 2)
     # 按资产类型分流: ETF/指数走独立 enriched 存储, 股票保持原路径
-    df = repo.get_daily_asset(repo.resolve_asset_type(symbol), symbol, start, end)
+    asset_type = repo.resolve_asset_type(symbol)
+    df = repo.get_daily_asset(asset_type, symbol, start, end)
     if df.is_empty():
         return {"levels": {"sr": [], "pivot": [], "extreme": [],
                            "boll": [], "keltner_s": [], "keltner_m": [], "keltner_l": [],
                            "atr_stop": [], "gap": [], "fib": [], "round": []},
                 "close": None, "summary": "无数据", "symbol": symbol,
+                "asset_type": asset_type,
                 "dates": [], "series": {}}
 
     levels = compute_levels(df)
@@ -140,6 +142,7 @@ def get_levels(
         "close": close,
         "summary": summarize_levels(levels, close),
         "symbol": symbol,
+        "asset_type": asset_type,
         "dates": [str(d) for d in dates],
         "series": series,
     }

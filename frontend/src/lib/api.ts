@@ -172,6 +172,7 @@ export interface StockLevels {
   close: number | null
   summary: string
   symbol: string
+  asset_type?: 'stock' | 'etf' | 'index'
   /** dates 与 series 对齐;前端按自身 rows 的日期映射,缺失填 null */
   dates?: string[]
   series?: LevelSeries
@@ -942,6 +943,7 @@ export interface AlertEvent {
   source: string
   type: string
   symbol?: string
+  asset_type?: 'stock' | 'etf' | 'index'
   name?: string | null
   message: string
   price?: number | null
@@ -1333,6 +1335,7 @@ export interface ResearchCandidateCreate {
 // ===== Strategy Backtest =====
 export interface StrategyBacktestTrade {
   symbol: string
+  asset_type?: 'stock' | 'etf'
   name?: string
   entry_date: string
   exit_date: string
@@ -2067,6 +2070,7 @@ export const api = {
     request<{
       symbol: string
       name?: string
+      asset_type?: 'stock' | 'etf' | 'index'
       stock_info?: { name?: string; total_shares?: number; float_shares?: number; ext?: Record<string, unknown> }
       rows: KlineRow[]
       source?: string

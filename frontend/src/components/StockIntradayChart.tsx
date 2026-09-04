@@ -16,6 +16,7 @@ interface Props {
   onPriceDoubleClick?: (price: number, currentPrice: number) => void
   currentPrice?: number
   priceLines?: { value: number; label?: string; color?: string }[]
+  assetType?: string
   /** 自动刷新间隔(ms)。undefined/0 = 不轮询(默认)。个股对话框盘中实时刷新时传入。 */
   refetchIntervalMs?: number
 }
@@ -30,6 +31,7 @@ export function StockIntradayChart({
   onPriceDoubleClick,
   currentPrice,
   priceLines,
+  assetType,
   refetchIntervalMs,
 }: Props) {
   const qc = useQueryClient()
@@ -53,6 +55,7 @@ export function StockIntradayChart({
   })
 
   const minuteRows: MinuteKlineRow[] = useMemo(() => minute.data?.rows ?? [], [minute.data?.rows])
+  const resolvedAssetType = assetType ?? minute.data?.asset_type
   // source=none 表示本地无数据且 TickFlow 也拉不到 (停牌/复牌延迟/非交易日)
   // 此时不弹"是否获取"询问窗, 只做静态提示, 避免误导用户去拉明知拉不到的数据
   const sourceIsNone = minute.data?.source === 'none'
@@ -132,6 +135,7 @@ export function StockIntradayChart({
           onPriceDoubleClick={onPriceDoubleClick}
           currentPrice={currentPrice}
           priceLines={priceLines}
+          assetType={resolvedAssetType}
         />
       )}
     </div>

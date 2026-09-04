@@ -13,6 +13,7 @@ interface Props {
   refetchIntervalMs?: number
   onPriceDoubleClick?: (price: number, currentPrice: number) => void
   priceLines?: { value: number; label?: string; color?: string }[]
+  assetType?: string
 }
 
 function errorMessage(error: unknown): string {
@@ -26,6 +27,7 @@ export function StockMultiDayIntradayChart({
   refetchIntervalMs,
   onPriceDoubleClick,
   priceLines,
+  assetType,
 }: Props) {
   const queryClient = useQueryClient()
   const history = useQuery({
@@ -186,6 +188,7 @@ export function StockMultiDayIntradayChart({
         height={chartHeight}
         onPriceDoubleClick={onPriceDoubleClick}
         priceLines={priceLines}
+        assetType={assetType ?? history.data?.asset_type ?? latest.data?.asset_type}
       />
       {syncMinute.isError && (
         <div className="px-3 pt-1 text-center text-[11px] text-danger">{errorMessage(syncMinute.error)}</div>

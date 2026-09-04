@@ -6,7 +6,7 @@ import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { cn } from '@/lib/cn'
 import { cnSignal } from '@/lib/signals'
-import { fmtPct } from '@/lib/format'
+import { fmtAssetPrice, fmtPct } from '@/lib/format'
 import { StockPanel, getDefaultRange } from '@/components/StockPanel'
 import { WatchlistAddMenu } from '@/components/WatchlistAddMenu'
 import { StockMultiDayIntradayChart } from '@/components/StockMultiDayIntradayChart'
@@ -32,6 +32,7 @@ interface Props {
     ts?: number
     signals?: string[]
     message?: string
+    asset_type?: 'stock' | 'etf' | 'index'
   } | null
   /** 有序候选列表: 提供后支持左右键/顶栏按钮切股, 标题栏显示 n/N */
   navList?: NavItem[]
@@ -111,6 +112,7 @@ function fmtAbnormalCalcTime(asofSec: number): string {
 
 export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList: navListSource, onNavigate }: Props) {
   const [view, setView] = useState<PreviewView>('daily')
+  const [assetType, setAssetType] = useState<'stock' | 'etf' | 'index' | undefined>(triggerInfo?.asset_type)
   const [intradayDays, setIntradayDays] = useState<number | null>(loadIntradayDays)
   const [dateRange, setDateRange] = useState(getDefaultRange)
   const [showMonitorEditor, setShowMonitorEditor] = useState(false)
@@ -244,8 +246,9 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
   useEffect(() => {
     if (prevSymbolRef.current == null && symbol != null) setView('daily')
     prevSymbolRef.current = symbol
+    setAssetType(triggerInfo?.asset_type)
     setPriceAlertDraft(null)
-  }, [symbol])
+  }, [symbol, triggerInfo?.asset_type])
 
   // 焦点股票注册: SSE quotes_updated 推送时精准 invalidate 当前股票日K,
   // 让对话框日K最后一根蜡烛随实时价变化 (后端只读内存, 不调 TickFlow)。
@@ -533,7 +536,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                 {/* 中: 价格 + 涨跌幅 */}
                 <div className="flex items-center gap-2 shrink-0">
                   {triggerInfo.price != null && (
-                    <span className="text-[11px] font-mono text-foreground/80">{triggerInfo.price.toFixed(2)}</span>
+                    <span className="text-[11px] font-mono text-foreground/80">{fmtAssetPrice(triggerInfo.price, triggerInfo.asset_type ?? assetType)}</span>
                   )}
                   {triggerInfo.changePct != null && (
                     <span className={`text-[11px] font-mono font-medium ${triggerInfo.changePct >= 0 ? 'text-danger' : 'text-bear'}`}>
@@ -610,6 +613,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                   showIntraday
                   dateRange={dateRange}
                   priceLines={monitorPriceLines}
+                  onAssetTypeChange={setAssetType}
                   onPriceDoubleClick={openPriceAlert}
                   refetchIntervalMs={intradayRefetchMs}
                   prefetchSymbols={prefetchSymbols}
@@ -622,6 +626,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                   symbol={symbol}
                   dateRange={dateRange}
                   infoBarOnly
+                  onAssetTypeChange={setAssetType}
                   prefetchSymbols={prefetchSymbols}
                   intradayDays={effectiveIntradayDays}
                 />
@@ -631,6 +636,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                   height={480}
                   refetchIntervalMs={intradayRefetchMs}
                   priceLines={monitorPriceLines}
+                  assetType={assetType}
                   onPriceDoubleClick={openPriceAlert}
                 />
                 </>
@@ -663,6 +669,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                         scope: 'symbols',
                         symbols: [symbol],
                         type: 'signal',
+                        asset_type: assetType ?? 'stock',
                         logic: 'or',
                       }}
                       onClose={() => setShowMonitorEditor(false)}
@@ -695,6 +702,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
           key={`${symbol}-${priceAlertDraft.id}`}
           symbol={symbol}
           name={name ?? ''}
+          assetType={assetType}
           initialTarget={priceAlertDraft.targetPrice}
           initialCurrentPrice={priceAlertDraft.currentPrice}
           onClose={() => setPriceAlertDraft(null)}

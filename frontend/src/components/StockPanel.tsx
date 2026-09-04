@@ -32,6 +32,8 @@ interface Props {
   showMarkerToggle?: boolean
   /** 加监控回调 (传入后信息条显示 RadioTower 图标) */
   onMonitor?: () => void
+  /** 将查询到的资产类型传给外部弹窗/告警输入。 */
+  onAssetTypeChange?: (assetType?: 'stock' | 'etf' | 'index') => void
   onPriceDoubleClick?: (price: number, currentPrice: number) => void
   /** 自选操作（传入后信息条显示 Star 图标） */
   inWatchlist?: boolean
@@ -65,6 +67,7 @@ export function StockPanel({
   showLimitMarkers = true,
   showMarkerToggle = true,
   onMonitor,
+  onAssetTypeChange,
   onPriceDoubleClick,
   inWatchlist,
   onAddToWatchlist,
@@ -110,6 +113,11 @@ export function StockPanel({
   const rows = useMemo(() => toOHLC(rawRows), [rawRows])
   const stockInfo = kline.data?.stock_info
   const name = kline.data?.name
+  const assetType = kline.data?.asset_type
+
+  useEffect(() => {
+    if (assetType) onAssetTypeChange?.(assetType)
+  }, [assetType, onAssetTypeChange])
 
   const handleDateClick = useCallback((date: string) => {
     setSelectedDate(date)
@@ -188,6 +196,7 @@ export function StockPanel({
         name={name}
         stockInfo={stockInfo}
         rows={rawRows}
+        assetType={assetType}
         fields={fields}
         onFieldsChange={handleFieldsChange}
         financialMetrics={financialMetrics}
@@ -237,6 +246,7 @@ export function StockPanel({
               onPriceDoubleClick={onPriceDoubleClick}
               currentPrice={rows[rows.length - 1]?.close}
               priceLines={priceLines}
+              assetType={assetType}
               refetchIntervalMs={refetchIntervalMs}
             />
           </div>

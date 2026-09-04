@@ -9,6 +9,7 @@ import { LastStockChip } from '@/components/LastStockChip'
 import { AnalysisKChart, type PriceLevel, type LevelType } from '@/components/stock-analysis/AnalysisKChart'
 import { PriceAlertDialog } from '@/components/stock-analysis/PriceAlertDialog'
 import { api } from '@/lib/api'
+import { fmtAssetPrice } from '@/lib/format'
 import { useLastStock } from '@/lib/useLastStock'
 import { QK } from '@/lib/queryKeys'
 import { toast } from '@/components/Toast'
@@ -209,6 +210,7 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
   }
 
   const levels = (levelsQ.data?.levels ?? {}) as Record<LevelType, PriceLevel[]>
+  const assetType = levelsQ.data?.asset_type ?? kline.data?.asset_type
 
   // 涨跌色:最后一根 K 线收 vs 前一根收(无前日则按开收判断)
   const last = rows[rows.length - 1]
@@ -229,7 +231,7 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
             <span className="text-[10px] text-muted/60">·</span>
             <span className="text-[10px] text-muted">当前价</span>
             <span className={`text-base font-mono font-bold ${isUp ? 'text-bull' : 'text-bear'}`}>
-              {curClose?.toFixed(2) ?? '—'}
+              {fmtAssetPrice(curClose, assetType)}
             </span>
           </div>
         </div>
@@ -242,6 +244,7 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
           seriesDates={levelsQ.data?.dates}
           defaultLevelTypes={['sr', 'pivot', 'keltner_s']}
           height={480}
+          assetType={assetType}
         />
       </div>
     </div>

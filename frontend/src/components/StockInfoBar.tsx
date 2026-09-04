@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { Settings2, RadioTower, Star, ExternalLink } from 'lucide-react'
 import type { KlineRow, FinancialMetricRecord } from '@/lib/api'
-import { fmtPrice, fmtBigNum, fmtVolume } from '@/lib/format'
+import { fmtAssetPrice, fmtPrice, fmtBigNum, fmtVolume } from '@/lib/format'
 import { ListColumnCustomizer } from '@/components/ListColumnCustomizer'
 import { WatchlistAddMenu } from '@/components/WatchlistAddMenu'
 import { INFO_GROUPS, type ColumnConfig } from '@/lib/stock-info-fields'
@@ -15,6 +15,7 @@ interface Props {
   name?: string
   stockInfo?: { name?: string; total_shares?: number; float_shares?: number; ext?: Record<string, unknown> }
   rows: KlineRow[]
+  assetType?: string
   /** 信息条字段配置（由 StockPanel 提升，受控） */
   fields: ColumnConfig[]
   onFieldsChange: (fields: ColumnConfig[]) => void
@@ -100,6 +101,7 @@ export function StockInfoBar({
   name,
   stockInfo,
   rows,
+  assetType,
   fields,
   onFieldsChange,
   financialMetrics,
@@ -184,9 +186,9 @@ export function StockInfoBar({
         const lo = Number(latest.low)
         return `${((hi - lo) / prevClose * 100).toFixed(2)}%`
       }
-      case 'open': return fmtPrice(Number(latest.open))
-      case 'high': return fmtPrice(Number(latest.high))
-      case 'low':  return fmtPrice(Number(latest.low))
+      case 'open': return fmtAssetPrice(Number(latest.open), assetType)
+      case 'high': return fmtAssetPrice(Number(latest.high), assetType)
+      case 'low':  return fmtAssetPrice(Number(latest.low), assetType)
       // 财务指标：百分比字段存储为百分点(12.3 表示 12.3%)，直接 toFixed(2) + %
       case 'eps':         return financialMetrics?.eps_basic != null ? fmtPrice(financialMetrics.eps_basic) : null
       case 'bps':         return financialMetrics?.bps != null ? fmtPrice(financialMetrics.bps) : null
@@ -245,10 +247,10 @@ export function StockInfoBar({
         <span className="text-foreground font-bold text-sm tracking-wide">{symbol}</span>
         <span className="text-secondary font-medium">{displayName}</span>
         <span style={{ color: clr }} className="text-lg font-bold tabular-nums">
-          {fmtPrice(close)}
+          {fmtAssetPrice(close, assetType)}
         </span>
         <span style={{ color: clr }} className="tabular-nums">
-          {isUp ? '+' : ''}{fmtPrice(chg)}
+          {isUp ? '+' : ''}{fmtAssetPrice(chg, assetType)}
         </span>
         <span style={{ color: clr }} className="tabular-nums">
           {isUp ? '+' : ''}{fmtPrice(chgPct)}%

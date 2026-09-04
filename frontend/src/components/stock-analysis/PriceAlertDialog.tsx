@@ -5,6 +5,7 @@ import { ArrowDown, ArrowUp, Bell, Check, ExternalLink, Loader2, Trash2, X } fro
 import { toast } from '@/components/Toast'
 import { LEVEL_GROUPS } from './AnalysisKChart'
 import { api, genRuleId, type MonitorRule, type PriceLevel } from '@/lib/api'
+import { fmtAssetPrice, priceDigits } from '@/lib/format'
 import {
   buildPriceAlertMessage,
   inferPriceAlertDirection,
@@ -21,6 +22,7 @@ interface Props {
   onClose: () => void
   initialTarget?: number
   initialCurrentPrice?: number | null
+  assetType?: NonNullable<MonitorRule['asset_type']>
 }
 
 const COOLDOWNS = [
@@ -40,6 +42,7 @@ export function PriceAlertDialog({
   onClose,
   initialTarget,
   initialCurrentPrice,
+  assetType,
 }: Props) {
   const qc = useQueryClient()
   const backdrop = useDialogBackdrop(onClose)
@@ -50,20 +53,24 @@ export function PriceAlertDialog({
     staleTime: 60_000,
   })
   const rulesQuery = useQuery({ queryKey: QK.monitorRules, queryFn: api.monitorRulesList })
+  const resolvedAssetType: NonNullable<MonitorRule['asset_type']> = assetType ?? levelsQuery.data?.asset_type ?? 'stock'
   const initialTargetValue = initialTarget != null && Number.isFinite(initialTarget) && initialTarget > 0
-    ? Math.round(initialTarget * 100) / 100
+    ? initialTarget
     : null
   const initialDirection = initialTargetValue == null
     ? 'up'
     : inferPriceAlertDirection(initialTargetValue, initialCurrentPrice)
   const [tab, setTab] = useState<'create' | 'existing'>('create')
   const [direction, setDirection] = useState<PriceAlertDirection>(initialDirection)
-  const [target, setTarget] = useState(initialTargetValue?.toFixed(2) ?? '')
+  const [target, setTarget] = useState(initialTargetValue == null
+    ? ''
+    : assetType ? fmtAssetPrice(initialTargetValue, assetType) : initialTargetValue.toString())
+  const [targetEdited, setTargetEdited] = useState(false)
   const [selectedLabel, setSelectedLabel] = useState('')
   const [cooldown, setCooldown] = useState(3600)
   const [message, setMessage] = useState(initialTargetValue == null
     ? ''
-    : buildPriceAlertMessage(name, symbol, initialDirection, initialTargetValue))
+    : buildPriceAlertMessage(name, symbol, initialDirection, initialTargetValue, resolvedAssetType))
   const [messageEdited, setMessageEdited] = useState(false)
   const [channels, setChannels] = useState<string[]>([])
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
@@ -80,7 +87,7 @@ export function PriceAlertDialog({
       .filter(level => Number.isFinite(level.value) && level.value > 0)
       .sort((a, b) => Math.abs(a.value - currentPrice) - Math.abs(b.value - currentPrice))
       .filter(level => {
-        const key = level.value.toFixed(2)
+        const key = fmtAssetPrice(level.value, resolvedAssetType)
         if (seen.has(key)) return false
         seen.add(key)
         return true
@@ -89,16 +96,21 @@ export function PriceAlertDialog({
       above: all.filter(level => level.value > currentPrice).slice(0, 6),
       below: all.filter(level => level.value < currentPrice).slice(0, 6),
     }
-  }, [currentPrice, levelsQuery.data?.levels])
+  }, [currentPrice, levelsQuery.data?.levels, resolvedAssetType])
+
+  useEffect(() => {
+    if (initialTargetValue == null || targetEdited || (assetType == null && levelsQuery.data?.asset_type == null)) return
+    setTarget(fmtAssetPrice(initialTargetValue, resolvedAssetType))
+  }, [assetType, initialTargetValue, levelsQuery.data?.asset_type, resolvedAssetType, targetEdited])
 
   useEffect(() => {
     if (target || currentPrice == null) return
     const initial = recommended.above[0] ?? recommended.below[0]
     if (!initial) return
-    setTarget(initial.value.toFixed(2))
+    setTarget(fmtAssetPrice(initial.value, resolvedAssetType))
     setDirection(initial.value > currentPrice ? 'up' : 'down')
     setSelectedLabel(initial.label)
-  }, [currentPrice, recommended, target])
+  }, [currentPrice, recommended, resolvedAssetType, target])
 
   useEffect(() => {
     if (channelsInitialized.current || !prefs) return
@@ -126,24 +138,25 @@ export function PriceAlertDialog({
   const targetValid = Number.isFinite(targetValue) && targetValue > 0
   useEffect(() => {
     if (initialTargetValue == null || messageEdited || !targetValid) return
-    setMessage(buildPriceAlertMessage(name, symbol, direction, targetValue))
-  }, [direction, initialTargetValue, messageEdited, name, symbol, targetValid, targetValue])
+    setMessage(buildPriceAlertMessage(name, symbol, direction, targetValue, resolvedAssetType))
+  }, [direction, initialTargetValue, messageEdited, name, resolvedAssetType, symbol, targetValid, targetValue])
 
   const alreadyReached = targetValid && currentPrice != null && (
     direction === 'up' ? currentPrice >= targetValue : currentPrice <= targetValue
   )
   const duplicate = targetValid && pointRules.some(rule => {
     const alert = parsePointPriceAlert(rule, symbol)!
-    return alert.direction === direction && Math.abs(alert.target - targetValue) < 0.005
+    const tolerance = 0.5 * 10 ** -priceDigits(resolvedAssetType)
+    return alert.direction === direction && Math.abs(alert.target - targetValue) < tolerance
   })
 
   const save = useMutation({
     mutationFn: () => api.monitorRuleSave({
       id: genRuleId(),
-      name: `点位提醒 · ${name || symbol} · ${direction === 'up' ? '涨至' : '跌至'}${selectedLabel || targetValue.toFixed(2)}`,
+      name: `点位提醒 · ${name || symbol} · ${direction === 'up' ? '涨至' : '跌至'}${selectedLabel || fmtAssetPrice(targetValue, resolvedAssetType)}`,
       enabled: true,
       type: 'price',
-      asset_type: 'stock',
+      asset_type: resolvedAssetType,
       scope: 'symbols',
       symbols: [symbol],
       sector: null,
@@ -184,13 +197,15 @@ export function PriceAlertDialog({
   })
 
   const selectLevel = (level: PriceLevel) => {
-    setTarget(level.value.toFixed(2))
+    setTarget(fmtAssetPrice(level.value, resolvedAssetType))
+    setTargetEdited(true)
     setDirection(inferPriceAlertDirection(level.value, currentPrice))
     setSelectedLabel(level.label)
   }
 
   const updateTarget = (value: string) => {
     setTarget(value)
+    setTargetEdited(true)
     setSelectedLabel('')
     const parsed = Number(value)
     if (Number.isFinite(parsed)) {
@@ -223,7 +238,7 @@ export function PriceAlertDialog({
               <span className="shrink-0 font-mono text-[10px] text-muted">{symbol}</span>
             </div>
             <div className="mt-0.5 text-[10px] text-muted">
-              当前价 <span className="font-mono text-foreground">{currentPrice?.toFixed(2) ?? '—'}</span>
+              当前价 <span className="font-mono text-foreground">{fmtAssetPrice(currentPrice, resolvedAssetType)}</span>
             </div>
           </div>
           <button onClick={onClose} className="rounded-md p-1.5 text-muted transition-colors hover:bg-elevated hover:text-foreground" title="关闭">
@@ -260,7 +275,7 @@ export function PriceAlertDialog({
               <label className="space-y-1.5">
                 <span className="text-[11px] text-muted">目标价格</span>
                 <div className="relative">
-                  <input type="number" min="0" step="0.01" value={target} onChange={event => updateTarget(event.target.value)} className="h-9 w-full rounded-md border border-border bg-base px-3 pr-14 font-mono text-sm text-foreground focus:border-sky-400/50 focus:outline-none" />
+                  <input type="number" min="0" step={10 ** -priceDigits(resolvedAssetType)} value={target} onChange={event => updateTarget(event.target.value)} className="h-9 w-full rounded-md border border-border bg-base px-3 pr-14 font-mono text-sm text-foreground focus:border-sky-400/50 focus:outline-none" />
                   {targetValid && currentPrice != null && (
                     <span className={`absolute right-3 top-2.5 font-mono text-[10px] ${targetValue >= currentPrice ? 'text-bull' : 'text-bear'}`}>
                       {((targetValue / currentPrice - 1) * 100).toFixed(2)}%
@@ -288,14 +303,14 @@ export function PriceAlertDialog({
                       {group.levels.length === 0 ? (
                         <div className="py-5 text-center text-[10px] text-muted">暂无价位</div>
                       ) : group.levels.map(level => {
-                        const selected = Math.abs(Number(target) - level.value) < 0.005
+                        const selected = Math.abs(Number(target) - level.value) < 0.5 * 10 ** -priceDigits(resolvedAssetType)
                         return (
                           <button key={`${level.type}-${level.value}`} onClick={() => selectLevel(level)} className={`flex h-10 w-full items-center gap-2 px-1.5 text-left transition-colors hover:bg-elevated/60 ${selected ? 'bg-sky-400/[0.08]' : ''}`}>
                             <span className="min-w-0 flex-1">
                               <span className={`block truncate text-[11px] ${selected ? 'text-sky-300' : 'text-foreground'}`}>{level.label}</span>
                               <span className="block truncate text-[9px] text-muted">{levelGroupLabel(level)}</span>
                             </span>
-                            <span className="shrink-0 font-mono text-xs text-secondary">{level.value.toFixed(2)}</span>
+                            <span className="shrink-0 font-mono text-xs text-secondary">{fmtAssetPrice(level.value, resolvedAssetType)}</span>
                             <span className={`grid h-4 w-4 shrink-0 place-items-center rounded-full border ${selected ? 'border-sky-400 bg-sky-400 text-white' : 'border-border text-transparent'}`}>
                               <Check className="h-2.5 w-2.5" />
                             </span>
@@ -368,7 +383,7 @@ export function PriceAlertDialog({
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-xs text-foreground">{rule.name}</span>
-                        <span className="mt-0.5 block font-mono text-[10px] text-muted">{isUp ? '涨至' : '跌至'} {alert.target.toFixed(2)} · {COOLDOWNS.find(item => item.value === rule.cooldown_seconds)?.label ?? `${rule.cooldown_seconds} 秒`}</span>
+                        <span className="mt-0.5 block font-mono text-[10px] text-muted">{isUp ? '涨至' : '跌至'} {fmtAssetPrice(alert.target, rule.asset_type ?? resolvedAssetType)} · {COOLDOWNS.find(item => item.value === rule.cooldown_seconds)?.label ?? `${rule.cooldown_seconds} 秒`}</span>
                       </span>
                       <button role="switch" aria-checked={rule.enabled} onClick={() => toggle.mutate(rule)} disabled={toggle.isPending} className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${rule.enabled ? 'bg-sky-500' : 'bg-elevated'}`} title={rule.enabled ? '停用' : '启用'}>
                         <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${rule.enabled ? 'translate-x-[18px]' : 'translate-x-0.5'}`} />

@@ -8,7 +8,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { Skeleton } from '@/components/data/Skeleton'
 import { api, type MonitorRule, type AlertEvent, type MonitorCondition, type MonitorExtFieldItem } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
-import { fmtPrice, fmtPct } from '@/lib/format'
+import { fmtAssetPrice, fmtPct } from '@/lib/format'
 import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 import { cn } from '@/lib/cn'
 import { cnSignal } from '@/lib/signals'
@@ -452,7 +452,7 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
                           {ev.price != null && (
                             <span className={cn('inline-flex items-center gap-0.5 text-[11px] font-mono', _pct >= 0 ? 'text-danger' : 'text-bear')}>
                               {_pct >= 0 ? <TrendingUp className="h-2.5 w-2.5" /> : <TrendingDown className="h-2.5 w-2.5" />}
-                              {fmtPrice(ev.price)}
+                              {fmtAssetPrice(ev.price, ev.asset_type)}
                             </span>
                           )}
                           {ev.change_pct != null && (
@@ -531,7 +531,7 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
                         {ev.price != null && (
                           <span className={cn('inline-flex items-center gap-0.5 text-[11px] font-mono', (ev.change_pct ?? 0) >= 0 ? 'text-danger' : 'text-bear')}>
                             {(ev.change_pct ?? 0) >= 0 ? <TrendingUp className="h-2.5 w-2.5" /> : <TrendingDown className="h-2.5 w-2.5" />}
-                            {fmtPrice(ev.price)}
+                            {fmtAssetPrice(ev.price, ev.asset_type)}
                           </span>
                         )}
                         {ev.change_pct != null && (
@@ -567,7 +567,7 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
                             <>
                               <span className="text-muted">·</span>
                               <span className="text-muted">现价</span>
-                              <span className="font-mono text-foreground/90">{fmtPrice(ev.price)}</span>
+                              <span className="font-mono text-foreground/90">{fmtAssetPrice(ev.price, ev.asset_type)}</span>
                             </>
                           )}
                         </div>
@@ -643,6 +643,7 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
           ts: previewEv.ts,
           signals: previewEv.signals,
           message: previewEv.message,
+          asset_type: previewEv.asset_type,
         } : null}
         navList={previewNavList}
         onNavigate={handleNavigate}

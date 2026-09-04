@@ -393,7 +393,8 @@ def get_daily(
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"TickFlow fetch failed: {e}") from e
         if raw.is_empty():
-            return {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": []}
+            return {"symbol": symbol, "name": stock_name, "asset_type": asset_type,
+                    "stock_info": stock_info, "rows": []}
         # 拉除权因子做前复权 (Starter+ 有权限), 否则空 df → compute_enriched 退回未复权
         factors = pl.DataFrame()
         capset = getattr(request.app.state, "capabilities", None)
@@ -407,7 +408,8 @@ def get_daily(
         rows = enriched.tail(days).to_dicts()
         # 即使 live 模式也尝试追加实时蜡烛
         rows = _maybe_inject_live_candle(request, symbol, rows, asset_type)
-        resp = {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": rows, "source": "live"}
+        resp = {"symbol": symbol, "name": stock_name, "asset_type": asset_type,
+                "stock_info": stock_info, "rows": rows, "source": "live"}
         return _attach_ext(resp, repo, symbol, ext_columns)
 
     rows = df.to_dicts()
@@ -415,7 +417,8 @@ def get_daily(
     # 追加/覆盖今日实时蜡烛
     rows = _maybe_inject_live_candle(request, symbol, rows, asset_type)
 
-    resp = {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": rows, "source": "enriched"}
+    resp = {"symbol": symbol, "name": stock_name, "asset_type": asset_type,
+            "stock_info": stock_info, "rows": rows, "source": "enriched"}
     return _attach_ext(resp, repo, symbol, ext_columns)
 
 

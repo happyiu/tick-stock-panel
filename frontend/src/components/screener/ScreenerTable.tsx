@@ -27,6 +27,7 @@ import { cn } from '@/lib/cn'
 
 interface ScreenerTableProps {
   rows: any[]
+  assetType?: 'stock' | 'etf'
   columns: ColumnConfig[]
   strategyIdToName: Record<string, string>
   symbolStrategyMap: Map<string, string[]>
@@ -159,7 +160,7 @@ function renderExtValue(
 }
 
 export function ScreenerTable({
-  rows, columns, strategyIdToName, symbolStrategyMap, activeStrategy,
+  rows, assetType, columns, strategyIdToName, symbolStrategyMap, activeStrategy,
   watchlistSet, onPreview, onAddToWatchlist, onRemoveFromWatchlist, watchlistPending, klineData = {},
   dailyKChartVisible = true, onToggleDailyKChart,
   minuteData = {}, intradayChartVisible = true, onToggleIntradayChart,
@@ -383,7 +384,7 @@ export function ScreenerTable({
       }
       default:
         // 纯数据列 → 共享原语
-        return renderBuiltinDataCell(r, col)
+        return renderBuiltinDataCell(r, col, assetType)
     }
   }
 

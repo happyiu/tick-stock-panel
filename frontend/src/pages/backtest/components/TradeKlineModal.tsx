@@ -4,11 +4,12 @@ import { Clock, X } from 'lucide-react'
 import { StockPanel } from '@/components/StockPanel'
 import type { ChartPriceLine, ChartRange } from '@/components/EChartsCandlestick'
 import type { StrategyBacktestTrade } from '@/lib/api'
-import { fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
+import { fmtAssetPrice, fmtPct, priceColorClass } from '@/lib/format'
 import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 
 interface Props {
   trade: StrategyBacktestTrade | null
+  assetType?: 'stock' | 'etf'
   onClose: () => void
 }
 
@@ -33,7 +34,7 @@ function fmtSignedMoney(v: number | null | undefined): string {
   return `${prefix}${fmtMoney(v)}`
 }
 
-export function TradeKlineModal({ trade, onClose }: Props) {
+export function TradeKlineModal({ trade, assetType, onClose }: Props) {
   const [showIntraday, setShowIntraday] = useState(false)
   const backdrop = useDialogBackdrop(onClose)
 
@@ -75,20 +76,20 @@ export function TradeKlineModal({ trade, onClose }: Props) {
     return [
       {
         value: Number(trade.entry_price),
-        label: `买入价 ${fmtPrice(trade.entry_price)}`,
+        label: `买入价 ${fmtAssetPrice(trade.entry_price, trade.asset_type ?? assetType)}`,
         color: '#C74040',
         start,
         end,
       },
       {
         value: Number(trade.exit_price),
-        label: `卖出价 ${fmtPrice(trade.exit_price)}`,
+        label: `卖出价 ${fmtAssetPrice(trade.exit_price, trade.asset_type ?? assetType)}`,
         color: '#2D9B65',
         start,
         end,
       },
     ]
-  }, [trade])
+  }, [assetType, trade])
 
   return (
     <AnimatePresence>
@@ -123,7 +124,7 @@ export function TradeKlineModal({ trade, onClose }: Props) {
               <div className="flex shrink-0 items-center gap-3 text-xs">
                 <div className="text-right">
                   <div className="text-muted">买 / 卖</div>
-                  <div className="num text-foreground">{fmtPrice(trade.entry_price)} / {fmtPrice(trade.exit_price)}</div>
+                  <div className="num text-foreground">{fmtAssetPrice(trade.entry_price, trade.asset_type ?? assetType)} / {fmtAssetPrice(trade.exit_price, trade.asset_type ?? assetType)}</div>
                 </div>
                 <div className="text-right">
                   <div className="text-muted">盈亏</div>

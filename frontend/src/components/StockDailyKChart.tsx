@@ -255,6 +255,7 @@ export function StockDailyKChart({
           showMarkers={showMarkers}
           stockInfo={stockInfo}
           symbol={symbol}
+          assetType={kline.data?.asset_type}
           linkedPrice={linkedPrice}
           onDateClick={onDateClick}
           onPriceDoubleClick={onPriceDoubleClick}

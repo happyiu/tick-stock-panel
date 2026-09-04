@@ -6,7 +6,7 @@ import { Activity, ArrowDownRight, ArrowUpRight, BarChart3, BellRing, Database, 
 import { DatePicker } from '@/components/DatePicker'
 import { api, type OverviewMarket, type AlertEvent } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
-import { fmtBigNum, fmtPct } from '@/lib/format'
+import { fmtAssetPrice, fmtBigNum, fmtPct } from '@/lib/format'
 import { useDataStatus, useCapabilities, useSettings, usePreferences } from '@/lib/useSharedQueries'
 import { SealedBadge } from '@/components/SealedBadge'
 import { StockPreviewDialog, toNavItems, type NavItem } from '@/components/StockPreviewDialog'
@@ -156,7 +156,7 @@ function MonitorWidget({ onStockClick, activeSymbol }: {
                 </button>
                 <span className="flex-1" />
                 {ev.price != null && (
-                  <span className="text-[10px] font-mono text-foreground/60 shrink-0">{fmtPrice(ev.price)}</span>
+                  <span className="text-[10px] font-mono text-foreground/60 shrink-0">{fmtAssetPrice(ev.price, ev.asset_type)}</span>
                 )}
                 {ev.change_pct != null && (
                   <span className={cn('text-[10px] font-mono font-medium shrink-0 w-12 text-right', pct >= 0 ? 'text-danger' : 'text-bear')}>
@@ -707,6 +707,7 @@ export function Dashboard() {
           ts: previewStock.alert.ts,
           signals: previewStock.alert.signals,
           message: previewStock.alert.message,
+          asset_type: previewStock.alert.asset_type,
         } : null}
         navList={previewStock?.navList}
         onNavigate={(sym, n) => setPreviewStock(prev => prev ? { ...prev, symbol: sym, name: n, alert: undefined } : prev)}

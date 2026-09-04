@@ -3,6 +3,7 @@ import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
 import type { MinuteKlineRow, PriceLimitInfo } from '@/lib/api'
 import { computeIntradayAverage, formatMinuteTime, FULL_DAY_TIMES } from '@/lib/intraday-chart'
+import { fmtAssetPrice, priceDigits } from '@/lib/format'
 import { useChartTheme, type ChartTheme } from '@/lib/theme'
 
 type YMode = 'adaptive' | 'limit'
@@ -26,6 +27,7 @@ interface Props {
   onPriceDoubleClick?: (price: number, currentPrice: number) => void
   currentPrice?: number
   priceLines?: { value: number; label?: string; color?: string }[]
+  assetType?: string
   showLimitLines?: boolean
   showAvgLine?: boolean
 }
@@ -40,8 +42,8 @@ function isValidPrice(v: number | null | undefined): v is number {
   return typeof v === 'number' && Number.isFinite(v) && v > 0
 }
 
-/** 计算实际涨跌停价 (四舍五入到2位小数) 和实际涨跌停幅度 */
-function getLimitPrices(prevClose: number, priceLimit?: PriceLimitInfo): {
+/** 计算实际涨跌停价 (按资产最小价位取整) 和实际涨跌停幅度 */
+function getLimitPrices(prevClose: number, priceLimit?: PriceLimitInfo, assetType?: string): {
   limitUp: number      // 涨停价 (四舍五入)
   limitDown: number    // 跌停价 (四舍五入)
   upPct: number        // 实际涨停幅度 (如 9.97)
@@ -50,19 +52,19 @@ function getLimitPrices(prevClose: number, priceLimit?: PriceLimitInfo): {
   const pct = priceLimit && Number.isFinite(priceLimit.rate) ? priceLimit.rate : 0.10
   const rawUp = prevClose * (1 + pct)
   const rawDown = prevClose * (1 - pct)
-  // A股涨跌停价四舍五入到分 (2位小数)
+  const scale = 10 ** priceDigits(assetType)
   const limitUp = isValidPrice(priceLimit?.limit_up)
     ? priceLimit.limit_up
-    : Math.round(rawUp * 100) / 100
+    : Math.round(rawUp * scale) / scale
   const limitDown = isValidPrice(priceLimit?.limit_down)
     ? priceLimit.limit_down
-    : Math.round(rawDown * 100) / 100
+    : Math.round(rawDown * scale) / scale
   const upPct = (limitUp - prevClose) / prevClose * 100
   const downPct = (limitDown - prevClose) / prevClose * 100
   return { limitUp, limitDown, upPct, downPct }
 }
 
-function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgPrices: number[], lineColor: string, areaColor: string, yMode: YMode, ct: ChartTheme, priceLimit?: PriceLimitInfo, showLimitLines = true, showAvgLine = true, priceLines: Props['priceLines'] = []): EChartsOption {
+function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgPrices: number[], lineColor: string, areaColor: string, yMode: YMode, ct: ChartTheme, priceLimit?: PriceLimitInfo, showLimitLines = true, showAvgLine = true, priceLines: Props['priceLines'] = [], assetType?: string): EChartsOption {
   // 将数据映射到全天时间轴上的正确位置
   const timeIndexMap = new Map(FULL_DAY_TIMES.map((t, i) => [t, i]))
   const closes = new Array(FULL_DAY_TIMES.length).fill(null) as (number | null)[]
@@ -159,7 +161,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
     ), 0) * 1.05
 
     if (showLimitLines && yMode === 'limit') {
-      const { limitUp, limitDown } = getLimitPrices(prevClose, priceLimit)
+      const { limitUp, limitDown } = getLimitPrices(prevClose, priceLimit, assetType)
       const limitDiffUp = limitUp - prevClose
       const limitDiffDown = prevClose - limitDown
       const limitDiff = Math.max(limitDiffUp, limitDiffDown)
@@ -185,7 +187,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
     } else {
       // 自适应模式: Y 轴按实际涨跌幅对称, 但不超出实际涨跌停范围
       if (showLimitLines) {
-        const { limitUp, limitDown } = getLimitPrices(prevClose, priceLimit)
+        const { limitUp, limitDown } = getLimitPrices(prevClose, priceLimit, assetType)
         const limitDiff = Math.max(limitUp - prevClose, prevClose - limitDown)
         maxDiff = Math.min(maxDiff, limitDiff)
       }
@@ -307,7 +309,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
           label: {
             formatter: (params: any) => {
               const v = params.value
-              return typeof v === 'number' ? v.toFixed(2) : ''
+              return typeof v === 'number' ? fmtAssetPrice(v, assetType) : ''
             },
           },
         },
@@ -315,7 +317,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
           color: ct.text,
           fontSize: 10,
           fontFamily: 'JetBrains Mono, monospace',
-          formatter: (v: number) => v.toFixed(2),
+          formatter: (v: number) => fmtAssetPrice(v, assetType),
         },
       },
       {
@@ -406,6 +408,7 @@ export function EChartsIntraday({
   onPriceDoubleClick,
   currentPrice,
   priceLines,
+  assetType,
   showLimitLines = true,
   showAvgLine = true,
 }: Props) {
@@ -515,11 +518,11 @@ export function EChartsIntraday({
       }
       fullDayToDataIdx.current = mapping
 
-      chart.setOption(buildOption(data, prevClose, avgPrices, lineColor, areaFill, yMode, ct, priceLimit, showLimitLines, showAvgLine, priceLines), true)
+      chart.setOption(buildOption(data, prevClose, avgPrices, lineColor, areaFill, yMode, ct, priceLimit, showLimitLines, showAvgLine, priceLines, assetType), true)
     } else {
       chart.clear()
     }
-  }, [data, prevClose, height, lineColor, areaFill, yMode, ct, priceLimit, showLimitLines, showAvgLine, priceLines])
+  }, [data, prevClose, height, lineColor, areaFill, yMode, ct, priceLimit, showLimitLines, showAvgLine, priceLines, assetType])
 
   useEffect(() => {
     return () => {
@@ -580,13 +583,13 @@ export function EChartsIntraday({
             <>
               {date && <span className="text-muted">{date}</span>}
               <span className="text-muted">开</span>
-              <span style={{ color: priceClr }}>{d.open != null ? d.open.toFixed(2) : '—'}</span>
+              <span style={{ color: priceClr }}>{fmtAssetPrice(d.open, assetType)}</span>
               <span className="text-muted">高</span>
-              <span style={{ color: priceClr }}>{d.high.toFixed(2)}</span>
+              <span style={{ color: priceClr }}>{fmtAssetPrice(d.high, assetType)}</span>
               <span className="text-muted">低</span>
-              <span style={{ color: priceClr }}>{d.low.toFixed(2)}</span>
+              <span style={{ color: priceClr }}>{fmtAssetPrice(d.low, assetType)}</span>
               <span className="text-muted">收</span>
-              <span style={{ color: priceClr }} className="font-semibold">{d.close.toFixed(2)}</span>
+              <span style={{ color: priceClr }} className="font-semibold">{fmtAssetPrice(d.close, assetType)}</span>
             </>
           )}
         </div>
@@ -596,11 +599,11 @@ export function EChartsIntraday({
             <>
               <span className="flex items-center gap-x-1">
                 <span style={{ display: 'inline-block', width: 14, height: 2, background: priceClr }} />
-                <span style={{ color: priceClr }}>{d.close.toFixed(2)}</span>
+                <span style={{ color: priceClr }}>{fmtAssetPrice(d.close, assetType)}</span>
               </span>
               {showAvgLine && <span className="flex items-center gap-x-1">
                 <span style={{ display: 'inline-block', width: 14, height: 2, background: THEME.avgLine }} />
-                <span style={{ color: THEME.avgLine }}>{avg?.toFixed(2)}</span>
+                <span style={{ color: THEME.avgLine }}>{fmtAssetPrice(avg, assetType)}</span>
               </span>}
               <span className="text-muted">量</span>
               <span className="text-secondary">{d.volume.toFixed(0)}</span>

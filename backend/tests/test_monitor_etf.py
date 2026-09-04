@@ -65,6 +65,7 @@ def test_evaluate_asset_type_filters_rules():
 
     etf_events = eng.evaluate(df, asset_type="etf")
     assert any(e["rule_id"] == "r_etf" for e in etf_events)
+    assert all(e["asset_type"] == "etf" for e in etf_events)
     assert all(e["rule_id"] != "r_stock" for e in etf_events)
 
     stock_events = eng.evaluate(df, asset_type="stock", reset_strategy_results=False)

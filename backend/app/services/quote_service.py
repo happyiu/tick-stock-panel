@@ -1109,6 +1109,7 @@ class QuoteService:
                                 "strategy_id": ev.get("strategy_id") if ev["source"] == "strategy" else None,
                                 "symbol": ev["symbol"],
                                 "name": ev["name"],
+                                "asset_type": ev.get("asset_type"),
                                 "message": ev["message"],
                                 "price": ev["price"],
                                 "change_pct": ev["change_pct"],

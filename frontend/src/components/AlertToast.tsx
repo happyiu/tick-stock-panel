@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Bell, TrendingUp, TrendingDown, X } from 'lucide-react'
 import type { AlertEvent } from '@/lib/api'
-import { fmtPct, fmtPrice } from '@/lib/format'
+import { fmtAssetPrice, fmtPct } from '@/lib/format'
 import { cnSignal } from '@/lib/signals'
 import { cn } from '@/lib/cn'
 import { playNotificationSound } from '@/lib/notificationSound'
@@ -193,7 +193,7 @@ export function AlertToastContainer() {
                         ? <span className="truncate text-[11px] font-medium text-amber-400">「{sname}」</span>
                         : ev.message && <span className="truncate text-[10px] text-muted">{ev.message}</span>}
                       <span className="flex-1" />
-                      {ev.price != null && <span className="text-[10px] font-mono text-muted shrink-0">{fmtPrice(ev.price)}</span>}
+                      {ev.price != null && <span className="text-[10px] font-mono text-muted shrink-0">{fmtAssetPrice(ev.price, ev.asset_type)}</span>}
                     </div>
                   ) : (
                     <div className="mt-1 flex min-w-0 items-center gap-1.5 pl-0.5">
