@@ -1,7 +1,7 @@
 
 <div align="center">
 
-# TSP--A股智能量化工作台
+# Seek Hub--A股智能量化工作台
 
 [![声明: 本项目为个人开源, 非隶属任何官方项目](https://img.shields.io/badge/%E5%A3%B0%E6%98%8E-%E6%9C%AC%E9%A1%B9%E7%9B%AE%E4%B8%BA%E4%B8%AA%E4%BA%BA%E5%BC%80%E6%BA%90_%E9%9D%9E%E9%9A%B6%E5%B1%9E%E4%BB%BB%E4%BD%95%E5%AE%98%E6%96%B9%E9%A1%B9%E7%9B%AE-green?style=for-the-badge&labelColor=red)](https://github.com/shy3130/tick-stock-panel)
 
