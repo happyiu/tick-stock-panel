@@ -6,7 +6,7 @@
 import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { BarChart3, Database, Radio, SlidersHorizontal, Sparkles, Settings2, Zap, PanelLeftClose, PanelLeftOpen, Clock3 } from 'lucide-react'
+import { BarChart3, Database, Radio, SlidersHorizontal, Sparkles, Settings2, Zap, PanelLeftClose, PanelLeftOpen, Clock3, Palette } from 'lucide-react'
 import { SettingsAIPanel } from './settings/AI'
 import { SettingsMonitoringPanel } from './settings/Monitoring'
 import { SettingsExtPagesPanel } from './settings/ExtPages'
@@ -15,6 +15,7 @@ import { SettingsTimeoutPanel } from './settings/Timeout'
 import { SettingsSystemPanel } from './settings/System'
 import { SettingsCustomSignalsPanel } from './settings/CustomSignals'
 import { SettingsDataSourcesPanel } from './settings/DataSources'
+import { SettingsThemePanel } from './settings/Theme'
 import { PageHeader } from '@/components/PageHeader'
 import { cn } from '@/lib/cn'
 
@@ -39,6 +40,7 @@ const TABS: readonly TabDef[] = [
   { key: 'timeout',    label: '网络设置',   icon: Clock3,    panel: SettingsTimeoutPanel },
   { key: 'menus',      label: '菜单设置',   icon: SlidersHorizontal, panel: SettingsMenuSettingsPanel },
   { key: 'system',     label: '系统设置',   icon: Settings2, panel: SettingsSystemPanel },
+  { key: 'theme',      label: '主题',       icon: Palette, panel: SettingsThemePanel },
 ]
 
 type TabKey = (typeof TABS)[number]['key']

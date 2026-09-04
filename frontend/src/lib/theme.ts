@@ -7,6 +7,7 @@
 //   - UI token (bg-surface/text-foreground 等) 自动跟随;
 //     图表画布不吃 CSS 变量, 统一走 useChartTheme() 取调色板
 import { useEffect, useState } from 'react'
+import { storage } from './storage'
 
 const KEY = 'tf-theme'
 const EVENT = 'tf-theme-change'
@@ -31,6 +32,21 @@ export function toggleTheme(): Theme {
   const next: Theme = getTheme() === 'dark' ? 'light' : 'dark'
   setTheme(next)
   return next
+}
+
+export type PageSize = 'standard' | 'large'
+
+export function getPageSize(): PageSize {
+  return storage.pageSize.get('standard') === 'large' ? 'large' : 'standard'
+}
+
+export function applyPageSize(pageSize: PageSize) {
+  document.documentElement.style.setProperty('--page-scale', pageSize === 'large' ? '1.1' : '1')
+}
+
+export function setPageSize(pageSize: PageSize) {
+  storage.pageSize.set(pageSize)
+  applyPageSize(pageSize)
 }
 
 /** 订阅当前主题 (本页切换 + 其他标签页切换均同步)。 */

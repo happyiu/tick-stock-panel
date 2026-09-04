@@ -7,6 +7,8 @@
  * HSL 形式以兼容 Tailwind alpha-value 语法
  */
 :root {
+  --page-scale: 1;
+
   /* 亮色(可切换) */
   --base: 0 0% 98%;          /* #FAFAFA */
   --surface: 0 0% 100%;      /* #FFFFFF */
@@ -71,6 +73,7 @@ html.dark {
 body {
   background: hsl(var(--base));
   color: hsl(var(--fg-primary));
+  zoom: var(--page-scale);
   font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
   /* 暗色模式不用 antialiased — 让字形保持饱满,不发虚 */
   -webkit-font-smoothing: subpixel-antialiased;

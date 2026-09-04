@@ -24,6 +24,9 @@ function kv<T>(key: string) {
 }
 
 export const storage = {
+  /** 页面显示大小 */
+  pageSize:             kv<'standard' | 'large'>('tf-page-size'),
+
   /** 查询轮询 / SSE 配置 */
   queryConfig:          kv<unknown>('tf-stocks-query-config'),
 
