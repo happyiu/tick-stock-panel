@@ -626,7 +626,6 @@ export function Layout() {
     <div
       className="h-screen grid bg-base text-foreground overflow-hidden transition-[grid-template-columns] duration-200 ease-smooth"
       style={{
-        height: 'calc(100vh / var(--page-scale))',
         gridTemplateColumns: isDesktop && !overlayPreview ? (navState === 'expanded' ? '14rem 1fr' : navState === 'rail' ? '3.5rem 1fr' : '0 1fr') : '1fr',
       }}
     >

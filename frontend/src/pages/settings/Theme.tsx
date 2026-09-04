@@ -46,7 +46,7 @@ export function SettingsThemePanel() {
         <div className="flex items-center justify-between gap-4 py-2">
           <div className="min-w-0">
             <div className="text-sm text-foreground">页面大小</div>
-            <div className="text-[11px] text-muted truncate">大号接近浏览器 110% 显示效果</div>
+            <div className="text-[11px] text-muted truncate">大号放大文字和界面布局，图表保持正常交互</div>
           </div>
           <select
             aria-label="页面大小"

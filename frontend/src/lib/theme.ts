@@ -41,12 +41,13 @@ export function getPageSize(): PageSize {
 }
 
 export function applyPageSize(pageSize: PageSize) {
-  document.documentElement.style.setProperty('--page-scale', pageSize === 'large' ? '1.1' : '1')
+  document.documentElement.style.setProperty('--page-scale', pageSize === 'large' ? '110%' : '100%')
 }
 
 export function setPageSize(pageSize: PageSize) {
   storage.pageSize.set(pageSize)
   applyPageSize(pageSize)
+  window.dispatchEvent(new Event('resize'))
 }
 
 /** 订阅当前主题 (本页切换 + 其他标签页切换均同步)。 */
