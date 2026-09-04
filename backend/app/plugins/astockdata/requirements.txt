@@ -1,0 +1,2 @@
+mootdx>=0.10
+requests>=2.31
