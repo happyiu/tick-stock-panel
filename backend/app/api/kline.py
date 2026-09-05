@@ -14,15 +14,26 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from app.db_safe import is_valid_ext_ident
-from app.indicators.pipeline import compute_enriched
 from app.market_time import cn_now, cn_today, in_continuous_session
 from app.price_limits import is_risk_warning_name, price_limit_pct
 from app.services import kline_sync
+from app.services.chart_data import ChartSnapshot
 from app.services.kline_periods import aggregate_daily_period, aggregate_minute_30m
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/kline", tags=["kline"])
+
+
+def _chart_snapshot(request, symbol, asset_type, period, start, end):
+    from app.services import preferences
+
+    service = getattr(request.app.state, "chart_data_service", None)
+    if service is None:
+        import polars as pl
+        return ChartSnapshot(pl.DataFrame(), "", stale=True)
+    provider = preferences.get_chart_data_provider()
+    return service.get(provider, provider, symbol, asset_type, period, start, end)
 
 
 def _gzip_payload(request: Request, payload: dict, *, pref_key: str) -> dict | Response:
@@ -365,52 +376,37 @@ def get_daily(
     end_date: Optional[str] = Query(None, description="截止日期 YYYY-MM-DD, 默认今天"),
     ext_columns: Optional[str] = Query(None, description="逗号分隔的 ext 列: config_id.field_name"),
 ):
-    """读取本地 enriched 表中某只股票的日 K。
-
-    - 若 QuoteService 有实时行情, 追加/覆盖今日实时蜡烛
-    - Free 用户: 若 enriched 表里没有该股票, 实时拉取 + 本地算 enriched 返回
-    - ext_columns: 可选，动态 LEFT JOIN 扩展数据表，结果平铺到 stock_info.ext 下
-      (key 为 "{config_id}__{field_name}")，供日K信息条等场景展示自定义字段
-    """
+    """优先读取展示行情快照, 不可用时回退本地 enriched 和当日行情。"""
     import polars as pl
 
     repo = request.app.state.repo
-    end = date.fromisoformat(end_date) if end_date else date.today()
-    if start_date:
-        start = date.fromisoformat(start_date)
-    else:
-        start = end - timedelta(days=days)
+    try:
+        end = date.fromisoformat(end_date) if end_date else cn_today()
+        start = date.fromisoformat(start_date) if start_date else end - timedelta(days=days)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="日期格式错误") from exc
+    if start > end:
+        raise HTTPException(status_code=422, detail="起始日期不能晚于截止日期")
 
     asset_type = repo.resolve_asset_type(symbol)
     stock_info = _get_stock_info(repo, symbol) if asset_type == "stock" else _get_asset_info(repo, symbol, asset_type)
     stock_name = stock_info.get("name")
 
+    snapshot = _chart_snapshot(request, symbol, asset_type, "1d", start - timedelta(days=180), end)
+    if not snapshot.frame.is_empty():
+        rows = snapshot.frame.filter(pl.col("date").is_between(start, end)).to_dicts()
+        resp = {"symbol": symbol, "name": stock_name, "asset_type": asset_type,
+                "stock_info": stock_info, "rows": rows, "source": "chart",
+                "data_status": snapshot.metadata()}
+        return _attach_ext(resp, repo, symbol, ext_columns)
+
     # 从 enriched 表读取 (已含前复权 OHLCV + 技术指标 + 信号); ETF/指数走独立存储
     df = repo.get_daily_asset(asset_type, symbol, start, end)
 
     if df.is_empty():
-        try:
-            raw = kline_sync.sync_daily_batch([symbol], count=days + 30)
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"TickFlow fetch failed: {e}") from e
-        if raw.is_empty():
-            return {"symbol": symbol, "name": stock_name, "asset_type": asset_type,
-                    "stock_info": stock_info, "rows": []}
-        # 拉除权因子做前复权 (Starter+ 有权限), 否则空 df → compute_enriched 退回未复权
-        factors = pl.DataFrame()
-        capset = getattr(request.app.state, "capabilities", None)
-        try:
-            from app.tickflow.capabilities import Cap
-            if capset and capset.has(Cap.ADJ_FACTOR):
-                factors = kline_sync.fetch_adj_factor_single(symbol)
-        except Exception as e:  # noqa: BLE001
-            logger.debug("单股除权因子拉取失败 %s: %s", symbol, e)
-        enriched = compute_enriched(raw, factors=factors)
-        rows = enriched.tail(days).to_dicts()
-        # 即使 live 模式也尝试追加实时蜡烛
-        rows = _maybe_inject_live_candle(request, symbol, rows, asset_type)
         resp = {"symbol": symbol, "name": stock_name, "asset_type": asset_type,
-                "stock_info": stock_info, "rows": rows, "source": "live"}
+                "stock_info": stock_info, "rows": [], "source": "none",
+                "data_status": snapshot.metadata()}
         return _attach_ext(resp, repo, symbol, ext_columns)
 
     rows = df.to_dicts()
@@ -419,7 +415,8 @@ def get_daily(
     rows = _maybe_inject_live_candle(request, symbol, rows, asset_type)
 
     resp = {"symbol": symbol, "name": stock_name, "asset_type": asset_type,
-            "stock_info": stock_info, "rows": rows, "source": "enriched"}
+            "stock_info": stock_info, "rows": rows, "source": "enriched",
+            "data_status": snapshot.metadata()}
     return _attach_ext(resp, repo, symbol, ext_columns)
 
 
@@ -432,7 +429,7 @@ def get_period_kline(
     end_date: Optional[str] = Query(None, description="展示截止日期 YYYY-MM-DD,默认今天"),
     days: int = Query(20, ge=1, le=20, description="30分钟K最近交易日数量"),
 ):
-    """读取并聚合个股/ETF 的 30 分钟、周或月 K，不写入新的周期数据。"""
+    """优先原生30分钟K和展示日线, 周/月聚合后重算指标, 不落库。"""
     import polars as pl
 
     repo = request.app.state.repo
@@ -466,6 +463,16 @@ def get_period_kline(
     }
 
     if period == "30m":
+        snapshot = _chart_snapshot(request, symbol, asset_type, period, start, end)
+        base["data_status"] = snapshot.metadata()
+        if not snapshot.frame.is_empty():
+            from app.services.kline_periods import prepare_native_30m
+
+            native = snapshot.frame
+            trade_dates = sorted(native["datetime"].dt.date().unique().to_list())[-days:]
+            native = native.filter(pl.col("datetime").dt.date().is_in(trade_dates))
+            return {**base, "rows": prepare_native_30m(native).to_dicts(), "source": "chart",
+                    "requested_days": days, "available_days": len(trade_dates)}
         # 多取自然日覆盖节假日，最终严格裁成最近 N 个实际交易日。
         scan_start = min(start, end - timedelta(days=days * 3 + 20))
         minute = repo.get_minute_range([symbol], scan_start, end, asset_type=asset_type)
@@ -506,10 +513,14 @@ def get_period_kline(
     warmup_days = 500 if period == "1w" else 6 * 366
     warmup_start = start - timedelta(days=warmup_days)
     base_columns = ["symbol", "date", "open", "high", "low", "close", "volume", "amount"]
-    daily = repo.get_daily_asset(
-        asset_type, symbol, warmup_start, end, columns=base_columns,
-    )
     source = "enriched"
+    snapshot = _chart_snapshot(request, symbol, asset_type, "1d", warmup_start, end)
+    base["data_status"] = snapshot.metadata()
+    if not snapshot.frame.is_empty():
+        daily = snapshot.frame
+        source = "chart"
+    else:
+        daily = repo.get_daily_asset(asset_type, symbol, warmup_start, end, columns=base_columns)
     if daily.is_empty():
         fallback = get_daily(
             request,
@@ -524,7 +535,7 @@ def get_period_kline(
             return {**base, "rows": [], "source": "none"}
         daily = pl.DataFrame(fallback_rows, infer_schema_length=None)
         source = str(fallback.get("source") or "live")
-    else:
+    elif source != "chart":
         daily_rows = _maybe_inject_live_candle(request, symbol, daily.to_dicts(), asset_type)
         daily = pl.DataFrame(daily_rows, infer_schema_length=None)
 
@@ -974,7 +985,13 @@ def get_minute_range(
 
     end = cn_today()
     start = end - timedelta(days=days * 3 + 20)
-    minute = repo.get_minute_range([symbol], start, end, asset_type=asset_type)
+    snapshot = _chart_snapshot(request, symbol, asset_type, "1m", start, end)
+    base_response["data_status"] = snapshot.metadata()
+    minute = snapshot.frame
+    source = "chart"
+    if minute.is_empty():
+        minute = repo.get_minute_range([symbol], start, end, asset_type=asset_type)
+        source = "local"
     if minute.is_empty() or "datetime" not in minute.columns:
         return {**base_response, "sessions": [], "source": "none"}
 
@@ -1008,7 +1025,7 @@ def get_minute_range(
     return {
         **base_response,
         "sessions": sessions,
-        "source": "local" if sessions else "none",
+        "source": source if sessions else "none",
     }
 
 
@@ -1031,6 +1048,18 @@ def get_minute(
     asset_type = repo.resolve_asset_type(symbol)
     stock_info = _get_stock_info(repo, symbol) if asset_type == "stock" else _get_asset_info(repo, symbol, asset_type)
     stock_name = stock_info.get("name")
+
+    default_snapshot = None
+    if trade_date is None and getattr(request.app.state, "chart_data_service", None) is not None:
+        # 周末或本地历史滞后时, 最新交易日由展示源返回日期决定。
+        latest = _chart_snapshot(request, symbol, asset_type, "1m", cn_today() - timedelta(days=10), cn_today())
+        if not latest.frame.is_empty():
+            from dataclasses import replace
+
+            import polars as pl
+
+            trade_date = latest.frame["datetime"].max().date()
+            default_snapshot = replace(latest, frame=latest.frame.filter(pl.col("datetime").dt.date() == trade_date))
 
     if trade_date is None:
         # 默认看今天, 而不是本地落盘的最近日 (盘中后者是昨天)。
@@ -1075,6 +1104,21 @@ def get_minute(
     price_limit = _get_price_limit_info(
         repo, symbol, trade_date, asset_type, stock_name,
     )
+
+    snapshot = default_snapshot or _chart_snapshot(request, symbol, asset_type, "1m", trade_date, trade_date)
+    if not snapshot.frame.is_empty():
+        return {"symbol": symbol, "name": stock_name, "stock_info": stock_info,
+                "date": str(trade_date), "rows": snapshot.frame.to_dicts(), "source": "chart",
+                "asset_type": asset_type, "price_limit": price_limit, "prev_close": prev_close,
+                "data_status": snapshot.metadata()}
+
+    if getattr(request.app.state, "chart_data_service", None) is not None:
+        local = repo.get_minute(symbol, trade_date, asset_type=asset_type)
+        return {"symbol": symbol, "name": stock_name, "stock_info": stock_info,
+                "date": str(trade_date), "rows": local.to_dicts(),
+                "source": "local" if not local.is_empty() else "none",
+                "asset_type": asset_type, "price_limit": price_limit, "prev_close": prev_close,
+                "data_status": snapshot.metadata()}
 
     if live and trade_date == cn_today() and in_continuous_session():
         # 详情分时轮询: 当日盘中实时拉取最新一根K, 不落盘; 拉空(源侧延迟/

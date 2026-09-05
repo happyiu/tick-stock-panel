@@ -26,6 +26,15 @@ def _with_chart_indicators(df: pl.DataFrame) -> pl.DataFrame:
     return compute_indicators(df, needed=CHART_INDICATORS)
 
 
+def prepare_native_30m(df: pl.DataFrame) -> pl.DataFrame:
+    """原生30分钟K只转换展示字段并算指标，不再次聚合成交量。"""
+    return _with_chart_indicators(df.with_columns(
+        pl.col("datetime").dt.strftime("%Y-%m-%d %H:%M").alias("date"),
+        (pl.col("datetime") - pl.duration(minutes=30)).alias("period_start"),
+        pl.col("datetime").alias("period_end"),
+    ).sort(["symbol", "datetime"]))
+
+
 def aggregate_daily_period(df: pl.DataFrame, period: str) -> pl.DataFrame:
     """把单标的日线聚合为周 K 或月 K，并按聚合周期重算图表指标。"""
     if df.is_empty():

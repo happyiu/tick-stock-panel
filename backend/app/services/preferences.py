@@ -274,6 +274,11 @@ def get_daily_data_provider() -> str:
     return provider if provider in _allowed_data_providers() else "tickflow"
 
 
+def get_chart_data_provider() -> str:
+    provider = str(load().get("chart_data_provider", "tickflow") or "tickflow").lower()
+    return provider if provider in _allowed_data_providers() else "tickflow"
+
+
 def get_adj_factor_provider() -> str:
     # 「跟随日K」(same_as_daily) 特殊值已下线: 存量配置里的旧值按非法值回退 tickflow
     provider = str(load().get("adj_factor_provider", "tickflow") or "tickflow").lower()

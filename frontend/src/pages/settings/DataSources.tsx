@@ -147,6 +147,7 @@ function patchMatrix(
 }
 
 const DEFAULT_ROUTING: Record<ProviderField, string> = {
+  chart_data_provider: 'tickflow',
   daily_data_provider: 'tickflow',
   adj_factor_provider: 'tickflow',
   minute_data_provider: 'tickflow',
@@ -262,6 +263,10 @@ function CapabilityRoutingSection() {
     qc.invalidateQueries({ queryKey: QK.preferences })
     qc.invalidateQueries({ queryKey: QK.capabilities })
     qc.invalidateQueries({ queryKey: QK.quoteStatus })
+    // 展示源改变后，所有图表窗口都应重新读取，不能沿用上一数据源的结果。
+    qc.invalidateQueries({ predicate: q =>
+      ['kline', 'kline-period', 'kline-minute', 'kline-minute-range'].includes(String(q.queryKey[0])),
+    })
   }
 
   /** 切换前先把变更写进矩阵/偏好缓存, 界面零延迟响应; 失败回滚 */

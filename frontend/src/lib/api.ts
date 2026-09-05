@@ -239,7 +239,17 @@ export interface KlineRow {
   [key: string]: any
 }
 
+export interface ChartDataStatus {
+  data_through?: string | null
+  provider: string
+  fetched_at: string | null
+  stale: boolean
+  adjustment: string
+  amount_estimated: boolean
+}
+
 export interface KlineResponse {
+  data_status?: ChartDataStatus
   symbol: string
   name?: string
   asset_type?: 'stock' | 'etf' | 'index'
@@ -1506,6 +1516,7 @@ export interface PluginDataSourceItem {
 
 /** 数据源路由偏好字段 (每个能力一个, 与后端能力注册表一一对应) */
 export type ProviderField =
+  | 'chart_data_provider'
   | 'daily_data_provider'
   | 'adj_factor_provider'
   | 'minute_data_provider'
@@ -1626,6 +1637,7 @@ export interface Preferences {
   minute_sync_segment_days: number
   minute_refresh_enabled: boolean
   minute_refresh_interval: number
+  chart_data_provider?: string
   daily_data_provider?: string
   adj_factor_provider?: string
   minute_data_provider?: string
@@ -2132,7 +2144,8 @@ export const api = {
       stock_info?: { name?: string; total_shares?: number; float_shares?: number }
       date: string | null
       rows: MinuteKlineRow[]
-      source?: 'local' | 'live' | 'none'
+      source?: 'local' | 'live' | 'none' | 'chart'
+      data_status?: ChartDataStatus
       asset_type?: 'stock' | 'etf' | 'index'
       price_limit?: PriceLimitInfo | null
       prev_close?: number | null
@@ -2146,7 +2159,8 @@ export const api = {
       asset_type: 'stock' | 'etf' | 'index'
       requested_days: number
       sessions: MinuteKlineSession[]
-      source: 'local' | 'none'
+      source: 'local' | 'none' | 'chart'
+      data_status?: ChartDataStatus
     }>(
       `/api/kline/minute-range?symbol=${encodeURIComponent(symbol)}&days=${days}`,
     ),

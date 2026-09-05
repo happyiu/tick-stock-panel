@@ -14,6 +14,7 @@ from app.data_providers import custom as custom_sources
 from app.data_providers.capabilities import CAPABILITY_REGISTRY, build_capability_matrix
 
 DEFAULT_CURRENT = {
+    "chart_data_provider": "tickflow",
     "daily_data_provider": "tickflow",
     "adj_factor_provider": "tickflow",
     "minute_data_provider": "tickflow",
@@ -22,6 +23,16 @@ DEFAULT_CURRENT = {
     "realtime_data_provider": "tickflow",
     "financial_data_provider": "tickflow",
 }
+
+
+def test_chart_requires_daily_minute_and_factors(monkeypatch):
+    _fake_sources(monkeypatch, [
+        {"name": "complete", "datasets": ["daily", "minute", "adj_factor"], "available": True},
+        {"name": "partial", "datasets": ["daily", "minute"], "available": True},
+    ])
+    cap = _by_id(build_capability_matrix({"chart_data_provider": "complete"}))["chart"]
+    assert cap["usable"]
+    assert [c["name"] for c in cap["candidates"]] == ["complete"]
 
 
 def _fake_sources(monkeypatch, plugins: list[dict], customs: list[dict] | None = None) -> None:
@@ -40,7 +51,7 @@ def test_registry_covers_all_routing_fields():
     assert sorted(routable) == sorted(DEFAULT_CURRENT)
     assert len(set(routable)) == len(routable)
     assert {c["id"] for c in CAPABILITY_REGISTRY} == {
-        "realtime", "daily", "minute", "full_minute", "depth5", "adj_factor", "financial",
+        "chart", "realtime", "daily", "minute", "full_minute", "depth5", "adj_factor", "financial",
     }
     full_minute = next(c for c in CAPABILITY_REGISTRY if c["id"] == "full_minute")
     assert full_minute["field"] == "full_minute_data_provider"
@@ -56,7 +67,7 @@ def test_matrix_without_third_party_sources(monkeypatch):
     _fake_sources(monkeypatch, [])
     matrix = build_capability_matrix(dict(DEFAULT_CURRENT), tickflow_tier="expert")
     assert matrix["tickflow_tier"] == "expert"
-    assert len(matrix["capabilities"]) == 7
+    assert len(matrix["capabilities"]) == 8
     for cap in matrix["capabilities"]:
         names = [c["name"] for c in cap["candidates"]]
         assert names == ["tickflow"]

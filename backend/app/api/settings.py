@@ -409,6 +409,7 @@ class MinuteSyncPrefs(BaseModel):
 
 
 class DataProvidersIn(BaseModel):
+    chart_data_provider: str | None = None
     daily_data_provider: str | None = None
     adj_factor_provider: str | None = None
     minute_data_provider: str | None = None
@@ -504,6 +505,7 @@ def get_preferences() -> dict:
         "minute_sync_segment_days": preferences.get_minute_sync_segment_days(),
         "minute_refresh_enabled": preferences.get_minute_refresh_enabled(),
         "minute_refresh_interval": preferences.get_minute_refresh_interval(),
+        "chart_data_provider": preferences.get_chart_data_provider(),
         "daily_data_provider": preferences.get_daily_data_provider(),
         "adj_factor_provider": preferences.get_adj_factor_provider(),
         "minute_data_provider": preferences.get_minute_data_provider(),
@@ -585,6 +587,7 @@ def get_capability_matrix() -> dict:
     return build_capability_matrix(
         {
             "realtime_data_provider": preferences.get_realtime_data_provider(),
+            "chart_data_provider": preferences.get_chart_data_provider(),
             "daily_data_provider": preferences.get_daily_data_provider(),
             "minute_data_provider": preferences.get_minute_data_provider(),
             "depth5_data_provider": preferences.get_depth5_data_provider(),
@@ -682,6 +685,7 @@ def uninstall_plugin(name: str) -> dict:
     ok, message = custom_sources.uninstall_plugin(name)
     # 卸载后若该插件正被使用, 回退 tickflow
     for getter, key, default in [
+        (preferences.get_chart_data_provider, "chart_data_provider", "tickflow"),
         (preferences.get_daily_data_provider, "daily_data_provider", "tickflow"),
         (preferences.get_minute_data_provider, "minute_data_provider", "tickflow"),
         (preferences.get_realtime_data_provider, "realtime_data_provider", "tickflow"),
@@ -785,6 +789,7 @@ def update_data_providers(req: DataProvidersIn, request: Request) -> dict:
     # 刷新能力快照: 当前 provider 变化会改变自定义源能力增广结果 (读缓存, 无网络请求)
     request.app.state.capabilities = detect_capabilities()
     return {
+        "chart_data_provider": preferences.get_chart_data_provider(),
         "daily_data_provider": preferences.get_daily_data_provider(),
         "adj_factor_provider": preferences.get_adj_factor_provider(),
         "minute_data_provider": preferences.get_minute_data_provider(),

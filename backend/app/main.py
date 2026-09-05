@@ -103,6 +103,8 @@ async def _application_lifespan(app: FastAPI):
     repo = KlineRepository(store)
     app.state.datastore = store
     app.state.repo = repo
+    from app.services.chart_data import ChartDataService
+    app.state.chart_data_service = ChartDataService()
     from app.services.mining_manager import MiningJobManager
 
     mining_manager = MiningJobManager(store.data_dir)

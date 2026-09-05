@@ -27,6 +27,15 @@ from app.data_providers import custom as custom_sources
 
 CAPABILITY_REGISTRY: list[dict] = [
     {
+        "id": "chart",
+        "label": "图表行情",
+        "desc": "按需获取分时与各周期K线; 仅缓存展示; 不改变盘后同步源",
+        "field": "chart_data_provider",
+        "default": "tickflow",
+        "tf_tier": "pro",
+        "required_datasets": ("daily", "adj_factor", "minute"),
+    },
+    {
         "id": "daily",
         "label": "日K",
         "desc": "历史K线与实时覆写",
@@ -170,7 +179,7 @@ def build_capability_matrix(current: dict[str, str], tickflow_tier: str = "none"
         if tf_available:
             candidates.append(dict(_TICKFLOW_CANDIDATE))
         for s in sources:
-            if cap["id"] not in s["datasets"]:
+            if not set(cap.get("required_datasets", (cap["id"],))).issubset(s["datasets"]):
                 continue
             entry = {
                 "name": s["name"],

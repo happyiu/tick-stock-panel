@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMemo } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Download, Loader2, RefreshCw } from 'lucide-react'
-import { api, type MinuteKlineSession } from '@/lib/api'
+import { type MinuteKlineSession } from '@/lib/api'
 import { klineMinuteQueryOptions, klineMinuteRangeQueryOptions } from '@/lib/kline'
-import { toast } from '@/components/Toast'
+import { ChartDataNotice } from '@/components/ChartDataNotice'
 import { EChartsMultiDayIntraday } from '@/components/EChartsMultiDayIntraday'
 
 interface Props {
@@ -29,7 +29,6 @@ export function StockMultiDayIntradayChart({
   priceLines,
   assetType,
 }: Props) {
-  const queryClient = useQueryClient()
   const history = useQuery({
     ...klineMinuteRangeQueryOptions(symbol, days),
     enabled: !!symbol,
@@ -61,43 +60,19 @@ export function StockMultiDayIntradayChart({
       .slice(-days)
   }, [days, history.data?.sessions, latest.data])
 
-  const syncMinute = useMutation({
-    mutationFn: () => api.syncMinuteSingle(symbol, days),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['kline-minute-range', symbol] }),
-        queryClient.invalidateQueries({ queryKey: ['kline-minute', symbol] }),
-      ])
-    },
-    onError: (e: Error) => {
-      const msg = e.message || ''
-      if (msg.includes('403') || msg.includes('Pro')) {
-        toast('分钟K(批量)数据不可用', 'error')
-      } else {
-        toast(`补齐数据失败: ${msg}`, 'error')
-      }
-    },
-  })
+  // 图表刷新只读取展示缓存，不触发分钟数据落库。
+  const syncMinute = {
+    isPending: history.isFetching || latest.isFetching,
+    isError: history.isError || latest.isError,
+    error: history.error ?? latest.error,
+    mutate: () => { void history.refetch(); void latest.refetch() },
+  }
 
   const loading = sessions.length === 0 && (history.isLoading || latest.isLoading)
   const queryError = sessions.length === 0 ? history.error ?? latest.error : null
   const isIndex = history.data?.asset_type === 'index' || latest.data?.asset_type === 'index'
   const missingDays = Math.max(0, days - sessions.length)
   const showCoverage = !history.isPlaceholderData && sessions.length > 0 && missingDays > 0 && !isIndex
-
-  // 自动补齐: 数据不足且非指数时, 自动触发同步
-  // 用 ref 记录已触发的 symbol:days, 避免重复
-  const autoSyncRef = useRef<string | null>(null)
-  useEffect(() => {
-    // 后端没运行时 history 会 error, 此时 missingDays 计算无意义, 跳过
-    if (history.error || history.isPlaceholderData || loading || isIndex || sessions.length >= days) return
-    if (syncMinute.isPending) return
-
-    const key = `${symbol}:${days}`
-    if (autoSyncRef.current === key) return  // 本组合已触发过
-    autoSyncRef.current = key
-    syncMinute.mutate()
-  }, [symbol, days, sessions.length, loading, isIndex, history.error, history.isPlaceholderData, syncMinute.isPending])
 
   const chartHeight = Math.max(260, height - (showCoverage || syncMinute.isPending ? 32 : 0))
 
@@ -136,7 +111,7 @@ export function StockMultiDayIntradayChart({
           </>
         ) : (
           <>
-            <span className="text-muted">{isIndex ? '指数暂无分钟数据' : '本地暂无可展示的分钟数据'}</span>
+            <span className="text-muted">{isIndex ? '指数暂无分钟数据' : '数据源暂无可展示的分钟数据'}</span>
             {!isIndex && (
               <button
                 type="button"
@@ -156,6 +131,7 @@ export function StockMultiDayIntradayChart({
 
   return (
     <div style={{ height }}>
+      <ChartDataNotice status={latest.data?.data_status ?? history.data?.data_status} />
       {(showCoverage || (syncMinute.isPending && !isIndex)) && (
         <div className="flex h-8 items-center justify-between gap-3 border-b border-border/60 bg-elevated/40 px-3 text-[11px]">
           {syncMinute.isPending ? (
@@ -164,7 +140,7 @@ export function StockMultiDayIntradayChart({
               正在补齐最近 {days} 日分时数据…
             </span>
           ) : syncMinute.isError ? (
-            <span className="truncate text-muted">当前 {sessions.length} 日，目标 {days} 日 — 补齐失败</span>
+            <span className="truncate text-muted">当前 {sessions.length} 日，目标 {days} 日 — 获取失败</span>
           ) : (
             <span className="truncate text-muted">当前 {sessions.length} 个交易日数据，目标 {days} 日</span>
           )}
@@ -172,13 +148,12 @@ export function StockMultiDayIntradayChart({
             <button
               type="button"
               onClick={() => {
-                autoSyncRef.current = `${symbol}:${days}`
                 syncMinute.mutate()
               }}
               className="inline-flex shrink-0 items-center gap-1 text-accent hover:text-accent/80"
             >
               <Download className="h-3 w-3" />
-              重试补齐
+              重新获取
             </button>
           )}
         </div>

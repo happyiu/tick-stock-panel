@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { type KlinePeriod, type KlineRow } from '@/lib/api'
 import { DEFAULT_30M_DAYS, defaultKlineRange, klinePeriodQueryOptions } from '@/lib/kline'
+import { ChartDataNotice } from '@/components/ChartDataNotice'
 import { storage } from '@/lib/storage'
 import {
   EChartsCandlestick,
@@ -135,7 +136,7 @@ export function StockDailyKChart({
   const kline = useQuery({
     ...klinePeriodQueryOptions(symbol, period, dateRange, periodDays, extColumns),
     enabled: !!symbol,
-    refetchInterval: period === '1d' || period === '30m' ? refetchIntervalMs : undefined,
+    refetchInterval: refetchIntervalMs,
   })
 
   const rows = useMemo(() => toOHLC(kline.data?.rows ?? [], period), [kline.data?.rows, period])
@@ -171,6 +172,7 @@ export function StockDailyKChart({
 
   return (
     <div className={className} style={{ minHeight: chartHeight }}>
+      <ChartDataNotice status={kline.data?.data_status} />
       {showIndicatorControls && rows.length > 0 && (
         <div className="flex items-center gap-1.5 px-1 pb-0.5">
           {SUB_CHARTS.map(ind => (
@@ -248,7 +250,7 @@ export function StockDailyKChart({
       {kline.isError && <div className="text-sm text-danger py-2">K线加载失败</div>}
       {!kline.isLoading && !kline.isError && (kline.data?.rows?.length ?? 0) === 0 && (
         <div className="flex items-center justify-center text-sm text-muted" style={{ height }}>
-          {period === '30m' ? '暂无分钟K数据，请先同步分钟数据' : '暂无该周期K线数据'}
+          {period === '30m' ? '暂无30分钟K数据，请检查图表行情数据源' : '暂无该周期K线数据'}
         </div>
       )}
       {!kline.isLoading && !kline.isError && (kline.data?.rows?.length ?? 0) > 0 && rows.length === 0 && (

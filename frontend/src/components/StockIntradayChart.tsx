@@ -5,6 +5,7 @@ import { api, type MinuteKlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { klineMinuteQueryOptions } from '@/lib/kline'
 import { EChartsIntraday } from '@/components/EChartsIntraday'
+import { ChartDataNotice } from '@/components/ChartDataNotice'
 
 interface Props {
   symbol: string
@@ -71,6 +72,7 @@ export function StockIntradayChart({
 
   return (
     <div className={className} style={{ height, flexShrink: 0 }}>
+      <ChartDataNotice status={minute.data?.data_status} />
       {minute.isLoading && <div className="text-xs text-muted py-2">分时加载中…</div>}
       {!minute.isLoading && minuteRows.length === 0 && (
         <>
