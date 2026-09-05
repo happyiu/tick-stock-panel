@@ -38,6 +38,19 @@ export interface StockPreviewTechnicalCardsConfig {
   visible: Partial<Record<StockTechnicalCardKey, boolean>>
 }
 
+export interface StockPreviewAnalysisSectionsState {
+  technicalCollapsed: boolean
+  chanlunCollapsed: boolean
+}
+
+export interface StockPreviewChanlunOverlayConfig {
+  enabled: boolean
+  fractals: boolean
+  strokes: boolean
+  centers: boolean
+  candidates: boolean
+}
+
 export const storage = {
   /** 页面显示大小 */
   pageSize:             kv<'standard' | 'large'>('tf-page-size'),
@@ -67,6 +80,12 @@ export const storage = {
 
   /** 个股预览右侧技术指标卡片配置 (显隐 + 顺序) */
   stockPreviewTechnicalCards: kv<StockPreviewTechnicalCardsConfig>('stock_preview_technical_cards'),
+
+  /** 个股预览右侧技术指标与缠论分区的折叠状态 */
+  stockPreviewAnalysisSections: kv<StockPreviewAnalysisSectionsState>('stock_preview_analysis_sections'),
+
+  /** 个股预览 K 线缠论覆盖层配置 */
+  stockPreviewChanlunOverlay: kv<StockPreviewChanlunOverlayConfig>('stock_preview_chanlun_overlay'),
 
   /** 个股预览 K 线与右侧面板的分栏比例 */
   stockPreviewSplitRatio: kv<number>('stock_preview_split_ratio'),

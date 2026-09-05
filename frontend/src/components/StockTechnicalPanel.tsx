@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import {
   Check,
+  ChevronDown,
   ChevronLeft,
   GripVertical,
   Settings2,
@@ -481,6 +482,8 @@ export interface StockTechnicalPanelProps {
   error?: Error | null
   onRetry?: () => void
   onLatest?: () => void
+  collapsed?: boolean
+  onToggleCollapsed?: () => void
 }
 
 export function StockTechnicalPanel({
@@ -492,6 +495,8 @@ export function StockTechnicalPanel({
   error,
   onRetry,
   onLatest,
+  collapsed = false,
+  onToggleCollapsed,
 }: StockTechnicalPanelProps) {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [config, setConfig] = useState<StockPreviewTechnicalCardsConfig>(() => normalizeTechnicalConfig(
@@ -545,9 +550,9 @@ export function StockTechnicalPanel({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <section className="border-b border-border/70">
       {settingsOpen ? (
-        <div className="flex min-h-0 flex-1 flex-col">
+        <div>
           <div className="flex shrink-0 items-center justify-between border-b border-border/70 px-2.5 py-2">
             <button
               type="button"
@@ -565,7 +570,7 @@ export function StockTechnicalPanel({
               恢复默认
             </button>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-2.5">
+          <div className="p-2.5">
             <p className="mb-2 text-[10px] leading-relaxed text-muted">拖动调整顺序，勾选控制卡片显隐。配置只影响本机展示，不改变行情数据。</p>
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
               <SortableContext items={config.order} strategy={verticalListSortingStrategy}>
@@ -591,39 +596,55 @@ export function StockTechnicalPanel({
         </div>
       ) : (
         <>
-          <div className="flex shrink-0 items-start justify-between border-b border-border/70 px-2.5 py-2">
+          <div className={`flex shrink-0 items-start justify-between px-2.5 py-2 ${collapsed ? '' : 'border-b border-border/70'}`}>
             <div className="min-w-0">
               <div className="flex items-center gap-1.5">
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
                 <span className="text-xs font-medium text-foreground">技术指标</span>
                 <span className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[9px] text-secondary">{PERIOD_LABELS[period]}</span>
               </div>
-              <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted">
-                <span>截至 {formatAsOf(selectedDate, period)}</span>
-                {!isLatest && bars.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={onLatest}
-                    className="text-accent transition-colors hover:text-foreground"
-                  >
-                    回到最新
-                  </button>
-                )}
-              </div>
+              {!collapsed && (
+                <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted">
+                  <span>截至 {formatAsOf(selectedDate, period)}</span>
+                  {!isLatest && bars.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={onLatest}
+                      className="text-accent transition-colors hover:text-foreground"
+                    >
+                      回到最新
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
-            <button
-              type="button"
-              onClick={() => setSettingsOpen(true)}
-              className="shrink-0 rounded-btn p-1 text-muted transition-colors hover:bg-elevated hover:text-foreground"
-              title="配置指标卡片"
-              aria-label="配置指标卡片"
-            >
-              <Settings2 className="h-3.5 w-3.5" />
-            </button>
+            <div className="flex shrink-0 items-center gap-0.5">
+              {!collapsed && (
+                <button
+                  type="button"
+                  onClick={() => setSettingsOpen(true)}
+                  className="rounded-btn p-1 text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                  title="配置指标卡片"
+                  aria-label="配置指标卡片"
+                >
+                  <Settings2 className="h-3.5 w-3.5" />
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={onToggleCollapsed}
+                className="rounded-btn p-1 text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                title={collapsed ? '展开技术指标' : '收起技术指标'}
+                aria-label={collapsed ? '展开技术指标' : '收起技术指标'}
+                aria-expanded={!collapsed}
+              >
+                <ChevronDown className={`h-3.5 w-3.5 transition-transform ${collapsed ? '-rotate-90' : ''}`} />
+              </button>
+            </div>
           </div>
 
-          {isLoading && bars.length === 0 ? (
-            <div className="min-h-0 flex-1 overflow-y-auto p-2">
+          {!collapsed && (isLoading && bars.length === 0 ? (
+            <div className="p-2">
               <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
                 {Array.from({ length: 6 }, (_, index) => (
                   <div key={index} className="h-[116px] animate-pulse rounded-card border border-border bg-surface/60" />
@@ -631,7 +652,7 @@ export function StockTechnicalPanel({
               </div>
             </div>
           ) : error && bars.length === 0 ? (
-            <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-4 text-center">
+            <div className="flex flex-col items-center justify-center gap-2 px-4 py-6 text-center">
               <span className="text-xs text-secondary">技术指标暂时不可用</span>
               <span className="text-[10px] text-muted">周期行情加载失败，请稍后重试。</span>
               {onRetry && (
@@ -641,24 +662,24 @@ export function StockTechnicalPanel({
               )}
             </div>
           ) : bars.length === 0 ? (
-            <div className="flex min-h-0 flex-1 items-center justify-center px-4 text-center text-xs text-muted">暂无技术指标数据</div>
+            <div className="flex items-center justify-center px-4 py-6 text-center text-xs text-muted">暂无技术指标数据</div>
           ) : orderedCards.length === 0 ? (
-            <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-4 text-center">
+            <div className="flex flex-col items-center justify-center gap-2 px-4 py-6 text-center">
               <span className="text-xs text-secondary">暂未选择指标卡</span>
               <button type="button" onClick={() => setSettingsOpen(true)} className="rounded-btn bg-elevated px-2.5 py-1 text-[10px] text-accent transition-colors hover:text-foreground">
                 选择指标卡
               </button>
             </div>
           ) : (
-            <div className="min-h-0 flex-1 overflow-y-auto p-2">
+            <div className="p-2">
               <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
                 {orderedCards.map(card => <TechnicalCard key={card.key} card={card} />)}
               </div>
             </div>
-          )}
+          ))}
         </>
       )}
-    </div>
+    </section>
   )
 }
 

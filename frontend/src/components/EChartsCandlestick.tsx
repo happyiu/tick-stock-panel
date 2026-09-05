@@ -3,6 +3,8 @@ import { chartTheme, getTheme, useTheme } from '@/lib/theme'
 import { fmtAssetPrice, fmtPct } from '@/lib/format'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
+import type { ChanlunAnalysis } from '@/lib/chanlun'
+import type { StockPreviewChanlunOverlayConfig } from '@/lib/storage'
 
 export interface OHLC {
   date: string
@@ -341,6 +343,8 @@ interface Props {
   /** 成交量柱相对前 N 个交易日均量的显示设置 */
   volumeCompare?: VolumeCompareConfig
   assetType?: string
+  chanlunAnalysis?: ChanlunAnalysis
+  chanlunOverlay?: StockPreviewChanlunOverlayConfig
 }
 
 // 序列颜色 (双主题通用); 画布轴/网格/文字等主题相关色走 CT() 动态取
@@ -366,6 +370,73 @@ const COMPACT_THRESHOLD = 60
 const INFO_BAR_H = 16
 /** 子图之间的间距 (px) */
 const SUB_GAP_PX = 4
+
+function appendChanlunMarkPoints(
+  target: any[],
+  dateIndexMap: Map<string, number>,
+  analysis: ChanlunAnalysis | undefined,
+  config: StockPreviewChanlunOverlayConfig | undefined,
+  compact: boolean,
+) {
+  if (!analysis || !config?.enabled) return
+  if (config.fractals) {
+    for (const fractal of analysis.fractals) {
+      if (!dateIndexMap.has(fractal.date)) continue
+      const isBottom = fractal.type === 'bottom'
+      target.push({
+        name: fractal.date,
+        coord: [fractal.date, fractal.price],
+        symbol: 'triangle',
+        symbolSize: compact ? 6 : 9,
+        symbolRotate: isBottom ? 0 : 180,
+        symbolOffset: isBottom ? [0, '75%'] : [0, '-75%'],
+        itemStyle: { color: isBottom ? '#60A5FA' : '#A78BFA', opacity: 0.9 },
+        label: {
+          show: !compact,
+          formatter: isBottom ? '底' : '顶',
+          position: isBottom ? 'bottom' : 'top',
+          distance: 5,
+          color: isBottom ? '#60A5FA' : '#A78BFA',
+          fontSize: 9,
+          fontFamily: 'JetBrains Mono, monospace',
+        },
+        z: 90,
+      })
+    }
+  }
+  if (config.candidates) {
+    for (const signal of analysis.thirdSignals) {
+      if ((signal.status !== 'candidate' && signal.status !== 'invalidated')
+        || !dateIndexMap.has(signal.availableDate)) continue
+      const isBuy = signal.kind === 'third_buy'
+      const invalidated = signal.status === 'invalidated'
+      const color = isBuy ? THEME.bull : THEME.bear
+      target.push({
+        name: signal.availableDate,
+        coord: [signal.availableDate, signal.price],
+        symbol: 'circle',
+        symbolSize: invalidated ? 7 : 9,
+        symbolOffset: isBuy ? [0, '80%'] : [0, '-80%'],
+        itemStyle: {
+          color: invalidated ? CT().text : color,
+          borderColor: CT().tooltipBg,
+          borderWidth: 1,
+          opacity: invalidated ? 0.45 : 0.95,
+        },
+        label: {
+          show: true,
+          formatter: invalidated ? `3${isBuy ? '买' : '卖'}失效` : `3${isBuy ? '买' : '卖'}候选`,
+          position: isBuy ? 'bottom' : 'top',
+          distance: 7,
+          color: invalidated ? CT().text : color,
+          fontSize: compact ? 8 : 9,
+          fontFamily: 'JetBrains Mono, monospace',
+        },
+        z: 95,
+      })
+    }
+  }
+}
 
 function buildSubInfoGraphics(
   data: OHLC[],
@@ -476,6 +547,8 @@ function buildOption(
   linkedPrice: number | null | undefined,
   volumeCompare: VolumeCompareConfig,
   assetType?: string,
+  chanlunAnalysis?: ChanlunAnalysis,
+  chanlunOverlay?: StockPreviewChanlunOverlayConfig,
 ): EChartsOption {
   const candleData = data.map(d => [d.open, d.close, d.low, d.high])
 
@@ -530,6 +603,7 @@ function buildOption(
       }
     }
   }
+  appendChanlunMarkPoints(markPointData, dateIndexMap, chanlunAnalysis, chanlunOverlay, compact)
 
   // ====== 布局计算 ======
   const left = 60
@@ -622,6 +696,32 @@ function buildOption(
       { xAxis: r.end },
     ]))
 
+  if (chanlunAnalysis && chanlunOverlay?.enabled && chanlunOverlay.centers) {
+    for (const center of chanlunAnalysis.centers) {
+      if (!dateIndexMap.has(center.startDate) || !dateIndexMap.has(center.endDate)) continue
+      markAreaData.push([
+        {
+          name: '中枢',
+          coord: [center.startDate, center.zd],
+          itemStyle: {
+            color: 'rgba(139,92,246,0.10)',
+            borderColor: 'rgba(139,92,246,0.50)',
+            borderWidth: 1,
+          },
+          label: {
+            show: true,
+            formatter: '中枢',
+            position: 'insideTop',
+            color: '#A78BFA',
+            fontSize: 9,
+            fontFamily: 'JetBrains Mono, monospace',
+          },
+        },
+        { coord: [center.endDate, center.zg] },
+      ] as any)
+    }
+  }
+
   const markLineData: any[] = (priceLines ?? [])
     .filter(line => Number.isFinite(line.value))
     .map(line => {
@@ -670,6 +770,27 @@ function buildOption(
       },
       symbol: 'none',
     })
+  }
+
+  if (chanlunAnalysis && chanlunOverlay?.enabled && chanlunOverlay.strokes) {
+    for (const stroke of chanlunAnalysis.strokes) {
+      if (!dateIndexMap.has(stroke.startDate) || !dateIndexMap.has(stroke.endDate)) continue
+      const color = stroke.direction === 'up' ? THEME.bull : THEME.bear
+      markLineData.push([
+        { coord: [stroke.startDate, stroke.startPrice], symbol: 'none' },
+        {
+          coord: [stroke.endDate, stroke.endPrice],
+          symbol: 'none',
+          lineStyle: {
+            color,
+            type: stroke.confirmed ? 'solid' : 'dashed',
+            width: stroke.confirmed ? 1.4 : 1.2,
+            opacity: stroke.confirmed ? 0.82 : 0.6,
+          },
+          label: { show: false },
+        },
+      ])
+    }
   }
 
   series.push({
@@ -823,6 +944,8 @@ export function EChartsCandlestick({
   activeIndicators = [],
   volumeCompare = { enabled: true, days: 1 },
   assetType,
+  chanlunAnalysis,
+  chanlunOverlay,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<ECharts | null>(null)
@@ -847,6 +970,10 @@ export function EChartsCandlestick({
   activeIndicatorsRef.current = activeIndicators
   const volumeCompareRef = useRef(volumeCompare)
   volumeCompareRef.current = volumeCompare
+  const chanlunAnalysisRef = useRef(chanlunAnalysis)
+  chanlunAnalysisRef.current = chanlunAnalysis
+  const chanlunOverlayRef = useRef(chanlunOverlay)
+  chanlunOverlayRef.current = chanlunOverlay
   const chartHeightRef = useRef(300)
   const subTotalHRef = useRef(0)
   const getInfoBarHTMLRef = useRef<() => string>(() => '')
@@ -1135,7 +1262,16 @@ export function EChartsCandlestick({
         })
       }
     }
-    if (mkrs?.length) {
+    const currentData = dataRef.current
+    const currentDateIndexMap = new Map(currentData.map((item, index) => [item.date, index]))
+    appendChanlunMarkPoints(
+      markPointData,
+      currentDateIndexMap,
+      chanlunAnalysisRef.current,
+      chanlunOverlayRef.current,
+      compact,
+    )
+    if (mkrs?.length || (chanlunAnalysisRef.current && chanlunOverlayRef.current?.enabled)) {
       seriesUpdates.push({
         name: 'K',
         markPoint: markPointData.length > 0 ? { data: markPointData, animation: false } : undefined,
@@ -1166,6 +1302,8 @@ export function EChartsCandlestick({
       linkedPrice,
       volumeCompare,
       assetType,
+      chanlunAnalysis,
+      chanlunOverlay,
     )
 
     chart.setOption(option, true)
@@ -1183,7 +1321,7 @@ export function EChartsCandlestick({
     if (infoEl) {
       infoEl.innerHTML = getInfoBarHTML()
     }
-  }, [data, markers, ranges, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme, assetType])
+  }, [data, markers, ranges, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme, assetType, chanlunAnalysis, chanlunOverlay])
 
   // 渲染信息栏容器 (内容由 JS 直接写入)
   const initialHTML = useMemo(() => {

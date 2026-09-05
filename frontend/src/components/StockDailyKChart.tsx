@@ -1,9 +1,11 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { Check, Settings2 } from 'lucide-react'
 import { type KlinePeriod, type KlineRow } from '@/lib/api'
+import type { ChanlunAnalysis } from '@/lib/chanlun'
 import { DEFAULT_30M_DAYS, defaultKlineRange, klinePeriodQueryOptions } from '@/lib/kline'
 import { ChartDataNotice } from '@/components/ChartDataNotice'
-import { storage } from '@/lib/storage'
+import { storage, type StockPreviewChanlunOverlayConfig } from '@/lib/storage'
 import {
   EChartsCandlestick,
   OVERLAY_INDICATORS,
@@ -18,11 +20,28 @@ import {
 const SUB_INFO_H = 16
 const SUB_GAP = 4
 const DEFAULT_VOLUME_COMPARE: VolumeCompareConfig = { enabled: true, days: 1 }
+const DEFAULT_CHANLUN_OVERLAY: StockPreviewChanlunOverlayConfig = {
+  enabled: true,
+  fractals: false,
+  strokes: true,
+  centers: true,
+  candidates: true,
+}
 
 function normalizeVolumeCompare(config: VolumeCompareConfig): VolumeCompareConfig {
   return {
     enabled: config.enabled !== false,
     days: Math.max(1, Math.min(20, Math.round(Number(config.days) || 1))),
+  }
+}
+
+function normalizeChanlunOverlay(config: StockPreviewChanlunOverlayConfig): StockPreviewChanlunOverlayConfig {
+  return {
+    enabled: config?.enabled !== false,
+    fractals: config?.fractals === true,
+    strokes: config?.strokes !== false,
+    centers: config?.centers !== false,
+    candidates: config?.candidates !== false,
   }
 }
 
@@ -49,6 +68,8 @@ interface Props {
   refetchIntervalMs?: number
   period?: KlinePeriod
   periodDays?: number
+  /** 当前周期、当前历史截面的缠论结构近似结果；未传入时不显示相关控件和覆盖层。 */
+  chanlunAnalysis?: ChanlunAnalysis
 }
 
 function isValidRow(r: any): boolean {
@@ -124,11 +145,16 @@ export function StockDailyKChart({
   refetchIntervalMs,
   period = '1d',
   periodDays = DEFAULT_30M_DAYS,
+  chanlunAnalysis,
 }: Props) {
   const [activeIndicators, setActiveIndicators] = useState<string[]>(['vol'])
   const [showMarkers, setShowMarkers] = useState(true)
   const [volumeCompare, setVolumeCompare] = useState<VolumeCompareConfig>(() =>
     normalizeVolumeCompare(storage.stockVolumeCompare.get(DEFAULT_VOLUME_COMPARE)),
+  )
+  const [chanlunMenuOpen, setChanlunMenuOpen] = useState(false)
+  const [chanlunOverlay, setChanlunOverlay] = useState<StockPreviewChanlunOverlayConfig>(() =>
+    normalizeChanlunOverlay(storage.stockPreviewChanlunOverlay.get(DEFAULT_CHANLUN_OVERLAY)),
   )
   const dateRange = externalDateRange ?? defaultKlineRange(period)
 
@@ -156,6 +182,14 @@ export function StockDailyKChart({
     setVolumeCompare(prev => {
       const next = normalizeVolumeCompare({ ...prev, ...patch })
       storage.stockVolumeCompare.set(next)
+      return next
+    })
+  }, [])
+
+  const updateChanlunOverlay = useCallback((patch: Partial<StockPreviewChanlunOverlayConfig>) => {
+    setChanlunOverlay(previous => {
+      const next = normalizeChanlunOverlay({ ...previous, ...patch })
+      storage.stockPreviewChanlunOverlay.set(next)
       return next
     })
   }, [])
@@ -201,6 +235,62 @@ export function StockDailyKChart({
               {ind.label}
             </button>
           ))}
+          {chanlunAnalysis && (
+            <div
+              className="relative ml-0.5 flex items-center"
+              onBlur={event => {
+                if (!event.currentTarget.contains(event.relatedTarget)) setChanlunMenuOpen(false)
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => updateChanlunOverlay({ enabled: !chanlunOverlay.enabled })}
+                className={`rounded-l px-2 py-0.5 text-[10px] font-mono transition-colors ${
+                  chanlunOverlay.enabled
+                    ? 'bg-[#8B5CF6]/20 text-[#A78BFA]'
+                    : 'bg-elevated text-muted hover:text-secondary'
+                }`}
+                aria-pressed={chanlunOverlay.enabled}
+                title={chanlunOverlay.enabled ? '隐藏缠论覆盖层' : '显示缠论覆盖层'}
+              >
+                缠论
+              </button>
+              <button
+                type="button"
+                onClick={() => setChanlunMenuOpen(value => !value)}
+                className="rounded-r border-l border-border/60 bg-elevated px-1.5 py-0.5 text-muted transition-colors hover:text-secondary"
+                title="配置缠论覆盖层"
+                aria-label="配置缠论覆盖层"
+                aria-expanded={chanlunMenuOpen}
+              >
+                <Settings2 className="h-3 w-3" />
+              </button>
+              {chanlunMenuOpen && (
+                <div className="absolute left-0 top-full z-30 mt-1 w-36 rounded-card border border-border bg-surface p-1.5 shadow-xl">
+                  {([
+                    ['fractals', '分型'],
+                    ['strokes', '笔'],
+                    ['centers', '中枢'],
+                    ['candidates', '三类候选'],
+                  ] as const).map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      role="checkbox"
+                      aria-checked={chanlunOverlay[key]}
+                      onClick={() => updateChanlunOverlay({ [key]: !chanlunOverlay[key] })}
+                      className="flex w-full items-center gap-2 rounded-btn px-2 py-1.5 text-left text-[10px] text-secondary transition-colors hover:bg-elevated hover:text-foreground"
+                    >
+                      <span className={`flex h-3.5 w-3.5 items-center justify-center rounded border ${chanlunOverlay[key] ? 'border-[#8B5CF6] bg-[#8B5CF6]' : 'border-border bg-base'}`}>
+                        {chanlunOverlay[key] && <Check className="h-2.5 w-2.5 text-white" strokeWidth={3} />}
+                      </span>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           {activeIndicators.includes('vol') && (
             <div className="ml-0.5 flex h-5 items-center gap-1.5 border-l border-border/70 pl-2">
               <span className="text-[10px] text-muted">量比</span>
@@ -275,6 +365,8 @@ export function StockDailyKChart({
           visibleBars={visibleBars}
           activeIndicators={activeIndicators}
           volumeCompare={volumeCompare}
+          chanlunAnalysis={chanlunAnalysis}
+          chanlunOverlay={chanlunOverlay}
         />
       )}
     </div>

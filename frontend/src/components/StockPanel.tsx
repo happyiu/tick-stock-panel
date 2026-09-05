@@ -15,6 +15,7 @@ import { StockInfoBar } from '@/components/StockInfoBar'
 import { StockDailyKChart, getDefaultRange, toOHLC } from '@/components/StockDailyKChart'
 import { StockIntradayChart } from '@/components/StockIntradayChart'
 import { StockTechnicalPanel } from '@/components/StockTechnicalPanel'
+import { StockChanlunPanel } from '@/components/StockChanlunPanel'
 import { financialMetricsQueryOptions, useFinancialMetrics } from '@/lib/useFinancials'
 import { useCapabilities } from '@/lib/useSharedQueries'
 import type { ChartMarker, ChartPriceLine, ChartRange } from '@/components/EChartsCandlestick'
@@ -24,16 +25,28 @@ import {
   buildInfoExtColumnsParam,
   type ColumnConfig,
 } from '@/lib/stock-info-fields'
-import { storage } from '@/lib/storage'
+import { analyzeChanlun } from '@/lib/chanlun'
+import { storage, type StockPreviewAnalysisSectionsState } from '@/lib/storage'
 
 const DEFAULT_SPLIT_RATIO = 1.4 / 2.4
 const MIN_SPLIT_RATIO = 0.25
 const MAX_SPLIT_RATIO = 0.75
 const SPLIT_GAP_PX = 12
+const DEFAULT_ANALYSIS_SECTIONS: StockPreviewAnalysisSectionsState = {
+  technicalCollapsed: false,
+  chanlunCollapsed: false,
+}
 
 function clampSplitRatioValue(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_SPLIT_RATIO
   return Math.max(MIN_SPLIT_RATIO, Math.min(MAX_SPLIT_RATIO, value))
+}
+
+function normalizeAnalysisSections(value: StockPreviewAnalysisSectionsState): StockPreviewAnalysisSectionsState {
+  return {
+    technicalCollapsed: value?.technicalCollapsed === true,
+    chanlunCollapsed: value?.chanlunCollapsed === true,
+  }
 }
 
 export type StockPanelRightPaneMode = 'intraday' | 'technical' | 'empty'
@@ -123,6 +136,9 @@ export function StockPanel({
   const [splitRatio, setSplitRatio] = useState(() => clampSplitRatioValue(
     storage.stockPreviewSplitRatio.get(DEFAULT_SPLIT_RATIO),
   ))
+  const [analysisSections, setAnalysisSections] = useState(() => normalizeAnalysisSections(
+    storage.stockPreviewAnalysisSections.get(DEFAULT_ANALYSIS_SECTIONS),
+  ))
   const [splitDragging, setSplitDragging] = useState(false)
   const splitContainerRef = useRef<HTMLDivElement>(null)
   const dailyPaneRef = useRef<HTMLDivElement>(null)
@@ -136,6 +152,14 @@ export function StockPanel({
   const handleFieldsChange = useCallback((next: ColumnConfig[]) => {
     setFields(next)
     saveInfoFields(next)
+  }, [])
+
+  const toggleAnalysisSection = useCallback((key: keyof StockPreviewAnalysisSectionsState) => {
+    setAnalysisSections(previous => {
+      const next = { ...previous, [key]: !previous[key] }
+      storage.stockPreviewAnalysisSections.set(next)
+      return next
+    })
   }, [])
 
   // 财务指标：仅当信息条配置含可见的财务字段且用户具备财务数据能力 (financial) 时才请求
@@ -177,6 +201,10 @@ export function StockPanel({
   const periodRows = useMemo(
     () => toOHLC(periodKline.data?.rows ?? [], period),
     [period, periodKline.data?.rows],
+  )
+  const chanlunAnalysis = useMemo(
+    () => analyzeChanlun(periodRows, selectedBarKey),
+    [periodRows, selectedBarKey],
   )
   // 非日K查询尚未到达时用信息条的日线维持分栏高度，数据到达后自动切换到目标周期。
   const selectableRows = period !== '1d' && periodRows.length > 0 ? periodRows : rows
@@ -409,6 +437,7 @@ export function StockPanel({
             refetchIntervalMs={refetchIntervalMs}
             period={period}
             periodDays={periodDays}
+            chanlunAnalysis={resolvedRightPaneMode === 'technical' ? chanlunAnalysis : undefined}
           />
         </div>
 
@@ -457,16 +486,29 @@ export function StockPanel({
               />
             )}
             {resolvedRightPaneMode === 'technical' && (
-              <StockTechnicalPanel
-                rows={periodKline.data?.rows ?? []}
-                period={period}
-                selectedDate={selectedBarKey}
-                assetType={assetType}
-                isLoading={periodKline.isLoading || periodKline.isFetching && !periodKline.data}
-                error={periodKline.error}
-                onRetry={() => { void periodKline.refetch() }}
-                onLatest={() => setSelectedBarKey(selectableRows.at(-1)?.date ?? null)}
-              />
+              <div className="h-full min-h-0 overflow-y-auto">
+                <StockTechnicalPanel
+                  rows={periodKline.data?.rows ?? []}
+                  period={period}
+                  selectedDate={selectedBarKey}
+                  assetType={assetType}
+                  isLoading={periodKline.isLoading || periodKline.isFetching && !periodKline.data}
+                  error={periodKline.error}
+                  onRetry={() => { void periodKline.refetch() }}
+                  onLatest={() => setSelectedBarKey(selectableRows.at(-1)?.date ?? null)}
+                  collapsed={analysisSections.technicalCollapsed}
+                  onToggleCollapsed={() => toggleAnalysisSection('technicalCollapsed')}
+                />
+                <StockChanlunPanel
+                  analysis={chanlunAnalysis}
+                  period={period}
+                  assetType={assetType}
+                  collapsed={analysisSections.chanlunCollapsed}
+                  onToggleCollapsed={() => toggleAnalysisSection('chanlunCollapsed')}
+                  isLoading={periodKline.isLoading || periodKline.isFetching && !periodKline.data}
+                  error={periodKline.error}
+                />
+              </div>
             )}
           </div>
         )}
