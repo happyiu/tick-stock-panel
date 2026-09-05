@@ -229,13 +229,29 @@ export interface KlineRow {
   volume?: number
   change_pct?: number
   ma5?: number | null
+  ma10?: number | null
   ma20?: number | null
   ma60?: number | null
   macd_dif?: number | null
   macd_dea?: number | null
   macd_hist?: number | null
+  rsi_6?: number | null
   rsi_14?: number | null
+  rsi_24?: number | null
+  kdj_k?: number | null
+  kdj_d?: number | null
+  kdj_j?: number | null
+  boll_upper?: number | null
+  boll_lower?: number | null
+  vol_ma5?: number | null
+  vol_ma10?: number | null
   vol_ratio_5d?: number | null
+  momentum_5d?: number | null
+  momentum_10d?: number | null
+  momentum_20d?: number | null
+  momentum_30d?: number | null
+  momentum_60d?: number | null
+  atr_14?: number | null
   [key: string]: any
 }
 

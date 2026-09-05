@@ -14,6 +14,7 @@ import {
 import { StockInfoBar } from '@/components/StockInfoBar'
 import { StockDailyKChart, getDefaultRange, toOHLC } from '@/components/StockDailyKChart'
 import { StockIntradayChart } from '@/components/StockIntradayChart'
+import { StockTechnicalPanel } from '@/components/StockTechnicalPanel'
 import { financialMetricsQueryOptions, useFinancialMetrics } from '@/lib/useFinancials'
 import { useCapabilities } from '@/lib/useSharedQueries'
 import type { ChartMarker, ChartPriceLine, ChartRange } from '@/components/EChartsCandlestick'
@@ -29,10 +30,16 @@ const MIN_SPLIT_RATIO = 0.25
 const MAX_SPLIT_RATIO = 0.75
 const SPLIT_GAP_PX = 12
 
+export type StockPanelRightPaneMode = 'intraday' | 'technical' | 'empty'
+
 interface Props {
   symbol: string
   height?: number
   showIntraday?: boolean
+  /** 右侧分栏内容；empty 保留空白面板和关闭/展开交互。 */
+  rightPaneMode?: StockPanelRightPaneMode
+  /** 兼容旧调用方：false 等价于 rightPaneMode="empty"。 */
+  showIntradayChart?: boolean
   className?: string
   /** 当用户点击蜡烛选中日期时回调（用于外部自动开启分时图）。 */
   onSelectDate?: (date: string) => void
@@ -76,6 +83,8 @@ export function StockPanel({
   symbol,
   height = 520,
   showIntraday = true,
+  rightPaneMode,
+  showIntradayChart = true,
   className,
   onSelectDate,
   dateRange: externalDateRange,
@@ -100,9 +109,11 @@ export function StockPanel({
   period = '1d',
   periodDays = DEFAULT_30M_DAYS,
 }: Props) {
+  const resolvedRightPaneMode: StockPanelRightPaneMode = rightPaneMode
+    ?? (showIntradayChart ? 'intraday' : 'empty')
   const [linkedPrice, setLinkedPrice] = useState<number | null>(null)
-  const [selectedDate, setSelectedDate] = useState<string | null>(null)
-  const [intradayDismissed, setIntradayDismissed] = useState(false)
+  const [selectedBarKey, setSelectedBarKey] = useState<string | null>(null)
+  const [rightPaneDismissed, setRightPaneDismissed] = useState(false)
   const [splitRatio, setSplitRatio] = useState(DEFAULT_SPLIT_RATIO)
   const [splitDragging, setSplitDragging] = useState(false)
   const splitContainerRef = useRef<HTMLDivElement>(null)
@@ -145,7 +156,22 @@ export function StockPanel({
   const kline = useQuery({ ...klineDailyQueryOptions(symbol, infoDateRange, extColumns), enabled: !!symbol })
   const rawRows: KlineRow[] = kline.data?.rows ?? []
   // OHLC 视图用于日期选中/昨收价推导 (与图表侧同口径)
-  const rows = useMemo(() => toOHLC(rawRows), [rawRows])
+  const rows = useMemo(() => toOHLC(rawRows, '1d'), [rawRows])
+  // 技术面板观察与左侧 K 线完全相同的 period query; 1d 时会与上面的日K query 共享缓存。
+  const periodKline = useQuery({
+    ...klinePeriodQueryOptions(symbol, period, chartDateRange, periodDays, extColumns),
+    enabled: !!symbol && (
+      resolvedRightPaneMode === 'technical'
+      || (resolvedRightPaneMode === 'intraday' && period !== '1d')
+    ),
+    refetchInterval: refetchIntervalMs,
+  })
+  const periodRows = useMemo(
+    () => toOHLC(periodKline.data?.rows ?? [], period),
+    [period, periodKline.data?.rows],
+  )
+  // 非日K查询尚未到达时用信息条的日线维持分栏高度，数据到达后自动切换到目标周期。
+  const selectableRows = period !== '1d' && periodRows.length > 0 ? periodRows : rows
   const stockInfo = kline.data?.stock_info
   const name = kline.data?.name
   const assetType = kline.data?.asset_type
@@ -155,12 +181,14 @@ export function StockPanel({
   }, [assetType, onAssetTypeChange])
 
   const handleDateClick = useCallback((date: string) => {
-    // 30F 横轴包含时分；右侧分时接口只接受交易日，统一归一为 YYYY-MM-DD。
-    const tradeDate = date.slice(0, 10)
-    setSelectedDate(tradeDate)
-    setIntradayDismissed(false)
-    onSelectDate?.(tradeDate)
-  }, [onSelectDate])
+    const selected = period === '30m'
+      ? date.replace('T', ' ').slice(0, 16)
+      : date.slice(0, 10)
+    setSelectedBarKey(selected)
+    setRightPaneDismissed(false)
+    // 兼容外部已有的分时自动打开回调，仍只传交易日。
+    if (resolvedRightPaneMode === 'intraday') onSelectDate?.(selected.slice(0, 10))
+  }, [onSelectDate, period, resolvedRightPaneMode])
 
   const clampSplitRatio = useCallback((value: number) => (
     Math.max(MIN_SPLIT_RATIO, Math.min(MAX_SPLIT_RATIO, value))
@@ -283,33 +311,53 @@ export function StockPanel({
   useEffect(() => {
     if (prevSymbol.current === symbol) return
     prevSymbol.current = symbol
-    setSelectedDate(null)
+    setSelectedBarKey(null)
     setLinkedPrice(null)
-    setIntradayDismissed(false)
+    setRightPaneDismissed(false)
   }, [symbol])
 
-  // 当分时开启、无选中日期时，自动选中最新日期
+  const prevPeriod = useRef<KlinePeriod>(period)
   useEffect(() => {
-    if (showIntraday && !selectedDate && rows.length > 0) {
-      setSelectedDate(rows[rows.length - 1].date)
-    }
-  }, [showIntraday, selectedDate, rows])
+    if (prevPeriod.current === period) return
+    prevPeriod.current = period
+    setSelectedBarKey(null)
+    setLinkedPrice(null)
+    setRightPaneDismissed(false)
+  }, [period])
 
-  const selectedIdx = selectedDate ? rows.findIndex(r => r.date === selectedDate) : -1
+  // 目标周期数据到达后，如果此前只是用日线占位选中了日期，则回到该周期最新一根。
+  useEffect(() => {
+    if (resolvedRightPaneMode !== 'technical' || period === '1d' || !periodRows.length || !selectedBarKey) return
+    if (!periodRows.some(row => row.date === selectedBarKey)) setSelectedBarKey(null)
+  }, [period, periodRows, resolvedRightPaneMode, selectedBarKey])
+
+  // 右侧开启且无选中 K 线时，自动选中最新一根；点击历史 K 线后则保持历史截面。
+  useEffect(() => {
+    if (showIntraday && !selectedBarKey && selectableRows.length > 0) {
+      setSelectedBarKey(selectableRows[selectableRows.length - 1].date)
+    }
+  }, [selectableRows, selectedBarKey, showIntraday])
+
+  const selectedIdx = selectedBarKey ? selectableRows.findIndex(r => r.date === selectedBarKey) : -1
   const prevClose = selectedIdx > 0
-    ? rows[selectedIdx - 1].close
-    : rows.length >= 2
-      ? rows[rows.length - 2].close
+    ? selectableRows[selectedIdx - 1].close
+    : selectableRows.length >= 2
+      ? selectableRows[selectableRows.length - 2].close
       : undefined
+  const selectedTradeDate = selectedBarKey?.slice(0, 10) ?? null
   if (!symbol) return null
 
-  const splitVisible = resizableSplit && showIntraday && selectedDate && !intradayDismissed
+  const rightPaneVisible = showIntraday && selectedBarKey && !rightPaneDismissed
+  const splitVisible = resizableSplit && rightPaneVisible
   const dailyPaneStyle = splitVisible
     ? { flex: `0 0 ${splitRatio * 100}%` }
     : undefined
 
   // 财务指标最新一期（metrics 按 period_end 排序，取首项）
   const financialMetrics: FinancialMetricRecord | undefined = financials.data?.data?.[0]
+  const rightPaneLabel = resolvedRightPaneMode === 'technical'
+    ? '技术指标'
+    : resolvedRightPaneMode === 'intraday' ? '分时图' : '右侧面板'
 
   return (
     <div className={className}>
@@ -352,18 +400,18 @@ export function StockPanel({
           />
         </div>
 
-        {showIntraday && selectedDate && !intradayDismissed && (
-          <div className="relative flex-1 min-w-0 border-l border-border pl-3">
+        {rightPaneVisible && (
+          <div className="relative flex-1 min-h-0 min-w-0 border-l border-border pl-3">
             {resizableSplit && (
               <div
                 role="separator"
                 tabIndex={0}
-                aria-label="调整日K与分时宽度"
+                aria-label={`调整日K与${rightPaneLabel}宽度`}
                 aria-orientation="vertical"
                 aria-valuemin={MIN_SPLIT_RATIO * 100}
                 aria-valuemax={MAX_SPLIT_RATIO * 100}
                 aria-valuenow={Math.round(splitRatio * 100)}
-                title="拖动调整日K与分时宽度"
+                title={`拖动调整日K与${rightPaneLabel}宽度`}
                 onKeyDown={handleSplitKeyDown}
                 onPointerDown={handleSplitPointerDown}
                 onPointerMove={handleSplitPointerMove}
@@ -375,35 +423,49 @@ export function StockPanel({
               </div>
             )}
             <button
-              onClick={() => setIntradayDismissed(true)}
+              onClick={() => setRightPaneDismissed(true)}
               className="absolute -left-1.5 -top-1.5 z-10 flex h-5 w-5 items-center justify-center rounded-full border border-border bg-surface text-muted shadow-sm transition-colors hover:text-foreground hover:bg-elevated"
-              title="收起分时图"
-              aria-label="收起分时图"
+              title={`收起${rightPaneLabel}`}
+              aria-label={`收起${rightPaneLabel}`}
             >
               <X className="h-3 w-3" />
             </button>
-            <StockIntradayChart
-              symbol={symbol}
-              date={selectedDate}
-              height={height}
-              prevClose={prevClose}
-              onPriceHover={setLinkedPrice}
-              onPriceDoubleClick={onPriceDoubleClick}
-              currentPrice={rows[rows.length - 1]?.close}
-              priceLines={priceLines}
-              assetType={assetType}
-              refetchIntervalMs={refetchIntervalMs}
-            />
+            {resolvedRightPaneMode === 'intraday' && (
+              <StockIntradayChart
+                symbol={symbol}
+                date={selectedTradeDate}
+                height={height}
+                prevClose={prevClose}
+                onPriceHover={setLinkedPrice}
+                onPriceDoubleClick={onPriceDoubleClick}
+                currentPrice={rows[rows.length - 1]?.close}
+                priceLines={priceLines}
+                assetType={assetType}
+                refetchIntervalMs={refetchIntervalMs}
+              />
+            )}
+            {resolvedRightPaneMode === 'technical' && (
+              <StockTechnicalPanel
+                rows={periodKline.data?.rows ?? []}
+                period={period}
+                selectedDate={selectedBarKey}
+                assetType={assetType}
+                isLoading={periodKline.isLoading || periodKline.isFetching && !periodKline.data}
+                error={periodKline.error}
+                onRetry={() => { void periodKline.refetch() }}
+                onLatest={() => setSelectedBarKey(selectableRows.at(-1)?.date ?? null)}
+              />
+            )}
           </div>
         )}
 
-        {showIntraday && selectedDate && intradayDismissed && (
+        {showIntraday && selectedBarKey && rightPaneDismissed && (
           <button
             type="button"
-            onClick={() => setIntradayDismissed(false)}
+            onClick={() => setRightPaneDismissed(false)}
             className="absolute right-0 top-1/2 z-10 flex h-7 w-7 -translate-y-1/2 translate-x-1/2 items-center justify-center rounded-full border border-border bg-surface text-muted shadow-sm transition-colors hover:bg-elevated hover:text-foreground"
-            title="展开分时图"
-            aria-label="展开分时图"
+            title={`展开${rightPaneLabel}`}
+            aria-label={`展开${rightPaneLabel}`}
           >
             <PanelRightOpen className="h-3.5 w-3.5" />
           </button>

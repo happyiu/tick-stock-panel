@@ -17,6 +17,9 @@ CHART_INDICATORS = {
     "rsi_6", "rsi_14", "rsi_24",
     "kdj_k", "kdj_d", "kdj_j",
     "boll_upper", "boll_lower",
+    "vol_ma5", "vol_ma10", "vol_ratio_5d",
+    "momentum_5d", "momentum_20d", "momentum_60d",
+    "atr_14",
 }
 
 

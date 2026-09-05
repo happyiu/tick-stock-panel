@@ -23,6 +23,21 @@ function kv<T>(key: string) {
   }
 }
 
+export type StockTechnicalCardKey =
+  | 'ma'
+  | 'volume'
+  | 'macd'
+  | 'rsi'
+  | 'kdj'
+  | 'boll'
+  | 'momentum'
+  | 'atr'
+
+export interface StockPreviewTechnicalCardsConfig {
+  order: StockTechnicalCardKey[]
+  visible: Partial<Record<StockTechnicalCardKey, boolean>>
+}
+
 export const storage = {
   /** 页面显示大小 */
   pageSize:             kv<'standard' | 'large'>('tf-page-size'),
@@ -49,6 +64,9 @@ export const storage = {
 
   /** 个股详情外链 URL 模板 (支持 {code}/{market}/{symbol}; 留空关闭) */
   stockExternalTemplate: kv<string>('stock_external_template'),
+
+  /** 个股预览右侧技术指标卡片配置 (显隐 + 顺序) */
+  stockPreviewTechnicalCards: kv<StockPreviewTechnicalCardsConfig>('stock_preview_technical_cards'),
 
   /** 策略结果列表列配置 */
   screenerResultColumns: kv<unknown[]>('screener_result_columns'),

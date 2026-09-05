@@ -624,7 +624,9 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                 <StockPanel
                   symbol={symbol}
                   height={420}
+                  // 日K视图右侧展示跟随当前周期的技术指标卡片。
                   showIntraday
+                  rightPaneMode="technical"
                   dateRange={dateRange}
                   priceLines={monitorPriceLines}
                   onAssetTypeChange={setAssetType}

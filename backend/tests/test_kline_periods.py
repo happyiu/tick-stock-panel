@@ -1,7 +1,7 @@
 """个股详情 K 线周期聚合与 API 契约。"""
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 
 import polars as pl
@@ -37,6 +37,11 @@ def test_weekly_uses_actual_trading_boundaries_and_recomputes_ma():
     assert result["close"].to_list() == [10.4, 11.4]
     assert result["volume"].to_list() == [330.0, 630.0]
     assert "ma5" in result.columns
+    for column in (
+        "vol_ma5", "vol_ma10", "vol_ratio_5d",
+        "momentum_5d", "momentum_20d", "momentum_60d", "atr_14",
+    ):
+        assert column in result.columns
 
 
 def test_monthly_does_not_merge_adjacent_months():
@@ -56,6 +61,42 @@ def test_monthly_does_not_merge_adjacent_months():
     assert result["date"].to_list() == [date(2026, 1, 30), date(2026, 2, 3)]
     assert result["volume"].to_list() == [30.0, 70.0]
     assert result["amount"].to_list() == [300.0, 700.0]
+    assert "atr_14" in result.columns
+
+
+def test_30m_calculates_extended_technical_indicators():
+    times = [(9, 31), (10, 1), (10, 31), (11, 1), (13, 1), (13, 31), (14, 1), (14, 31)]
+    rows = []
+    for day in range(8):
+        trade_date = date(2026, 8, 3) + timedelta(days=day)
+        for slot, (hour, minute) in enumerate(times):
+            close = 100.0 + day * 1.5 + slot * 0.1
+            rows.append({
+                "symbol": "600000.SH",
+                "datetime": datetime(trade_date.year, trade_date.month, trade_date.day, hour, minute),
+                "open": close - 0.05,
+                "high": close + 0.1,
+                "low": close - 0.1,
+                "close": close,
+                "volume": float(100 + day * 10 + slot),
+                "amount": close * float(100 + day * 10 + slot),
+            })
+
+    result = aggregate_minute_30m(pl.DataFrame(rows))
+
+    assert result.height == 64
+    last = result.row(-1, named=True)
+    for column in (
+        "vol_ma5", "vol_ma10", "vol_ratio_5d",
+        "momentum_5d", "momentum_20d", "momentum_60d", "atr_14",
+    ):
+        assert last[column] is not None
+
+    volumes = result["volume"].to_list()
+    closes = result["close"].to_list()
+    assert last["vol_ratio_5d"] == pytest.approx(volumes[-1] / (sum(volumes[-6:-1]) / 5))
+    assert last["momentum_5d"] == pytest.approx(closes[-1] / closes[-6] - 1)
+    assert last["momentum_20d"] == pytest.approx(closes[-1] / closes[-21] - 1)
 
 
 def test_30m_respects_lunch_break_and_uses_scheduled_bucket_labels():
