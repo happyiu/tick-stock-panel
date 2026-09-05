@@ -191,6 +191,8 @@ export interface AiStockReport {
 }
 
 // ===== Kline =====
+export type KlinePeriod = '30m' | '1d' | '1w' | '1mo'
+
 export interface MinuteKlineRow {
   datetime: string
   /** 分钟开盘价; 部分数据源(stock-sdk 历史日)无真实分钟 open, 为 null */
@@ -218,6 +220,8 @@ export interface PriceLimitInfo {
 export interface KlineRow {
   symbol?: string
   date: string
+  period_start?: string
+  period_end?: string
   open: number
   high: number
   low: number
@@ -233,6 +237,23 @@ export interface KlineRow {
   rsi_14?: number | null
   vol_ratio_5d?: number | null
   [key: string]: any
+}
+
+export interface KlineResponse {
+  symbol: string
+  name?: string
+  asset_type?: 'stock' | 'etf' | 'index'
+  stock_info?: {
+    name?: string
+    total_shares?: number
+    float_shares?: number
+    ext?: Record<string, unknown>
+  }
+  rows: KlineRow[]
+  source?: string
+  period?: KlinePeriod
+  requested_days?: number
+  available_days?: number
 }
 
 // ===== Watchlist =====
@@ -2067,14 +2088,7 @@ export const api = {
     request<CapabilitiesResponse>('/api/capabilities/redetect', { method: 'POST' }),
 
   klineDaily: (symbol: string, days = 120, dateRange?: { start: string; end: string }, extColumns?: string) =>
-    request<{
-      symbol: string
-      name?: string
-      asset_type?: 'stock' | 'etf' | 'index'
-      stock_info?: { name?: string; total_shares?: number; float_shares?: number; ext?: Record<string, unknown> }
-      rows: KlineRow[]
-      source?: string
-    }>(
+    request<KlineResponse>(
       (dateRange
         ? `/api/kline/daily?symbol=${encodeURIComponent(symbol)}&start_date=${dateRange.start}&end_date=${dateRange.end}`
         : `/api/kline/daily?symbol=${encodeURIComponent(symbol)}&days=${days}`)
@@ -2085,6 +2099,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ symbols, days }),
     }),
+  klinePeriod: (
+    symbol: string,
+    period: Exclude<KlinePeriod, '1d'>,
+    dateRange: { start: string; end: string },
+    days = 20,
+  ) =>
+    request<KlineResponse>(
+      `/api/kline/period?symbol=${encodeURIComponent(symbol)}&period=${period}`
+      + `&start_date=${dateRange.start}&end_date=${dateRange.end}&days=${days}`,
+    ),
   klineMinuteBatch: (symbols: string[], date?: string, preferLocal?: boolean, since?: string) =>
     request<{ data: Record<string, MinuteKlineRow[]>; full_minute_local?: boolean; incremental?: boolean }>('/api/kline/minute-batch', {
       method: 'POST',

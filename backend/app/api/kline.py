@@ -6,18 +6,19 @@ import json
 import logging
 import math
 from datetime import date, timedelta
-from pathlib import Path
-from zoneinfo import ZoneInfo
 from functools import lru_cache
-from typing import Optional
+from pathlib import Path
+from typing import Literal, Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
-from app.indicators.pipeline import compute_enriched, compute_enriched_single
+from app.db_safe import is_valid_ext_ident
+from app.indicators.pipeline import compute_enriched
 from app.market_time import cn_now, cn_today, in_continuous_session
 from app.price_limits import is_risk_warning_name, price_limit_pct
-from app.db_safe import is_valid_ext_ident
 from app.services import kline_sync
+from app.services.kline_periods import aggregate_daily_period, aggregate_minute_30m
 
 logger = logging.getLogger(__name__)
 
@@ -420,6 +421,119 @@ def get_daily(
     resp = {"symbol": symbol, "name": stock_name, "asset_type": asset_type,
             "stock_info": stock_info, "rows": rows, "source": "enriched"}
     return _attach_ext(resp, repo, symbol, ext_columns)
+
+
+@router.get("/period")
+def get_period_kline(
+    request: Request,
+    symbol: str = Query(..., description="标的代码,如 000001.SZ"),
+    period: Literal["30m", "1w", "1mo"] = Query(..., description="K线周期"),
+    start_date: Optional[str] = Query(None, description="展示起始日期 YYYY-MM-DD"),
+    end_date: Optional[str] = Query(None, description="展示截止日期 YYYY-MM-DD,默认今天"),
+    days: int = Query(20, ge=1, le=20, description="30分钟K最近交易日数量"),
+):
+    """读取并聚合个股/ETF 的 30 分钟、周或月 K，不写入新的周期数据。"""
+    import polars as pl
+
+    repo = request.app.state.repo
+    asset_type = repo.resolve_asset_type(symbol)
+    if asset_type == "index":
+        raise HTTPException(status_code=400, detail="指数周期切换暂未开放")
+
+    try:
+        end = date.fromisoformat(end_date) if end_date else cn_today()
+        if period == "30m":
+            default_days = days * 3 + 20
+        else:
+            default_days = 365 if period == "1w" else 730
+        start = date.fromisoformat(start_date) if start_date else end - timedelta(days=default_days)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="日期格式错误,应为 YYYY-MM-DD") from exc
+    if start > end:
+        raise HTTPException(status_code=422, detail="起始日期不能晚于截止日期")
+
+    stock_info = (
+        _get_stock_info(repo, symbol)
+        if asset_type == "stock"
+        else _get_asset_info(repo, symbol, asset_type)
+    )
+    base = {
+        "symbol": symbol,
+        "name": stock_info.get("name"),
+        "asset_type": asset_type,
+        "stock_info": stock_info,
+        "period": period,
+    }
+
+    if period == "30m":
+        # 多取自然日覆盖节假日，最终严格裁成最近 N 个实际交易日。
+        scan_start = min(start, end - timedelta(days=days * 3 + 20))
+        minute = repo.get_minute_range([symbol], scan_start, end, asset_type=asset_type)
+        source = "local" if not minute.is_empty() else "none"
+
+        # 当日形成中的分钟 K 复用详情分时的 live 路径，覆盖本地增量落盘的滞后尾部。
+        if start <= cn_today() <= end and in_continuous_session():
+            latest = get_minute(request, symbol=symbol, trade_date=cn_today(), live=True)
+            latest_rows = latest.get("rows", []) if isinstance(latest, dict) else []
+            if latest_rows:
+                live_frame = pl.DataFrame(latest_rows, infer_schema_length=None).with_columns(
+                    pl.lit(symbol).alias("symbol"),
+                )
+                minute = (
+                    pl.concat([minute, live_frame], how="diagonal_relaxed")
+                    if not minute.is_empty()
+                    else live_frame
+                )
+                minute = minute.unique(subset=["symbol", "datetime"], keep="last")
+                source = "live" if source == "none" else "local+live"
+
+        if minute.is_empty() or "datetime" not in minute.columns:
+            return {**base, "rows": [], "source": source, "requested_days": days, "available_days": 0}
+        minute = minute.with_columns(pl.col("datetime").dt.date().alias("_trade_date"))
+        trade_dates = sorted(minute["_trade_date"].unique().to_list())[-days:]
+        minute = minute.filter(pl.col("_trade_date").is_in(trade_dates)).drop("_trade_date")
+        bars = aggregate_minute_30m(minute)
+        return {
+            **base,
+            "rows": bars.to_dicts(),
+            "source": source,
+            "requested_days": days,
+            "available_days": len(trade_dates),
+        }
+
+    # 指标按目标周期重算，因此额外读取预热数据：周K覆盖 MA60 约需 14 个月，
+    # 月K覆盖 MA60 约需 5 年；只扫描单标的基础列，不触发日线全指标热路径。
+    warmup_days = 500 if period == "1w" else 6 * 366
+    warmup_start = start - timedelta(days=warmup_days)
+    base_columns = ["symbol", "date", "open", "high", "low", "close", "volume", "amount"]
+    daily = repo.get_daily_asset(
+        asset_type, symbol, warmup_start, end, columns=base_columns,
+    )
+    source = "enriched"
+    if daily.is_empty():
+        fallback = get_daily(
+            request,
+            symbol=symbol,
+            days=2000,
+            start_date=warmup_start.isoformat(),
+            end_date=end.isoformat(),
+            ext_columns=None,
+        )
+        fallback_rows = fallback.get("rows", []) if isinstance(fallback, dict) else []
+        if not fallback_rows:
+            return {**base, "rows": [], "source": "none"}
+        daily = pl.DataFrame(fallback_rows, infer_schema_length=None)
+        source = str(fallback.get("source") or "live")
+    else:
+        daily_rows = _maybe_inject_live_candle(request, symbol, daily.to_dicts(), asset_type)
+        daily = pl.DataFrame(daily_rows, infer_schema_length=None)
+
+    bars = aggregate_daily_period(daily, period)
+    if not bars.is_empty():
+        bars = bars.filter(
+            (pl.col("period_end") >= start) & (pl.col("period_start") <= end),
+        )
+    return {**base, "rows": bars.to_dicts(), "source": source}
 
 
 def _attach_ext(resp: dict, repo, symbol: str, ext_columns: Optional[str]) -> dict:

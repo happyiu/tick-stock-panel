@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { type KlineRow } from '@/lib/api'
-import { klineDailyQueryOptions } from '@/lib/kline'
+import { type KlinePeriod, type KlineRow } from '@/lib/api'
+import { DEFAULT_30M_DAYS, defaultKlineRange, klinePeriodQueryOptions } from '@/lib/kline'
 import { storage } from '@/lib/storage'
 import {
   EChartsCandlestick,
@@ -46,17 +46,21 @@ interface Props {
   extColumns?: string
   /** 日K自动刷新间隔(ms)。undefined = 不轮询(默认)。个股对话框实时刷新时传入, 盘中今日蜡烛随之更新 */
   refetchIntervalMs?: number
+  period?: KlinePeriod
+  periodDays?: number
 }
 
 function isValidRow(r: any): boolean {
   return r && r.date != null && r.open != null && r.close != null
 }
 
-export function toOHLC(rows: KlineRow[]): OHLC[] {
+export function toOHLC(rows: KlineRow[], period: KlinePeriod = '1d'): OHLC[] {
   return rows
     .filter(isValidRow)
     .map(r => ({
-      date: typeof r.date === 'string' ? r.date.slice(0, 10) : String(r.date),
+      date: period === '30m'
+        ? String(r.date).replace('T', ' ').slice(0, 16)
+        : typeof r.date === 'string' ? r.date.slice(0, 10) : String(r.date),
       open: Number(r.open),
       high: Number(r.high),
       low: Number(r.low),
@@ -95,12 +99,7 @@ function buildLimitUpMarkers(rows: KlineRow[]): ChartMarker[] {
 }
 
 export function getDefaultRange(): { start: string; end: string } {
-  const now = new Date()
-  const end = now.toISOString().slice(0, 10)
-  const s = new Date(now)
-  s.setMonth(s.getMonth() - 6)
-  const start = s.toISOString().slice(0, 10)
-  return { start, end }
+  return defaultKlineRange('1d')
 }
 
 export function StockDailyKChart({
@@ -122,24 +121,31 @@ export function StockDailyKChart({
   onPriceDoubleClick,
   extColumns,
   refetchIntervalMs,
+  period = '1d',
+  periodDays = DEFAULT_30M_DAYS,
 }: Props) {
   const [activeIndicators, setActiveIndicators] = useState<string[]>(['vol'])
   const [showMarkers, setShowMarkers] = useState(true)
   const [volumeCompare, setVolumeCompare] = useState<VolumeCompareConfig>(() =>
     normalizeVolumeCompare(storage.stockVolumeCompare.get(DEFAULT_VOLUME_COMPARE)),
   )
-  const dateRange = externalDateRange ?? getDefaultRange()
+  const dateRange = externalDateRange ?? defaultKlineRange(period)
 
-  // 查询配置统一来自 klineDailyQueryOptions, 与 StockPanel 信息条/邻近预取共享同一 cache key (只发一次请求)
-  const kline = useQuery({ ...klineDailyQueryOptions(symbol, dateRange, extColumns), enabled: !!symbol, refetchInterval: refetchIntervalMs })
+  // 日K仍与 StockPanel 信息条共享 cache key；其余周期走独立、含 period 的查询键。
+  const kline = useQuery({
+    ...klinePeriodQueryOptions(symbol, period, dateRange, periodDays, extColumns),
+    enabled: !!symbol,
+    refetchInterval: period === '1d' || period === '30m' ? refetchIntervalMs : undefined,
+  })
 
-  const rows = useMemo(() => toOHLC(kline.data?.rows ?? []), [kline.data?.rows])
+  const rows = useMemo(() => toOHLC(kline.data?.rows ?? [], period), [kline.data?.rows, period])
   const stockInfo = kline.data?.stock_info
   const limitMarkers = useMemo(() => buildLimitUpMarkers(kline.data?.rows ?? []), [kline.data?.rows])
+  const effectiveShowLimitMarkers = showLimitMarkers && period === '1d'
   const allMarkers = useMemo(() => [
     ...(markers ?? []),
-    ...(showLimitMarkers ? limitMarkers : []),
-  ], [limitMarkers, markers, showLimitMarkers])
+    ...(effectiveShowLimitMarkers ? limitMarkers : []),
+  ], [effectiveShowLimitMarkers, limitMarkers, markers])
 
   const toggleIndicator = useCallback((key: string) => {
     setActiveIndicators(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key])
@@ -224,7 +230,7 @@ export function StockDailyKChart({
               </select>
             </div>
           )}
-          {showMarkerToggle && showLimitMarkers && (
+          {showMarkerToggle && effectiveShowLimitMarkers && (
             <button
               onClick={() => setShowMarkers(v => !v)}
               className={`ml-auto px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors ${
@@ -239,7 +245,12 @@ export function StockDailyKChart({
         </div>
       )}
       {kline.isLoading && <div className="text-sm text-muted py-4">加载中…</div>}
-      {kline.isError && <div className="text-sm text-danger py-2">日K加载失败</div>}
+      {kline.isError && <div className="text-sm text-danger py-2">K线加载失败</div>}
+      {!kline.isLoading && !kline.isError && (kline.data?.rows?.length ?? 0) === 0 && (
+        <div className="flex items-center justify-center text-sm text-muted" style={{ height }}>
+          {period === '30m' ? '暂无分钟K数据，请先同步分钟数据' : '暂无该周期K线数据'}
+        </div>
+      )}
       {!kline.isLoading && !kline.isError && (kline.data?.rows?.length ?? 0) > 0 && rows.length === 0 && (
         <div className="text-sm text-danger py-2">数据格式异常，请刷新页面</div>
       )}
