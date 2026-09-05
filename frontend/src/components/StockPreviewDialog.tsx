@@ -382,6 +382,24 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                 {/* 区间选择 — 随视图切换 */}
                 {view === 'daily' ? (
                   <div className="flex items-center gap-1">
+                    {/* 日期范围/默认窗口放在周期切换左侧 */}
+                    {period === '30m' ? (
+                      <span className="px-1 text-[10px] text-muted">近 {DEFAULT_30M_DAYS} 个交易日</span>
+                    ) : (
+                      <>
+                        <DatePicker
+                          value={dateRange.start}
+                          onChange={(v) => setDateRange(prev => ({ ...prev, start: v }))}
+                          max={dateRange.end}
+                        />
+                        <span className="text-muted/40 text-[10px]">~</span>
+                        <DatePicker
+                          value={dateRange.end}
+                          onChange={(v) => setDateRange(prev => ({ ...prev, end: v }))}
+                          min={dateRange.start}
+                        />
+                      </>
+                    )}
                     <div className="inline-flex shrink-0 items-center rounded border border-border bg-elevated p-0.5" aria-label="K线周期">
                       {KLINE_PERIOD_OPTIONS
                         .filter(option => assetType !== 'index' || option.value === '1d')
@@ -401,23 +419,6 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                           </button>
                         ))}
                     </div>
-                    {period === '30m' ? (
-                      <span className="px-1 text-[10px] text-muted">近 {DEFAULT_30M_DAYS} 个交易日</span>
-                    ) : (
-                      <>
-                        <DatePicker
-                          value={dateRange.start}
-                          onChange={(v) => setDateRange(prev => ({ ...prev, start: v }))}
-                          max={dateRange.end}
-                        />
-                        <span className="text-muted/40 text-[10px]">~</span>
-                        <DatePicker
-                          value={dateRange.end}
-                          onChange={(v) => setDateRange(prev => ({ ...prev, end: v }))}
-                          min={dateRange.start}
-                        />
-                      </>
-                    )}
                   </div>
                 ) : (
                   <div className="flex items-center gap-1">
@@ -632,6 +633,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                   prefetchSymbols={prefetchSymbols}
                   intradayDays={effectiveIntradayDays}
                   dailyKlineFlex="flex-[1.4]"
+                  resizableSplit
                   period={period}
                   periodDays={DEFAULT_30M_DAYS}
                 />

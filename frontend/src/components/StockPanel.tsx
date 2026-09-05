@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { X } from 'lucide-react'
+import { PanelRightOpen, X } from 'lucide-react'
 import { type KlinePeriod, type KlineRow, type FinancialMetricRecord } from '@/lib/api'
 import {
   DEFAULT_30M_DAYS,
@@ -23,6 +23,11 @@ import {
   buildInfoExtColumnsParam,
   type ColumnConfig,
 } from '@/lib/stock-info-fields'
+
+const DEFAULT_SPLIT_RATIO = 1.4 / 2.4
+const MIN_SPLIT_RATIO = 0.25
+const MAX_SPLIT_RATIO = 0.75
+const SPLIT_GAP_PX = 12
 
 interface Props {
   symbol: string
@@ -58,6 +63,8 @@ interface Props {
   intradayDays?: number
   /** 日K/分时并排时日K图占宽 (默认 1:1; 弹窗内图表信息栏较宽需更多空间时传 flex-[1.4] 之类) */
   dailyKlineFlex?: string
+  /** 日K/分时并排时, 是否允许拖动中间分隔线调整两栏宽度。 */
+  resizableSplit?: boolean
   /** 主蜡烛图周期；信息条仍使用日线最新两根，避免周期切换改变当日涨跌口径。 */
   period?: KlinePeriod
   periodDays?: number
@@ -89,12 +96,20 @@ export function StockPanel({
   prefetchSymbols,
   intradayDays = DEFAULT_INTRADAY_DAYS,
   dailyKlineFlex = 'flex-1',
+  resizableSplit = false,
   period = '1d',
   periodDays = DEFAULT_30M_DAYS,
 }: Props) {
   const [linkedPrice, setLinkedPrice] = useState<number | null>(null)
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const [intradayDismissed, setIntradayDismissed] = useState(false)
+  const [splitRatio, setSplitRatio] = useState(DEFAULT_SPLIT_RATIO)
+  const [splitDragging, setSplitDragging] = useState(false)
+  const splitContainerRef = useRef<HTMLDivElement>(null)
+  const dailyPaneRef = useRef<HTMLDivElement>(null)
+  const splitDraggingRef = useRef(false)
+  const splitRatioRef = useRef(DEFAULT_SPLIT_RATIO)
+  const splitPointerOffsetRef = useRef(0)
   // 信息条指标配置提升到此层：同时供 StockInfoBar 渲染与 StockDailyKChart 请求 ext 数据
   const [fields, setFields] = useState<ColumnConfig[]>(loadInfoFields)
   const extColumns = useMemo(() => buildInfoExtColumnsParam(fields), [fields])
@@ -147,6 +162,79 @@ export function StockPanel({
     onSelectDate?.(tradeDate)
   }, [onSelectDate])
 
+  const clampSplitRatio = useCallback((value: number) => (
+    Math.max(MIN_SPLIT_RATIO, Math.min(MAX_SPLIT_RATIO, value))
+  ), [])
+
+  const ratioForClientX = useCallback((clientX: number): number | null => {
+    const container = splitContainerRef.current
+    if (!container) return null
+    const rect = container.getBoundingClientRect()
+    if (rect.width <= 0) return null
+    // 分隔线位于两栏之间的 gap 右侧, 用 gap 宽度还原左栏占比。
+    return clampSplitRatio((clientX - rect.left - SPLIT_GAP_PX) / rect.width)
+  }, [clampSplitRatio])
+
+  const applySplitRatio = useCallback((ratio: number) => {
+    splitRatioRef.current = ratio
+    if (dailyPaneRef.current) {
+      dailyPaneRef.current.style.flexBasis = `${ratio * 100}%`
+    }
+  }, [])
+
+  const handleSplitPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!resizableSplit || (event.pointerType === 'mouse' && event.button !== 0)) return
+    event.preventDefault()
+    const dailyPane = dailyPaneRef.current
+    if (dailyPane) {
+      // 手柄有一定命中宽度, 记录按下点相对分隔线的偏移, 避免开始拖动时跳动。
+      const dividerX = dailyPane.getBoundingClientRect().right + SPLIT_GAP_PX
+      splitPointerOffsetRef.current = event.clientX - dividerX
+    }
+    splitDraggingRef.current = true
+    setSplitDragging(true)
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }, [resizableSplit])
+
+  const handleSplitPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!splitDraggingRef.current) return
+    const ratio = ratioForClientX(event.clientX - splitPointerOffsetRef.current)
+    if (ratio != null) applySplitRatio(ratio)
+  }, [applySplitRatio, ratioForClientX])
+
+  const handleSplitPointerUp = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!splitDraggingRef.current) return
+    splitDraggingRef.current = false
+    splitPointerOffsetRef.current = 0
+    setSplitDragging(false)
+    setSplitRatio(splitRatioRef.current)
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+  }, [])
+
+  const handleSplitKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!resizableSplit) return
+    const direction = event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : 0
+    if (direction === 0) return
+    event.preventDefault()
+    const ratio = clampSplitRatio(splitRatioRef.current + direction * 0.05)
+    applySplitRatio(ratio)
+    setSplitRatio(ratio)
+  }, [applySplitRatio, clampSplitRatio, resizableSplit])
+
+  useEffect(() => {
+    if (!splitDragging) return
+    const previousUserSelect = document.body.style.userSelect
+    const previousCursor = document.body.style.cursor
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'col-resize'
+    return () => {
+      document.body.style.userSelect = previousUserSelect
+      document.body.style.cursor = previousCursor
+    }
+  }, [splitDragging])
+
   // 邻近预取: 对切股导航的左右邻股提前拉取缓存, 切股瞬间免 loading。
   // 日K/分时预取 staleTime 30s 防来回切换重复请求; 成为当前股后 useQuery(staleTime=0) 立即后台刷新,
   // SSE 也只按焦点股精准失效, 实时性不受影响。财务指标与正式查询同 staleTime, 5min 内不重复拉取。
@@ -197,6 +285,7 @@ export function StockPanel({
     prevSymbol.current = symbol
     setSelectedDate(null)
     setLinkedPrice(null)
+    setIntradayDismissed(false)
   }, [symbol])
 
   // 当分时开启、无选中日期时，自动选中最新日期
@@ -213,6 +302,11 @@ export function StockPanel({
       ? rows[rows.length - 2].close
       : undefined
   if (!symbol) return null
+
+  const splitVisible = resizableSplit && showIntraday && selectedDate && !intradayDismissed
+  const dailyPaneStyle = splitVisible
+    ? { flex: `0 0 ${splitRatio * 100}%` }
+    : undefined
 
   // 财务指标最新一期（metrics 按 period_end 排序，取首项）
   const financialMetrics: FinancialMetricRecord | undefined = financials.data?.data?.[0]
@@ -236,29 +330,50 @@ export function StockPanel({
       />
 
       {infoBarOnly ? null : (
-      <div className="flex gap-3 items-start">
-        <StockDailyKChart
-          symbol={symbol}
-          height={height}
-          className={`${dailyKlineFlex} min-w-0`}
-          dateRange={chartDateRange}
-          markers={markers}
-          ranges={ranges}
-          priceLines={priceLines}
-          showLimitMarkers={showLimitMarkers}
-          showMarkerToggle={showMarkerToggle}
-          linkedPrice={linkedPrice}
-          onDateClick={handleDateClick}
-          onPriceDoubleClick={onPriceDoubleClick}
-          visibleBars={showIntraday ? 40 : 60}
-          extColumns={extColumns}
-          refetchIntervalMs={refetchIntervalMs}
-          period={period}
-          periodDays={periodDays}
-        />
+      <div ref={splitContainerRef} className={`relative flex gap-3 items-stretch ${splitDragging ? 'select-none' : ''}`}>
+        <div ref={dailyPaneRef} className={`${dailyKlineFlex} min-w-0`} style={dailyPaneStyle}>
+          <StockDailyKChart
+            symbol={symbol}
+            height={height}
+            dateRange={chartDateRange}
+            markers={markers}
+            ranges={ranges}
+            priceLines={priceLines}
+            showLimitMarkers={showLimitMarkers}
+            showMarkerToggle={showMarkerToggle}
+            linkedPrice={linkedPrice}
+            onDateClick={handleDateClick}
+            onPriceDoubleClick={onPriceDoubleClick}
+            visibleBars={showIntraday ? 40 : 60}
+            extColumns={extColumns}
+            refetchIntervalMs={refetchIntervalMs}
+            period={period}
+            periodDays={periodDays}
+          />
+        </div>
 
         {showIntraday && selectedDate && !intradayDismissed && (
           <div className="relative flex-1 min-w-0 border-l border-border pl-3">
+            {resizableSplit && (
+              <div
+                role="separator"
+                tabIndex={0}
+                aria-label="调整日K与分时宽度"
+                aria-orientation="vertical"
+                aria-valuemin={MIN_SPLIT_RATIO * 100}
+                aria-valuemax={MAX_SPLIT_RATIO * 100}
+                aria-valuenow={Math.round(splitRatio * 100)}
+                title="拖动调整日K与分时宽度"
+                onKeyDown={handleSplitKeyDown}
+                onPointerDown={handleSplitPointerDown}
+                onPointerMove={handleSplitPointerMove}
+                onPointerUp={handleSplitPointerUp}
+                onPointerCancel={handleSplitPointerUp}
+                className={`group absolute -left-2 inset-y-0 z-10 w-4 touch-none cursor-col-resize outline-none ${splitDragging ? 'text-accent' : 'text-border'}`}
+              >
+                <span className={`absolute inset-y-0 left-1/2 w-px transition-colors ${splitDragging ? 'bg-accent' : 'bg-border/70 group-hover:bg-accent/70'}`} />
+              </div>
+            )}
             <button
               onClick={() => setIntradayDismissed(true)}
               className="absolute -left-1.5 -top-1.5 z-10 flex h-5 w-5 items-center justify-center rounded-full border border-border bg-surface text-muted shadow-sm transition-colors hover:text-foreground hover:bg-elevated"
@@ -280,6 +395,18 @@ export function StockPanel({
               refetchIntervalMs={refetchIntervalMs}
             />
           </div>
+        )}
+
+        {showIntraday && selectedDate && intradayDismissed && (
+          <button
+            type="button"
+            onClick={() => setIntradayDismissed(false)}
+            className="absolute right-0 top-1/2 z-10 flex h-7 w-7 -translate-y-1/2 translate-x-1/2 items-center justify-center rounded-full border border-border bg-surface text-muted shadow-sm transition-colors hover:bg-elevated hover:text-foreground"
+            title="展开分时图"
+            aria-label="展开分时图"
+          >
+            <PanelRightOpen className="h-3.5 w-3.5" />
+          </button>
         )}
       </div>
       )}
