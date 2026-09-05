@@ -68,6 +68,9 @@ export const storage = {
   /** 个股预览右侧技术指标卡片配置 (显隐 + 顺序) */
   stockPreviewTechnicalCards: kv<StockPreviewTechnicalCardsConfig>('stock_preview_technical_cards'),
 
+  /** 个股预览 K 线与右侧面板的分栏比例 */
+  stockPreviewSplitRatio: kv<number>('stock_preview_split_ratio'),
+
   /** 策略结果列表列配置 */
   screenerResultColumns: kv<unknown[]>('screener_result_columns'),
 

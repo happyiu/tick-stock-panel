@@ -232,20 +232,30 @@ function buildTechnicalCard(
       const slope = ma5 != null && getPrevious('ma5') != null
         ? ma5 > (getPrevious('ma5') ?? ma5) ? 'MA5上行' : ma5 < (getPrevious('ma5') ?? ma5) ? 'MA5下行' : 'MA5走平'
         : null
-      const complete = [ma5, ma10, ma20, ma60].every(value => value != null)
-      const bullish = complete && ma5! > ma10! && ma10! > ma20! && ma20! > ma60!
-      const bearish = complete && ma5! < ma10! && ma10! < ma20! && ma20! < ma60!
+      const shortTermComplete = [ma5, ma10, ma20].every(value => value != null)
+      const complete = shortTermComplete && ma60 != null
+      const shortTermBullish = shortTermComplete && ma5! > ma10! && ma10! > ma20!
+      const shortTermBearish = shortTermComplete && ma5! < ma10! && ma10! < ma20!
+      const bullish = complete && shortTermBullish && ma20! > ma60!
+      const bearish = complete && shortTermBearish && ma20! < ma60!
+      const status = !shortTermComplete
+        ? '样本不足'
+        : complete
+          ? bullish ? '多头排列' : bearish ? '空头排列' : '均线纠缠'
+          : shortTermBullish ? '短中期多头' : shortTermBearish ? '短中期空头' : '短中期纠缠'
       return {
         ...def,
-        status: !complete ? '样本不足' : bullish ? '多头排列' : bearish ? '空头排列' : '均线纠缠',
-        tone: !complete ? 'neutral' : bullish ? 'bull' : bearish ? 'bear' : 'neutral',
+        status,
+        tone: status.includes('多头') ? 'bull' : status.includes('空头') ? 'bear' : 'neutral',
         metrics: [
           { label: 'MA5', value: fmtAssetPrice(ma5, assetType) },
           { label: 'MA20', value: fmtAssetPrice(ma20, assetType) },
           { label: 'MA60', value: fmtAssetPrice(ma60, assetType) },
           { label: '距MA20', value: fmtPct(deviation), tone: toneForChange(deviation) },
         ],
-        detail: !complete ? '需要 MA5/10/20/60 完整样本' : [cross, slope].filter(Boolean).join(' · ') || '近期未见 MA5/MA20 交叉',
+        detail: !shortTermComplete
+          ? '需要 MA5/10/20 完整样本'
+          : [cross, slope, !complete ? 'MA60暂无数据，基于MA5/10/20判断' : null].filter(Boolean).join(' · ') || '近期未见 MA5/MA20 交叉',
       }
     }
 

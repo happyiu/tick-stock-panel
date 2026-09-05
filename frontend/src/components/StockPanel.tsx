@@ -24,11 +24,17 @@ import {
   buildInfoExtColumnsParam,
   type ColumnConfig,
 } from '@/lib/stock-info-fields'
+import { storage } from '@/lib/storage'
 
 const DEFAULT_SPLIT_RATIO = 1.4 / 2.4
 const MIN_SPLIT_RATIO = 0.25
 const MAX_SPLIT_RATIO = 0.75
 const SPLIT_GAP_PX = 12
+
+function clampSplitRatioValue(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_SPLIT_RATIO
+  return Math.max(MIN_SPLIT_RATIO, Math.min(MAX_SPLIT_RATIO, value))
+}
 
 export type StockPanelRightPaneMode = 'intraday' | 'technical' | 'empty'
 
@@ -114,12 +120,14 @@ export function StockPanel({
   const [linkedPrice, setLinkedPrice] = useState<number | null>(null)
   const [selectedBarKey, setSelectedBarKey] = useState<string | null>(null)
   const [rightPaneDismissed, setRightPaneDismissed] = useState(false)
-  const [splitRatio, setSplitRatio] = useState(DEFAULT_SPLIT_RATIO)
+  const [splitRatio, setSplitRatio] = useState(() => clampSplitRatioValue(
+    storage.stockPreviewSplitRatio.get(DEFAULT_SPLIT_RATIO),
+  ))
   const [splitDragging, setSplitDragging] = useState(false)
   const splitContainerRef = useRef<HTMLDivElement>(null)
   const dailyPaneRef = useRef<HTMLDivElement>(null)
   const splitDraggingRef = useRef(false)
-  const splitRatioRef = useRef(DEFAULT_SPLIT_RATIO)
+  const splitRatioRef = useRef(splitRatio)
   const splitPointerOffsetRef = useRef(0)
   // 信息条指标配置提升到此层：同时供 StockInfoBar 渲染与 StockDailyKChart 请求 ext 数据
   const [fields, setFields] = useState<ColumnConfig[]>(loadInfoFields)
@@ -191,7 +199,7 @@ export function StockPanel({
   }, [onSelectDate, period, resolvedRightPaneMode])
 
   const clampSplitRatio = useCallback((value: number) => (
-    Math.max(MIN_SPLIT_RATIO, Math.min(MAX_SPLIT_RATIO, value))
+    clampSplitRatioValue(value)
   ), [])
 
   const ratioForClientX = useCallback((clientX: number): number | null => {
@@ -250,6 +258,10 @@ export function StockPanel({
     applySplitRatio(ratio)
     setSplitRatio(ratio)
   }, [applySplitRatio, clampSplitRatio, resizableSplit])
+
+  useEffect(() => {
+    storage.stockPreviewSplitRatio.set(splitRatio)
+  }, [splitRatio])
 
   useEffect(() => {
     if (!splitDragging) return
