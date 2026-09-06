@@ -93,19 +93,17 @@ export function StockPriceZonesPanel({
   return (
     <section className="border-b border-border/70">
       <div className={`flex items-start justify-between gap-2 px-2.5 py-2 ${collapsed ? '' : 'border-b border-border/70'}`}>
-        <button type="button" onClick={onToggleCollapsed} className="flex min-w-0 items-start gap-1.5 text-left" aria-expanded={!collapsed}>
-          {onToggleCollapsed && <ChevronDown className={`mt-0.5 h-3.5 w-3.5 shrink-0 text-muted transition-transform ${collapsed ? '-rotate-90' : ''}`} />}
-          <span className="min-w-0">
-            <span className="flex flex-wrap items-center gap-1.5">
-              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#F97316]" />
-              <span className="text-xs font-medium text-foreground">关键价位</span>
-              <span className="rounded bg-[#F97316]/10 px-1.5 py-0.5 text-[9px] text-[#FB923C]">v1</span>
-              <span className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[9px] text-secondary">{PERIOD_LABELS[analysis.period]}</span>
-            </span>
-            {!collapsed && <span className="mt-0.5 block truncate text-[9px] text-muted" title={atrNote}>{atrNote}</span>}
+        <div className="min-w-0 flex-1">
+          <span className="flex flex-wrap items-center gap-1.5">
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#F97316]" />
+            <span className="text-xs font-medium text-foreground">关键价位</span>
+            <span className="rounded bg-[#F97316]/10 px-1.5 py-0.5 text-[9px] text-[#FB923C]">v1</span>
+            <span className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[9px] text-secondary">{PERIOD_LABELS[analysis.period]}</span>
           </span>
-        </button>
-        {onToggleShowZones && (
+          {!collapsed && <span className="mt-0.5 block truncate text-[9px] text-muted" title={atrNote}>{atrNote}</span>}
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          {onToggleShowZones && (
           <button
             type="button"
             onClick={onToggleShowZones}
@@ -116,7 +114,9 @@ export function StockPriceZonesPanel({
             {showZones ? <Check className="h-3 w-3" /> : <CircleHelp className="h-3 w-3" />}
             价位带
           </button>
-        )}
+          )}
+          {onToggleCollapsed && <button type="button" onClick={onToggleCollapsed} className="rounded-btn p-1 text-muted transition-colors hover:bg-elevated hover:text-foreground" aria-expanded={!collapsed} aria-label={collapsed ? '展开关键价位' : '收起关键价位'} title={collapsed ? '展开关键价位' : '收起关键价位'}><ChevronDown className={`h-3.5 w-3.5 transition-transform ${collapsed ? '-rotate-90' : ''}`} /></button>}
+        </div>
       </div>
       {!collapsed && (
         <div className="grid gap-2 p-2">

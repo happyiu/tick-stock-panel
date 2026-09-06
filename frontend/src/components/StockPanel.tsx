@@ -33,6 +33,8 @@ import { analyzeElliott } from '@/lib/elliott'
 import { storage, type StockPreviewAnalysisSectionsV2, type StockPreviewAnalysisSectionsV3, type StockPreviewDecisionSectionsV1 } from '@/lib/storage'
 import { buildPriceZones, type PriceZone } from '@/lib/priceZones'
 import { buildSignalRiskContexts, selectPreferredSignal, type SignalRiskContext } from '@/lib/signalRisk'
+import { buildStockSummary } from '@/lib/stockSummary'
+import { StockSummaryPanel } from '@/components/StockSummaryPanel'
 
 const DEFAULT_SPLIT_RATIO = 1.4 / 2.4
 const MIN_SPLIT_RATIO = 0.25
@@ -264,6 +266,39 @@ export function StockPanel({
     () => signalRiskContexts.find(context => context.signal.id === selectedSignalId) ?? preferredSignal,
     [preferredSignal, selectedSignalId, signalRiskContexts],
   )
+  const summaryRows = periodKline.data?.rows ?? []
+  const stockSummary = useMemo(
+    () => buildStockSummary({
+      symbol,
+      name: kline.data?.name,
+      assetType: kline.data?.asset_type,
+      period,
+      rows: summaryRows,
+      technicalScores: periodKline.data?.technical_scores,
+      dataStatus: periodKline.data?.data_status,
+      selectedBarKey,
+      chanlun: chanlunAnalysis,
+      elliott: elliottAnalysis,
+      priceZones,
+      signalRiskContexts,
+      preferredSignal,
+    }),
+    [
+      symbol,
+      kline.data?.name,
+      kline.data?.asset_type,
+      period,
+      summaryRows,
+      periodKline.data?.technical_scores,
+      periodKline.data?.data_status,
+      selectedBarKey,
+      chanlunAnalysis,
+      elliottAnalysis,
+      priceZones,
+      signalRiskContexts,
+      preferredSignal,
+    ],
+  )
   const priceBands: ChartPriceBand[] = useMemo(() => {
     const supports = priceZones.filter(zone => zone.side === 'support').sort((a, b) => (a.distancePct ?? Infinity) - (b.distancePct ?? Infinity))
     const resistances = priceZones.filter(zone => zone.side === 'resistance').sort((a, b) => (a.distancePct ?? Infinity) - (b.distancePct ?? Infinity))
@@ -414,6 +449,22 @@ export function StockPanel({
     applySplitRatio(ratio)
     setSplitRatio(ratio)
   }, [applySplitRatio, clampSplitRatio, resizableSplit])
+
+  const handleSummaryFocus = useCallback((section: 'technical' | 'structure' | 'levels' | 'risk') => {
+    if (section === 'technical') {
+      setAnalysisSections(previous => ({ ...previous, technicalCollapsed: false }))
+      return
+    }
+    if (section === 'structure') {
+      setAnalysisSections(previous => ({ ...previous, structureCollapsed: false, chanlunCollapsed: false }))
+      return
+    }
+    if (section === 'levels') {
+      setDecisionSections(previous => ({ ...previous, priceZonesCollapsed: false }))
+      return
+    }
+    setDecisionSections(previous => ({ ...previous, signalRiskCollapsed: false }))
+  }, [])
 
   useEffect(() => {
     storage.stockPreviewSplitRatio.set(splitRatio)
@@ -636,6 +687,16 @@ export function StockPanel({
             )}
             {resolvedRightPaneMode === 'technical' && (
               <div className="h-full min-h-0 overflow-y-auto">
+                <StockSummaryPanel
+                  snapshot={stockSummary}
+                  onSelectZone={zone => setSelectedZoneId(current => current === zone.id ? null : zone.id)}
+                  onSelectSignal={setSelectedSignalId}
+                  onFocusSection={handleSummaryFocus}
+                  onLatest={() => setSelectedBarKey(selectableRows.at(-1)?.date ?? null)}
+                  isLoading={periodKline.isLoading || periodKline.isFetching && !periodKline.data}
+                  error={periodKline.error}
+                  onRetry={() => { void periodKline.refetch() }}
+                />
                 <StockTechnicalPanel
                   rows={periodKline.data?.rows ?? []}
                   technicalScores={periodKline.data?.technical_scores}
