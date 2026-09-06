@@ -4,7 +4,8 @@ import { fmtAssetPrice, fmtPct } from '@/lib/format'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
 import type { ChanlunAnalysis } from '@/lib/chanlun'
-import type { StockPreviewChanlunOverlayConfig } from '@/lib/storage'
+import type { ElliottAnalysis } from '@/lib/elliott'
+import type { StockPreviewChanlunOverlayConfig, StockPreviewElliottOverlayConfig } from '@/lib/storage'
 
 export interface OHLC {
   date: string
@@ -345,6 +346,8 @@ interface Props {
   assetType?: string
   chanlunAnalysis?: ChanlunAnalysis
   chanlunOverlay?: StockPreviewChanlunOverlayConfig
+  elliottAnalysis?: ElliottAnalysis
+  elliottOverlay?: StockPreviewElliottOverlayConfig
 }
 
 // 序列颜色 (双主题通用); 画布轴/网格/文字等主题相关色走 CT() 动态取
@@ -434,6 +437,70 @@ function appendChanlunMarkPoints(
         },
         z: 95,
       })
+    }
+  }
+}
+
+function appendElliottMarkPoints(
+  target: any[],
+  lineTarget: any[],
+  dateIndexMap: Map<string, number>,
+  analysis: ElliottAnalysis | undefined,
+  config: StockPreviewElliottOverlayConfig | undefined,
+  compact: boolean,
+) {
+  if (!analysis || !config?.enabled || !analysis.primaryCount) return
+  const primaryPivots = analysis.primaryCount.pivots.filter(pivot => dateIndexMap.has(pivot.eventTime) && pivot.state !== 'projected')
+  // 疑似末端只来自当前截面尾部，不属于已完成主计数；单独追加以虚线和问号呈现。
+  const suspected = analysis.pivots.find(pivot => pivot.state === 'suspected' && dateIndexMap.has(pivot.eventTime))
+  const pivots = suspected && !primaryPivots.some(pivot => pivot.eventTime === suspected.eventTime)
+    ? [...primaryPivots, suspected]
+    : primaryPivots
+  if (pivots.length === 0) return
+  for (const pivot of pivots) {
+    const isHigh = pivot.type === 'high'
+    target.push({
+      name: `elliott-${pivot.eventTime}-${pivot.label}`,
+      coord: [pivot.eventTime, pivot.price],
+      symbol: 'circle',
+      symbolSize: compact ? 5 : pivot.state === 'suspected' ? 7 : 8,
+      symbolOffset: isHigh ? [0, '-65%'] : [0, '65%'],
+      itemStyle: {
+        color: pivot.state === 'suspected' ? '#FCD34D' : '#F59E0B',
+        opacity: pivot.state === 'suspected' ? 0.65 : 0.95,
+      },
+      label: {
+        show: config.labels && !compact,
+        formatter: pivot.state === 'suspected'
+          ? (pivot.label === '?' ? '?' : `${pivot.label}?`)
+          : pivot.label,
+        position: isHigh ? 'top' : 'bottom',
+        distance: 5,
+        color: '#FBBF24',
+        fontSize: 9,
+        fontFamily: 'JetBrains Mono, monospace',
+      },
+      z: 88,
+    })
+  }
+  if (config.strokes && pivots.length > 1) {
+    for (let index = 1; index < pivots.length; index += 1) {
+      const start = pivots[index - 1]
+      const end = pivots[index]
+      lineTarget.push([
+        { coord: [start.eventTime, start.price], symbol: 'none' },
+        {
+          coord: [end.eventTime, end.price],
+          symbol: 'none',
+          lineStyle: {
+            color: '#F59E0B',
+            type: start.state === 'suspected' || end.state === 'suspected' ? 'dashed' : 'solid',
+            width: 1.2,
+            opacity: start.state === 'suspected' || end.state === 'suspected' ? 0.55 : 0.8,
+          },
+          label: { show: false },
+        },
+      ])
     }
   }
 }
@@ -549,6 +616,8 @@ function buildOption(
   assetType?: string,
   chanlunAnalysis?: ChanlunAnalysis,
   chanlunOverlay?: StockPreviewChanlunOverlayConfig,
+  elliottAnalysis?: ElliottAnalysis,
+  elliottOverlay?: StockPreviewElliottOverlayConfig,
 ): EChartsOption {
   const candleData = data.map(d => [d.open, d.close, d.low, d.high])
 
@@ -604,6 +673,8 @@ function buildOption(
     }
   }
   appendChanlunMarkPoints(markPointData, dateIndexMap, chanlunAnalysis, chanlunOverlay, compact)
+  const elliottLineData: any[] = []
+  appendElliottMarkPoints(markPointData, elliottLineData, dateIndexMap, elliottAnalysis, elliottOverlay, compact)
 
   // ====== 布局计算 ======
   const left = 60
@@ -722,7 +793,7 @@ function buildOption(
     }
   }
 
-  const markLineData: any[] = (priceLines ?? [])
+  const markLineData: any[] = [...elliottLineData, ...(priceLines ?? [])
     .filter(line => Number.isFinite(line.value))
     .map(line => {
       const lineStyle = {
@@ -749,7 +820,7 @@ function buildOption(
         ]
       }
       return { yAxis: line.value, lineStyle, label, symbol: 'none' }
-    })
+    })]
 
   if (linkedPrice != null) {
     markLineData.push({
@@ -946,6 +1017,8 @@ export function EChartsCandlestick({
   assetType,
   chanlunAnalysis,
   chanlunOverlay,
+  elliottAnalysis,
+  elliottOverlay,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<ECharts | null>(null)
@@ -974,6 +1047,10 @@ export function EChartsCandlestick({
   chanlunAnalysisRef.current = chanlunAnalysis
   const chanlunOverlayRef = useRef(chanlunOverlay)
   chanlunOverlayRef.current = chanlunOverlay
+  const elliottAnalysisRef = useRef(elliottAnalysis)
+  elliottAnalysisRef.current = elliottAnalysis
+  const elliottOverlayRef = useRef(elliottOverlay)
+  elliottOverlayRef.current = elliottOverlay
   const chartHeightRef = useRef(300)
   const subTotalHRef = useRef(0)
   const getInfoBarHTMLRef = useRef<() => string>(() => '')
@@ -1271,7 +1348,15 @@ export function EChartsCandlestick({
       chanlunOverlayRef.current,
       compact,
     )
-    if (mkrs?.length || (chanlunAnalysisRef.current && chanlunOverlayRef.current?.enabled)) {
+    appendElliottMarkPoints(
+      markPointData,
+      [],
+      currentDateIndexMap,
+      elliottAnalysisRef.current,
+      elliottOverlayRef.current,
+      compact,
+    )
+    if (mkrs?.length || (chanlunAnalysisRef.current && chanlunOverlayRef.current?.enabled) || (elliottAnalysisRef.current && elliottOverlayRef.current?.enabled)) {
       seriesUpdates.push({
         name: 'K',
         markPoint: markPointData.length > 0 ? { data: markPointData, animation: false } : undefined,
@@ -1304,6 +1389,8 @@ export function EChartsCandlestick({
       assetType,
       chanlunAnalysis,
       chanlunOverlay,
+      elliottAnalysis,
+      elliottOverlay,
     )
 
     chart.setOption(option, true)
@@ -1321,7 +1408,7 @@ export function EChartsCandlestick({
     if (infoEl) {
       infoEl.innerHTML = getInfoBarHTML()
     }
-  }, [data, markers, ranges, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme, assetType, chanlunAnalysis, chanlunOverlay])
+  }, [data, markers, ranges, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme, assetType, chanlunAnalysis, chanlunOverlay, elliottAnalysis, elliottOverlay])
 
   // 渲染信息栏容器 (内容由 JS 直接写入)
   const initialHTML = useMemo(() => {

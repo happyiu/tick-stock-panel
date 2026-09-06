@@ -3,9 +3,10 @@ import { useQuery } from '@tanstack/react-query'
 import { Check, Settings2 } from 'lucide-react'
 import { type KlinePeriod, type KlineRow } from '@/lib/api'
 import type { ChanlunAnalysis } from '@/lib/chanlun'
+import type { ElliottAnalysis } from '@/lib/elliott'
 import { DEFAULT_30M_DAYS, defaultKlineRange, klinePeriodQueryOptions } from '@/lib/kline'
 import { ChartDataNotice } from '@/components/ChartDataNotice'
-import { storage, type StockPreviewChanlunOverlayConfig } from '@/lib/storage'
+import { storage, type StockPreviewChanlunOverlayConfig, type StockPreviewElliottOverlayConfig } from '@/lib/storage'
 import {
   EChartsCandlestick,
   OVERLAY_INDICATORS,
@@ -27,6 +28,11 @@ const DEFAULT_CHANLUN_OVERLAY: StockPreviewChanlunOverlayConfig = {
   centers: true,
   candidates: true,
 }
+const DEFAULT_ELLIOTT_OVERLAY: StockPreviewElliottOverlayConfig = {
+  enabled: false,
+  labels: true,
+  strokes: true,
+}
 
 function normalizeVolumeCompare(config: VolumeCompareConfig): VolumeCompareConfig {
   return {
@@ -42,6 +48,14 @@ function normalizeChanlunOverlay(config: StockPreviewChanlunOverlayConfig): Stoc
     strokes: config?.strokes !== false,
     centers: config?.centers !== false,
     candidates: config?.candidates !== false,
+  }
+}
+
+function normalizeElliottOverlay(config: StockPreviewElliottOverlayConfig): StockPreviewElliottOverlayConfig {
+  return {
+    enabled: config?.enabled === true,
+    labels: config?.labels !== false,
+    strokes: config?.strokes !== false,
   }
 }
 
@@ -72,6 +86,8 @@ interface Props {
   includeTechnicalScores?: boolean
   /** 当前周期、当前历史截面的缠论结构近似结果；未传入时不显示相关控件和覆盖层。 */
   chanlunAnalysis?: ChanlunAnalysis
+  /** 当前周期、当前历史截面的艾略特波浪摆动代理；覆盖层默认关闭。 */
+  elliottAnalysis?: ElliottAnalysis
 }
 
 function isValidRow(r: any): boolean {
@@ -149,6 +165,7 @@ export function StockDailyKChart({
   periodDays = DEFAULT_30M_DAYS,
   includeTechnicalScores = false,
   chanlunAnalysis,
+  elliottAnalysis,
 }: Props) {
   const [activeIndicators, setActiveIndicators] = useState<string[]>(['vol'])
   const [showMarkers, setShowMarkers] = useState(true)
@@ -156,8 +173,12 @@ export function StockDailyKChart({
     normalizeVolumeCompare(storage.stockVolumeCompare.get(DEFAULT_VOLUME_COMPARE)),
   )
   const [chanlunMenuOpen, setChanlunMenuOpen] = useState(false)
+  const [elliottMenuOpen, setElliottMenuOpen] = useState(false)
   const [chanlunOverlay, setChanlunOverlay] = useState<StockPreviewChanlunOverlayConfig>(() =>
     normalizeChanlunOverlay(storage.stockPreviewChanlunOverlay.get(DEFAULT_CHANLUN_OVERLAY)),
+  )
+  const [elliottOverlay, setElliottOverlay] = useState<StockPreviewElliottOverlayConfig>(() =>
+    normalizeElliottOverlay(storage.stockPreviewElliottOverlay.get(DEFAULT_ELLIOTT_OVERLAY)),
   )
   const dateRange = externalDateRange ?? defaultKlineRange(period)
 
@@ -193,6 +214,14 @@ export function StockDailyKChart({
     setChanlunOverlay(previous => {
       const next = normalizeChanlunOverlay({ ...previous, ...patch })
       storage.stockPreviewChanlunOverlay.set(next)
+      return next
+    })
+  }, [])
+
+  const updateElliottOverlay = useCallback((patch: Partial<StockPreviewElliottOverlayConfig>) => {
+    setElliottOverlay(previous => {
+      const next = normalizeElliottOverlay({ ...previous, ...patch })
+      storage.stockPreviewElliottOverlay.set(next)
       return next
     })
   }, [])
@@ -294,6 +323,60 @@ export function StockDailyKChart({
               )}
             </div>
           )}
+          {elliottAnalysis && (
+            <div
+              className="relative ml-0.5 flex items-center"
+              onBlur={event => {
+                if (!event.currentTarget.contains(event.relatedTarget)) setElliottMenuOpen(false)
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => updateElliottOverlay({ enabled: !elliottOverlay.enabled })}
+                className={`rounded-l px-2 py-0.5 text-[10px] font-mono transition-colors ${
+                  elliottOverlay.enabled
+                    ? 'bg-[#F59E0B]/20 text-[#FBBF24]'
+                    : 'bg-elevated text-muted hover:text-secondary'
+                }`}
+                aria-pressed={elliottOverlay.enabled}
+                title={elliottOverlay.enabled ? '隐藏波浪覆盖层' : '显示波浪覆盖层'}
+              >
+                波浪
+              </button>
+              <button
+                type="button"
+                onClick={() => setElliottMenuOpen(value => !value)}
+                className="rounded-r border-l border-border/60 bg-elevated px-1.5 py-0.5 text-muted transition-colors hover:text-secondary"
+                title="配置波浪覆盖层"
+                aria-label="配置波浪覆盖层"
+                aria-expanded={elliottMenuOpen}
+              >
+                <Settings2 className="h-3 w-3" />
+              </button>
+              {elliottMenuOpen && (
+                <div className="absolute left-0 top-full z-30 mt-1 w-32 rounded-card border border-border bg-surface p-1.5 shadow-xl">
+                  {([
+                    ['labels', '拐点标签'],
+                    ['strokes', '波段连线'],
+                  ] as const).map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      role="checkbox"
+                      aria-checked={elliottOverlay[key]}
+                      onClick={() => updateElliottOverlay({ [key]: !elliottOverlay[key] })}
+                      className="flex w-full items-center gap-2 rounded-btn px-2 py-1.5 text-left text-[10px] text-secondary transition-colors hover:bg-elevated hover:text-foreground"
+                    >
+                      <span className={`flex h-3.5 w-3.5 items-center justify-center rounded border ${elliottOverlay[key] ? 'border-[#F59E0B] bg-[#F59E0B]' : 'border-border bg-base'}`}>
+                        {elliottOverlay[key] && <Check className="h-2.5 w-2.5 text-white" strokeWidth={3} />}
+                      </span>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           {activeIndicators.includes('vol') && (
             <div className="ml-0.5 flex h-5 items-center gap-1.5 border-l border-border/70 pl-2">
               <span className="text-[10px] text-muted">量比</span>
@@ -370,6 +453,8 @@ export function StockDailyKChart({
           volumeCompare={volumeCompare}
           chanlunAnalysis={chanlunAnalysis}
           chanlunOverlay={chanlunOverlay}
+          elliottAnalysis={elliottAnalysis}
+          elliottOverlay={elliottOverlay}
         />
       )}
     </div>

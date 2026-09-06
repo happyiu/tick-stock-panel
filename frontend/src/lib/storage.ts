@@ -67,12 +67,26 @@ export interface StockPreviewAnalysisSectionsV2 {
   structureCollapsed: boolean
 }
 
+export interface StockPreviewAnalysisSectionsV3 {
+  version: 3
+  technicalCollapsed: boolean
+  structureCollapsed: boolean
+  chanlunCollapsed: boolean
+  elliottCollapsed: boolean
+}
+
 export interface StockPreviewChanlunOverlayConfig {
   enabled: boolean
   fractals: boolean
   strokes: boolean
   centers: boolean
   candidates: boolean
+}
+
+export interface StockPreviewElliottOverlayConfig {
+  enabled: boolean
+  labels: boolean
+  strokes: boolean
 }
 
 export const storage = {
@@ -114,8 +128,14 @@ export const storage = {
   /** 个股预览右侧技术指标与结构分析分区的折叠状态 v2 */
   stockPreviewAnalysisSectionsV2: kv<StockPreviewAnalysisSectionsV2 | null>('stock_preview_analysis_sections_v2'),
 
+  /** 个股预览技术指标与结构分析子区折叠状态 v3 */
+  stockPreviewAnalysisSectionsV3: kv<StockPreviewAnalysisSectionsV3 | null>('stock_preview_analysis_sections_v3'),
+
   /** 个股预览 K 线缠论覆盖层配置 */
   stockPreviewChanlunOverlay: kv<StockPreviewChanlunOverlayConfig>('stock_preview_chanlun_overlay'),
+
+  /** 个股预览 K 线艾略特波浪覆盖层配置 */
+  stockPreviewElliottOverlay: kv<StockPreviewElliottOverlayConfig>('stock_preview_elliott_overlay'),
 
   /** 个股预览 K 线与右侧面板的分栏比例 */
   stockPreviewSplitRatio: kv<number>('stock_preview_split_ratio'),

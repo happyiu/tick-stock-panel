@@ -16,6 +16,7 @@ import { StockDailyKChart, getDefaultRange, toOHLC } from '@/components/StockDai
 import { StockIntradayChart } from '@/components/StockIntradayChart'
 import { StockTechnicalPanel } from '@/components/StockTechnicalPanel'
 import { StockChanlunPanel } from '@/components/StockChanlunPanel'
+import { StockElliottPanel } from '@/components/StockElliottPanel'
 import { financialMetricsQueryOptions, useFinancialMetrics } from '@/lib/useFinancials'
 import { useCapabilities } from '@/lib/useSharedQueries'
 import type { ChartMarker, ChartPriceLine, ChartRange } from '@/components/EChartsCandlestick'
@@ -26,28 +27,28 @@ import {
   type ColumnConfig,
 } from '@/lib/stock-info-fields'
 import { analyzeChanlun } from '@/lib/chanlun'
-import { storage, type StockPreviewAnalysisSectionsV2 } from '@/lib/storage'
+import { analyzeElliott } from '@/lib/elliott'
+import { storage, type StockPreviewAnalysisSectionsV2, type StockPreviewAnalysisSectionsV3 } from '@/lib/storage'
 
 const DEFAULT_SPLIT_RATIO = 1.4 / 2.4
 const MIN_SPLIT_RATIO = 0.25
 const MAX_SPLIT_RATIO = 0.75
 const SPLIT_GAP_PX = 12
-const DEFAULT_ANALYSIS_SECTIONS: StockPreviewAnalysisSectionsV2 = {
-  version: 2,
-  technicalCollapsed: false,
-  structureCollapsed: false,
-}
-
 function clampSplitRatioValue(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_SPLIT_RATIO
   return Math.max(MIN_SPLIT_RATIO, Math.min(MAX_SPLIT_RATIO, value))
 }
 
-function normalizeAnalysisSections(value: StockPreviewAnalysisSectionsV2 | null | undefined): StockPreviewAnalysisSectionsV2 {
+function normalizeAnalysisSections(
+  value: StockPreviewAnalysisSectionsV3 | null | undefined,
+  legacy: StockPreviewAnalysisSectionsV2 | null | undefined,
+): StockPreviewAnalysisSectionsV3 {
   return {
-    version: 2,
-    technicalCollapsed: value?.technicalCollapsed === true,
-    structureCollapsed: value?.structureCollapsed === true,
+    version: 3,
+    technicalCollapsed: value?.technicalCollapsed ?? legacy?.technicalCollapsed ?? false,
+    structureCollapsed: value?.structureCollapsed ?? legacy?.structureCollapsed ?? false,
+    chanlunCollapsed: value?.chanlunCollapsed === true,
+    elliottCollapsed: value?.elliottCollapsed === true,
   }
 }
 
@@ -143,7 +144,8 @@ export function StockPanel({
     storage.stockPreviewSplitRatio.get(DEFAULT_SPLIT_RATIO),
   ))
   const [analysisSections, setAnalysisSections] = useState(() => normalizeAnalysisSections(
-    storage.stockPreviewAnalysisSectionsV2.get(DEFAULT_ANALYSIS_SECTIONS),
+    storage.stockPreviewAnalysisSectionsV3.get(null),
+    storage.stockPreviewAnalysisSectionsV2.get(null),
   ))
   const [splitDragging, setSplitDragging] = useState(false)
   const splitContainerRef = useRef<HTMLDivElement>(null)
@@ -160,10 +162,10 @@ export function StockPanel({
     saveInfoFields(next)
   }, [])
 
-  const toggleAnalysisSection = useCallback((key: 'technicalCollapsed' | 'structureCollapsed') => {
+  const toggleAnalysisSection = useCallback((key: keyof Omit<StockPreviewAnalysisSectionsV3, 'version'>) => {
     setAnalysisSections(previous => {
       const next = { ...previous, [key]: !previous[key] }
-      storage.stockPreviewAnalysisSectionsV2.set(next)
+      storage.stockPreviewAnalysisSectionsV3.set(next)
       return next
     })
   }, [])
@@ -211,6 +213,10 @@ export function StockPanel({
   const chanlunAnalysis = useMemo(
     () => analyzeChanlun(periodRows, selectedBarKey),
     [periodRows, selectedBarKey],
+  )
+  const elliottAnalysis = useMemo(
+    () => analyzeElliott(periodRows, period, selectedBarKey),
+    [period, periodRows, selectedBarKey],
   )
   // 非日K查询尚未到达时用信息条的日线维持分栏高度，数据到达后自动切换到目标周期。
   const selectableRows = period !== '1d' && periodRows.length > 0 ? periodRows : rows
@@ -454,6 +460,7 @@ export function StockPanel({
             periodDays={periodDays}
             includeTechnicalScores={includeTechnicalScores}
             chanlunAnalysis={resolvedRightPaneMode === 'technical' ? chanlunAnalysis : undefined}
+            elliottAnalysis={resolvedRightPaneMode === 'technical' ? elliottAnalysis : undefined}
           />
         </div>
 
@@ -534,13 +541,25 @@ export function StockPanel({
                     </button>
                   </div>
                   {!analysisSections.structureCollapsed && (
-                    <StockChanlunPanel
-                      analysis={chanlunAnalysis}
-                      period={period}
-                      assetType={assetType}
-                      isLoading={periodKline.isLoading || periodKline.isFetching && !periodKline.data}
-                      error={periodKline.error}
-                    />
+                    <>
+                      <StockChanlunPanel
+                        analysis={chanlunAnalysis}
+                        period={period}
+                        assetType={assetType}
+                        collapsed={analysisSections.chanlunCollapsed}
+                        onToggleCollapsed={() => toggleAnalysisSection('chanlunCollapsed')}
+                        isLoading={periodKline.isLoading || periodKline.isFetching && !periodKline.data}
+                        error={periodKline.error}
+                      />
+                      <StockElliottPanel
+                        symbol={symbol}
+                        rows={periodRows}
+                        period={period}
+                        analysis={elliottAnalysis}
+                        collapsed={analysisSections.elliottCollapsed}
+                        onToggleCollapsed={() => toggleAnalysisSection('elliottCollapsed')}
+                      />
+                    </>
                   )}
                 </section>
               </div>

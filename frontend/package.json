@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "test:chanlun": "node --experimental-strip-types scripts/assert-chanlun.mjs",
+    "test:elliott": "node --experimental-strip-types scripts/assert-elliott.mjs",
     "test:format": "node --experimental-strip-types scripts/assert-format.mjs"
   },
   "dependencies": {

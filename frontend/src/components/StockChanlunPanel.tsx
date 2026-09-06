@@ -216,37 +216,44 @@ export function StockChanlunPanel({
   error,
 }: StockChanlunPanelProps) {
   const cards = buildCards(analysis, period, assetType)
+  const headerContent = (
+    <span className="flex min-w-0 items-start gap-1.5">
+      {onToggleCollapsed && (
+        <ChevronDown className={`mt-0.5 h-3.5 w-3.5 shrink-0 text-muted transition-transform ${collapsed ? '-rotate-90' : ''}`} />
+      )}
+      <span className="min-w-0">
+        <span className="flex flex-wrap items-center gap-1.5">
+          <span className="text-xs font-medium text-foreground">缠论</span>
+          <span className="rounded bg-[#8B5CF6]/10 px-1.5 py-0.5 text-[9px] text-[#A78BFA]">结构近似</span>
+          <span className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[9px] text-secondary">{PERIOD_LABELS[period]}</span>
+        </span>
+        {!collapsed && (
+          <span className="mt-0.5 block truncate text-[10px] text-muted" title={analysis.approximationLoss}>
+            {analysis.window.start && analysis.window.end
+              ? `分析 ${dateRange(analysis.window.start, analysis.window.end, period)}`
+              : '等待当前周期行情'}
+          </span>
+        )}
+      </span>
+    </span>
+  )
+  const headerClassName = `flex w-full items-start px-2.5 py-2 text-left transition-colors ${collapsed ? 'border-b border-border/70' : ''} ${onToggleCollapsed ? 'hover:bg-elevated/40' : ''}`
   return (
     <section>
-      <div className={`flex items-start justify-between px-2.5 py-2 ${collapsed ? '' : 'border-b border-border/70'}`}>
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5">
-            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#8B5CF6]" />
-            <span className="text-xs font-medium text-foreground">缠论</span>
-            <span className="rounded bg-[#8B5CF6]/10 px-1.5 py-0.5 text-[9px] text-[#A78BFA]">结构近似</span>
-            <span className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[9px] text-secondary">{PERIOD_LABELS[period]}</span>
-          </div>
-          {!collapsed && (
-            <div className="mt-0.5 truncate text-[10px] text-muted" title={analysis.approximationLoss}>
-              {analysis.window.start && analysis.window.end
-                ? `分析 ${dateRange(analysis.window.start, analysis.window.end, period)}`
-                : '等待当前周期行情'}
-            </div>
-          )}
-        </div>
-        {onToggleCollapsed && (
-          <button
-            type="button"
-            onClick={onToggleCollapsed}
-            className="shrink-0 rounded-btn p-1 text-muted transition-colors hover:bg-elevated hover:text-foreground"
-            title={collapsed ? '展开缠论' : '收起缠论'}
-            aria-label={collapsed ? '展开缠论' : '收起缠论'}
-            aria-expanded={!collapsed}
-          >
-            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${collapsed ? '-rotate-90' : ''}`} />
-          </button>
-        )}
-      </div>
+      {onToggleCollapsed ? (
+        <button
+          type="button"
+          onClick={onToggleCollapsed}
+          className={headerClassName}
+          title={collapsed ? '展开缠论' : '收起缠论'}
+          aria-label={collapsed ? '展开缠论' : '收起缠论'}
+          aria-expanded={!collapsed}
+        >
+          {headerContent}
+        </button>
+      ) : (
+        <div className={headerClassName}>{headerContent}</div>
+      )}
 
       {!collapsed && (
         isLoading && analysis.window.bars === 0 ? (

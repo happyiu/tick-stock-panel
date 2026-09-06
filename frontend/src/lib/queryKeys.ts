@@ -82,6 +82,8 @@ export const QK = {
   klinePeriod:          (symbol: string, period: string, start: string, end: string, days: number, includeTechnicalScores = false) =>
                            ['kline-period', symbol, period, start, end, days, includeTechnicalScores] as const,
   stockLevels:          (symbol: string, days?: number) => ['stock-levels', symbol, days ?? 120] as const,
+  elliottAssessment:    (symbol: string, period: string, asOf: string, fingerprint: string) =>
+                             ['elliott-assessment', symbol, period, asOf, fingerprint] as const,
   klineMinute:          (symbol: string, date: string) =>
                              ['kline-minute', symbol, date] as const,
   klineMinuteRange:     (symbol: string, days: number) =>
