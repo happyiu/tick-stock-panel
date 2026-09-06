@@ -105,7 +105,7 @@ export function StockPriceZonesPanel({
             {!collapsed && <span className="mt-0.5 block truncate text-[9px] text-muted" title={atrNote}>{atrNote}</span>}
           </span>
         </button>
-        {!collapsed && onToggleShowZones && (
+        {onToggleShowZones && (
           <button
             type="button"
             onClick={onToggleShowZones}
