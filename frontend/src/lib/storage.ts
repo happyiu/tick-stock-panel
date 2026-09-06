@@ -75,6 +75,14 @@ export interface StockPreviewAnalysisSectionsV3 {
   elliottCollapsed: boolean
 }
 
+export interface StockPreviewDecisionSectionsV1 {
+  version: 1
+  priceZonesCollapsed: boolean
+  signalRiskCollapsed: boolean
+  showPriceZones: boolean
+  showInvalidationLine: boolean
+}
+
 export interface StockPreviewChanlunOverlayConfig {
   enabled: boolean
   fractals: boolean
@@ -132,6 +140,9 @@ export const storage = {
 
   /** 个股预览技术指标与结构分析子区折叠状态 v3 */
   stockPreviewAnalysisSectionsV3: kv<StockPreviewAnalysisSectionsV3 | null>('stock_preview_analysis_sections_v3'),
+
+  /** 个股预览关键价位与缠论信号区折叠及覆盖层/失效线状态 v1 */
+  stockPreviewDecisionSectionsV1: kv<StockPreviewDecisionSectionsV1 | null>('stock_preview_decision_sections_v1'),
 
   /** 个股预览 K 线缠论覆盖层配置 */
   stockPreviewChanlunOverlay: kv<StockPreviewChanlunOverlayConfig>('stock_preview_chanlun_overlay'),

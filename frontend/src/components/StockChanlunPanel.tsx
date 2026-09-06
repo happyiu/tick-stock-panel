@@ -1,6 +1,6 @@
-import { CheckCircle2, ChevronDown, Circle, HelpCircle, XCircle } from 'lucide-react'
+import { ChevronDown } from 'lucide-react'
 import type { KlinePeriod } from '@/lib/api'
-import type { ChanlunAnalysis, ChanlunCandidateKind, ChanlunCondition, ChanlunStructureSource } from '@/lib/chanlun'
+import type { ChanlunAnalysis, ChanlunStructureSource } from '@/lib/chanlun'
 import { fmtAssetPrice, fmtPct } from '@/lib/format'
 
 type Tone = 'bull' | 'bear' | 'neutral'
@@ -12,15 +12,9 @@ const TREND_LABELS: Record<ChanlunAnalysis['trendType'], string> = {
 const CENTER_LABELS = {
   oscillating: '中枢震荡', extension: '中枢延伸', newborn: '中枢新生', broken_up: '向上离开', broken_down: '向下离开',
 } as const
-const SIGNAL_LABELS: Record<ChanlunCandidateKind, string> = {
+const SIGNAL_LABELS: Record<ChanlunAnalysis['candidateSignals'][number]['kind'], string> = {
   first_buy: '一买候选', second_buy: '二买候选', third_buy: '三买候选',
   first_sell: '一卖候选', second_sell: '二卖候选', third_sell: '三卖候选',
-}
-const STATUS_LABELS = { waiting_pullback: '等待', candidate: '候选', invalidated: '失效', rejected: '不成立' } as const
-
-function signalBadge(kind: ChanlunCandidateKind, status: keyof typeof STATUS_LABELS) {
-  const name = SIGNAL_LABELS[kind]
-  return status === 'candidate' ? name : `${name.replace('候选', '条件')} · ${STATUS_LABELS[status]}`
 }
 
 export interface ChanlunMultiPeriodItem {
@@ -74,13 +68,6 @@ function PositionBar({ analysis }: { analysis: ChanlunAnalysis }) {
   return <div><div className="relative mt-1 h-1.5 overflow-hidden rounded-full bg-elevated"><div className="absolute inset-y-0 left-0 bg-[#8B5CF6]/60" style={{ width: `${percent}%` }} /><span className="absolute top-1/2 h-2.5 w-0.5 -translate-y-1/2 bg-foreground" style={{ left: `calc(${percent}% - 1px)` }} /></div><div className="mt-1 flex justify-between font-mono text-[8px] text-muted"><span>ZD</span><span>{analysis.pricePosition === 'inside' ? `${Math.round(raw * 100)}%` : positionLabel(analysis)}</span><span>ZG</span></div></div>
 }
 
-function ConditionRow({ item }: { item: ChanlunCondition }) {
-  const Icon = item.state === 'met' ? CheckCircle2 : item.state === 'failed' ? XCircle : item.state === 'unavailable' ? HelpCircle : Circle
-  const color = item.state === 'met' ? 'text-bull' : item.state === 'failed' ? 'text-bear' : 'text-muted'
-  const state = item.state === 'met' ? '满足' : item.state === 'failed' ? '不满足' : item.state === 'unavailable' ? '数据不足' : '等待'
-  return <div className="flex items-start gap-1.5 py-1"><Icon className={`mt-0.5 h-3 w-3 shrink-0 ${color}`} /><div className="min-w-0 flex-1"><div className="flex items-center justify-between gap-2 text-[9px]"><span className="text-secondary">{item.label}</span><span className={color}>{state}</span></div><div className="truncate text-[8px] text-muted" title={item.evidence}>{item.evidence}</div></div></div>
-}
-
 function MultiPeriodTable({ rows }: { rows: ChanlunMultiPeriodItem[] }) {
   const minute = rows.find(row => row.period === '30m')?.analysis
   const daily = rows.find(row => row.period === '1d')?.analysis
@@ -98,12 +85,11 @@ export function StockChanlunPanel({ analysis, period, assetType, collapsed = fal
   const formingStroke = analysis.formingStroke
   const confirmedStroke = analysis.latestConfirmedStroke
   const latestSegment = analysis.segments.at(-1)
-  const latestCandidate = analysis.candidateSignals.at(-1)
   const latestDivergence = analysis.divergences.at(-1)
   const centerTone: Tone = center?.state === 'broken_up' ? 'bull' : center?.state === 'broken_down' ? 'bear' : 'neutral'
   const distanceZg = center && analysis.currentPrice != null && center.zg > 0 ? analysis.currentPrice / center.zg - 1 : null
   const distanceZd = center && analysis.currentPrice != null && center.zd > 0 ? analysis.currentPrice / center.zd - 1 : null
-  const nextWatch = latestCandidate?.nextWatch ?? (center ? '等待中枢离开以及首次回抽结构' : '等待至少三个已确认结构单元形成共同重叠')
+  const nextWatch = center ? '等待中枢离开以及首次回抽结构' : '等待至少三个已确认结构单元形成共同重叠'
 
   return <section>
     <div className={`flex w-full items-start justify-between gap-2 px-2.5 py-2 ${collapsed ? 'border-b border-border/70' : ''}`}>
@@ -122,8 +108,6 @@ export function StockChanlunPanel({ analysis, period, assetType, collapsed = fal
       <Section title="中枢与结构位置" badge={center ? CENTER_LABELS[center.state] : '尚未形成'}><div className="grid grid-cols-3 gap-x-2 gap-y-1.5"><Metric label="ZG" value={fmtAssetPrice(center?.zg, assetType)} tone={centerTone} /><Metric label="ZD" value={fmtAssetPrice(center?.zd, assetType)} tone={centerTone} /><Metric label="当前价格" value={fmtAssetPrice(analysis.currentPrice, assetType)} /><Metric label="距 ZG" value={fmtPct(distanceZg)} /><Metric label="距 ZD" value={fmtPct(distanceZd)} /><Metric label="GG / DD" value={center ? `${fmtAssetPrice(center.gg, assetType)} / ${fmtAssetPrice(center.dd, assetType)}` : '—'} /><Metric label="组成" value={center ? `${center.componentCount} ${center.source === 'stroke' ? '笔' : '段'}` : '—'} /><Metric label="最早可知" value={shortDate(center?.formedAt, period)} /></div><PositionBar analysis={analysis} /></Section>
 
       <Section title="背驰分析" badge="价格力度代理">{latestDivergence ? <><div className="grid grid-cols-2 gap-x-2 gap-y-1.5"><Metric label="类型" value={latestDivergence.kind === 'trend' ? '趋势背驰代理' : '盘整背驰代理'} /><Metric label="状态" value={latestDivergence.status === 'candidate' ? '候选' : '未发现'} tone={latestDivergence.status === 'candidate' ? directionTone(latestDivergence.direction === 'down' ? 'up' : 'down') : 'neutral'} /><Metric label="A 段" value={`${shortDate(latestDivergence.a.startDate, period)} → ${shortDate(latestDivergence.a.endDate, period)} · ${fmtPct(latestDivergence.a.changePct)}`} /><Metric label="C 段" value={`${shortDate(latestDivergence.c.startDate, period)} → ${shortDate(latestDivergence.c.endDate, period)} · ${fmtPct(latestDivergence.c.changePct)}`} /><Metric label="价格力度 A / C" value={`${latestDivergence.a.force?.toFixed(4) ?? '—'} / ${latestDivergence.c.force?.toFixed(4) ?? '—'}`} /><Metric label="MACD 面积 A / C" value={`${latestDivergence.a.macdArea?.toFixed(3) ?? '不可计算'} / ${latestDivergence.c.macdArea?.toFixed(3) ?? '不可计算'}`} /></div><div className="mt-2 border-t border-border/50 pt-1.5 text-[9px] text-muted">{latestDivergence.evidence}；MACD 仅作辅助证据。</div></> : <div className="text-[9px] text-muted">尚无同来源、同方向且位于明确中枢两侧的可比走势。</div>}</Section>
-
-      <Section title="买卖点条件检查器" badge={latestCandidate ? signalBadge(latestCandidate.kind, latestCandidate.status) : '等待结构'}>{latestCandidate ? <><div className="grid grid-cols-4 gap-2 border-b border-border/50 pb-1.5"><Metric label="结构发生" value={shortDate(latestCandidate.structureDate, period)} /><Metric label="最早可知" value={shortDate(latestCandidate.availableDate, period)} /><Metric label="失效边界" value={fmtAssetPrice(latestCandidate.boundary, assetType)} /><Metric label="失效时间" value={shortDate(latestCandidate.invalidatedAt, period)} /></div><div className="divide-y divide-border/40">{latestCandidate.conditions.map(item => <ConditionRow key={item.id} item={item} />)}</div><div className="mt-1 text-[9px] text-muted">下一观察：{latestCandidate.nextWatch}</div></> : <div className="text-[9px] text-muted">尚未形成可追溯的一、二、三类买卖点候选。</div>}</Section>
 
       <Section title="多周期结构对照" badge="只读对照"><button type="button" onClick={onToggleMultiPeriod} className="mb-2 flex w-full items-center justify-between rounded-btn bg-elevated px-2 py-1 text-[9px] text-secondary"><span>{multiPeriodExpanded ? '收起多周期分析' : '展开后加载 30F / 日 / 周 / 月结构'}</span><ChevronDown className={`h-3 w-3 transition-transform ${multiPeriodExpanded ? 'rotate-180' : ''}`} /></button>{multiPeriodExpanded && <MultiPeriodTable rows={multiPeriod} />}{multiPeriodExpanded && <div className="mt-2 text-[8px] text-muted">周期之间只描述一致与冲突，不用于升级严格买卖点确认。</div>}</Section>
     </div>)}

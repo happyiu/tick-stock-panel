@@ -17,9 +17,11 @@ import { StockIntradayChart } from '@/components/StockIntradayChart'
 import { StockTechnicalPanel } from '@/components/StockTechnicalPanel'
 import { StockChanlunPanel } from '@/components/StockChanlunPanel'
 import { StockElliottPanel } from '@/components/StockElliottPanel'
+import { StockPriceZonesPanel } from '@/components/StockPriceZonesPanel'
+import { StockSignalRiskPanel } from '@/components/StockSignalRiskPanel'
 import { financialMetricsQueryOptions, useFinancialMetrics } from '@/lib/useFinancials'
 import { useCapabilities } from '@/lib/useSharedQueries'
-import type { ChartMarker, ChartPriceLine, ChartRange } from '@/components/EChartsCandlestick'
+import type { ChartMarker, ChartPriceBand, ChartPriceLine, ChartRange } from '@/components/EChartsCandlestick'
 import {
   loadInfoFields,
   saveInfoFields,
@@ -28,7 +30,9 @@ import {
 } from '@/lib/stock-info-fields'
 import { analyzeChanlun, type ChanlunStructureSource } from '@/lib/chanlun'
 import { analyzeElliott } from '@/lib/elliott'
-import { storage, type StockPreviewAnalysisSectionsV2, type StockPreviewAnalysisSectionsV3 } from '@/lib/storage'
+import { storage, type StockPreviewAnalysisSectionsV2, type StockPreviewAnalysisSectionsV3, type StockPreviewDecisionSectionsV1 } from '@/lib/storage'
+import { buildPriceZones, type PriceZone } from '@/lib/priceZones'
+import { buildSignalRiskContexts, selectPreferredSignal, type SignalRiskContext } from '@/lib/signalRisk'
 
 const DEFAULT_SPLIT_RATIO = 1.4 / 2.4
 const MIN_SPLIT_RATIO = 0.25
@@ -50,6 +54,16 @@ function normalizeAnalysisSections(
     structureCollapsed: value?.structureCollapsed ?? legacy?.structureCollapsed ?? false,
     chanlunCollapsed: value?.chanlunCollapsed === true,
     elliottCollapsed: value?.elliottCollapsed === true,
+  }
+}
+
+function normalizeDecisionSections(value: StockPreviewDecisionSectionsV1 | null | undefined): StockPreviewDecisionSectionsV1 {
+  return {
+    version: 1,
+    priceZonesCollapsed: value?.priceZonesCollapsed === true,
+    signalRiskCollapsed: value?.signalRiskCollapsed === true,
+    showPriceZones: value?.showPriceZones !== false,
+    showInvalidationLine: value?.showInvalidationLine !== false,
   }
 }
 
@@ -150,6 +164,11 @@ export function StockPanel({
     storage.stockPreviewAnalysisSectionsV3.get(null),
     storage.stockPreviewAnalysisSectionsV2.get(null),
   ))
+  const [decisionSections, setDecisionSections] = useState(() => normalizeDecisionSections(
+    storage.stockPreviewDecisionSectionsV1.get(null),
+  ))
+  const [selectedSignalId, setSelectedSignalId] = useState<string | null>(null)
+  const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null)
   const [splitDragging, setSplitDragging] = useState(false)
   const splitContainerRef = useRef<HTMLDivElement>(null)
   const dailyPaneRef = useRef<HTMLDivElement>(null)
@@ -169,6 +188,14 @@ export function StockPanel({
     setAnalysisSections(previous => {
       const next = { ...previous, [key]: !previous[key] }
       storage.stockPreviewAnalysisSectionsV3.set(next)
+      return next
+    })
+  }, [])
+
+  const toggleDecisionSection = useCallback((key: keyof Omit<StockPreviewDecisionSectionsV1, 'version'>) => {
+    setDecisionSections(previous => {
+      const next = { ...previous, [key]: !previous[key] }
+      storage.stockPreviewDecisionSectionsV1.set(next)
       return next
     })
   }, [])
@@ -220,6 +247,63 @@ export function StockPanel({
   const elliottAnalysis = useMemo(
     () => analyzeElliott(periodRows, period, selectedBarKey),
     [period, periodRows, selectedBarKey],
+  )
+  const priceZones: PriceZone[] = useMemo(
+    () => buildPriceZones(chanlunAnalysis),
+    [chanlunAnalysis],
+  )
+  const signalRiskContexts: SignalRiskContext[] = useMemo(
+    () => buildSignalRiskContexts(chanlunAnalysis.candidateSignals, priceZones, chanlunAnalysis.currentPrice),
+    [chanlunAnalysis.candidateSignals, chanlunAnalysis.currentPrice, priceZones],
+  )
+  const preferredSignal = useMemo(
+    () => selectPreferredSignal(signalRiskContexts),
+    [signalRiskContexts],
+  )
+  const selectedSignal = useMemo(
+    () => signalRiskContexts.find(context => context.signal.id === selectedSignalId) ?? preferredSignal,
+    [preferredSignal, selectedSignalId, signalRiskContexts],
+  )
+  const priceBands: ChartPriceBand[] = useMemo(() => {
+    const supports = priceZones.filter(zone => zone.side === 'support').sort((a, b) => (a.distancePct ?? Infinity) - (b.distancePct ?? Infinity))
+    const resistances = priceZones.filter(zone => zone.side === 'resistance').sort((a, b) => (a.distancePct ?? Infinity) - (b.distancePct ?? Infinity))
+    const highlightedZoneIds = new Set([
+      selectedZoneId,
+      selectedSignal?.target1?.id,
+      selectedSignal?.target2?.id,
+    ].filter((id): id is string => !!id))
+    return priceZones.map(zone => {
+      const rank = zone.side === 'support' ? supports.findIndex(item => item.id === zone.id) + 1 : zone.side === 'resistance' ? resistances.findIndex(item => item.id === zone.id) + 1 : 0
+      return {
+        low: zone.low,
+        high: zone.high,
+        label: zone.side === 'support' ? `S${rank}` : zone.side === 'resistance' ? `R${rank}` : '现价区',
+        color: highlightedZoneIds.has(zone.id) ? 'rgba(59,130,246,0.16)' : zone.side === 'support' ? 'rgba(34,197,94,0.08)' : zone.side === 'resistance' ? 'rgba(239,68,68,0.08)' : 'rgba(59,130,246,0.08)',
+        borderColor: highlightedZoneIds.has(zone.id) ? '#3B82F6' : zone.side === 'support' ? 'rgba(34,197,94,0.48)' : zone.side === 'resistance' ? 'rgba(239,68,68,0.48)' : 'rgba(59,130,246,0.48)',
+      }
+    })
+  }, [priceZones, selectedSignal, selectedZoneId])
+  const decisionPriceLines: ChartPriceLine[] = useMemo(() => {
+    if (!selectedSignal) return []
+    const lines: ChartPriceLine[] = []
+    if (decisionSections.showInvalidationLine && selectedSignal.invalidation != null) {
+      lines.push({
+        value: selectedSignal.invalidation,
+        label: '结构失效',
+        color: selectedSignal.direction === 'buy' ? '#EF4444' : '#22C55E',
+      })
+    }
+    if (selectedSignal.target1) {
+      lines.push({ value: selectedSignal.direction === 'buy' ? selectedSignal.target1.low : selectedSignal.target1.high, label: '目标一', color: '#F59E0B' })
+    }
+    if (selectedSignal.target2) {
+      lines.push({ value: selectedSignal.direction === 'buy' ? selectedSignal.target2.low : selectedSignal.target2.high, label: '目标二', color: '#F59E0B' })
+    }
+    return lines
+  }, [decisionSections.showInvalidationLine, selectedSignal])
+  const chartPriceLines = useMemo(
+    () => [...(priceLines ?? []), ...decisionPriceLines],
+    [decisionPriceLines, priceLines],
   )
   // 非日K查询尚未到达时用信息条的日线维持分栏高度，数据到达后自动切换到目标周期。
   const selectableRows = period !== '1d' && periodRows.length > 0 ? periodRows : rows
@@ -398,6 +482,8 @@ export function StockPanel({
     setSelectedBarKey(null)
     setLinkedPrice(null)
     setRightPaneDismissed(false)
+    setSelectedSignalId(null)
+    setSelectedZoneId(null)
   }, [symbol])
 
   const prevPeriod = useRef<KlinePeriod>(period)
@@ -407,7 +493,14 @@ export function StockPanel({
     setSelectedBarKey(null)
     setLinkedPrice(null)
     setRightPaneDismissed(false)
+    setSelectedSignalId(null)
+    setSelectedZoneId(null)
   }, [period])
+
+  useEffect(() => {
+    setSelectedSignalId(null)
+    setSelectedZoneId(null)
+  }, [chanlunSource])
 
   // 目标周期数据到达后，如果此前只是用日线占位选中了日期，则回到该周期最新一根。
   useEffect(() => {
@@ -479,7 +572,8 @@ export function StockPanel({
             dateRange={chartDateRange}
             markers={markers}
             ranges={ranges}
-            priceLines={priceLines}
+            priceBands={decisionSections.showPriceZones ? priceBands : undefined}
+            priceLines={chartPriceLines}
             showLimitMarkers={showLimitMarkers}
             showMarkerToggle={showMarkerToggle}
             linkedPrice={linkedPrice}
@@ -535,7 +629,7 @@ export function StockPanel({
                 onPriceHover={setLinkedPrice}
                 onPriceDoubleClick={onPriceDoubleClick}
                 currentPrice={rows[rows.length - 1]?.close}
-                priceLines={priceLines}
+                priceLines={chartPriceLines}
                 assetType={assetType}
                 refetchIntervalMs={refetchIntervalMs}
               />
@@ -599,6 +693,28 @@ export function StockPanel({
                     </>
                   )}
                 </section>
+                <StockPriceZonesPanel
+                  analysis={chanlunAnalysis}
+                  zones={priceZones}
+                  assetType={assetType}
+                  collapsed={decisionSections.priceZonesCollapsed}
+                  onToggleCollapsed={() => toggleDecisionSection('priceZonesCollapsed')}
+                  showZones={decisionSections.showPriceZones}
+                  onToggleShowZones={() => toggleDecisionSection('showPriceZones')}
+                  selectedZoneId={selectedZoneId}
+                  onSelectZone={zone => setSelectedZoneId(current => current === zone.id ? null : zone.id)}
+                />
+                <StockSignalRiskPanel
+                  contexts={signalRiskContexts}
+                  period={period}
+                  assetType={assetType}
+                  collapsed={decisionSections.signalRiskCollapsed}
+                  onToggleCollapsed={() => toggleDecisionSection('signalRiskCollapsed')}
+                  showInvalidationLine={decisionSections.showInvalidationLine}
+                  onToggleShowInvalidationLine={() => toggleDecisionSection('showInvalidationLine')}
+                  selectedSignalId={selectedSignalId}
+                  onSelectSignal={setSelectedSignalId}
+                />
               </div>
             )}
           </div>

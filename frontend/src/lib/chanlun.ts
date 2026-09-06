@@ -7,6 +7,7 @@ export type ChanlunSignalStatus = 'waiting_pullback' | 'candidate' | 'invalidate
 export type ChanlunTrendType = 'uptrend_proxy' | 'downtrend_proxy' | 'consolidation_proxy' | 'unclear'
 export type ChanlunConditionState = 'met' | 'waiting' | 'failed' | 'unavailable'
 export type ChanlunCandidateKind = 'first_buy' | 'second_buy' | 'third_buy' | 'first_sell' | 'second_sell' | 'third_sell'
+export type ChanlunCandidateOrigin = 'trend_divergence' | 'consolidation_divergence' | 'third_structure'
 
 export interface ChanlunBarInput {
   date: string
@@ -18,6 +19,9 @@ export interface ChanlunBarInput {
   isClosed?: boolean
   macdHist?: number | null
   macd_hist?: number | null
+  ma20?: number | null
+  ma60?: number | null
+  atr14?: number | null
 }
 
 export interface ChanlunMergedBar {
@@ -131,6 +135,8 @@ export interface ChanlunCandidateSignal {
   boundary: number
   invalidatedAt: string | null
   relatedSignalId: string | null
+  /** 一/二类候选来源；盘整背驰只作为观察依据，不等同严格一买/一卖。 */
+  origin?: ChanlunCandidateOrigin
   conditions: ChanlunCondition[]
   nextWatch: string
 }
@@ -750,6 +756,7 @@ export function buildChanlunCandidateSignals(
       boundary,
       invalidatedAt,
       relatedSignalId: divergence.id,
+      origin: divergence.kind === 'trend' ? 'trend_divergence' : 'consolidation_divergence',
       conditions: [
         condition('context', buySide ? '下跌结构' : '上涨结构', 'met', `${divergence.kind === 'trend' ? '趋势' : '盘整'}结构代理成立`),
         condition('divergence', '同级走势力度减弱', 'met', divergence.evidence),
@@ -779,6 +786,7 @@ export function buildChanlunCandidateSignals(
       boundary,
       invalidatedAt: secondInvalidation,
       relatedSignalId: first.id,
+      origin: first.origin,
       conditions: [
         condition('context', buySide ? '一买候选存在' : '一卖候选存在', 'met', first.id),
         condition('rebound', '首次反向运动完成', 'met', `${rebound.startDate} → ${rebound.endDate}`),
@@ -806,6 +814,7 @@ export function buildChanlunCandidateSignals(
       boundary: signal.boundary,
       invalidatedAt: signal.invalidatedAt,
       relatedSignalId: signal.centerId,
+      origin: 'third_structure',
       conditions: [
         condition('center', '有效中枢成立', 'met', signal.centerId),
         condition('leave', buySide ? '向上离开中枢' : '向下离开中枢', 'met', `离开单元 #${signal.leaveStrokeIndex + 1}`),

@@ -12,6 +12,7 @@ import {
   OVERLAY_INDICATORS,
   SUB_CHARTS,
   type ChartMarker,
+  type ChartPriceBand,
   type ChartPriceLine,
   type ChartRange,
   type OHLC,
@@ -70,6 +71,7 @@ interface Props {
   dateRange?: { start: string; end: string }
   markers?: ChartMarker[]
   ranges?: ChartRange[]
+  priceBands?: ChartPriceBand[]
   priceLines?: ChartPriceLine[]
   showLimitMarkers?: boolean
   showIndicatorControls?: boolean
@@ -127,6 +129,8 @@ export function toOHLC(rows: KlineRow[], period: KlinePeriod = '1d'): OHLC[] {
       kdj_j: r.kdj_j != null ? Number(r.kdj_j) : null,
       boll_upper: r.boll_upper != null ? Number(r.boll_upper) : null,
       boll_lower: r.boll_lower != null ? Number(r.boll_lower) : null,
+      atr_14: r.atr_14 != null ? Number(r.atr_14) : null,
+      atr14: r.atr_14 != null ? Number(r.atr_14) : null,
     }))
 }
 
@@ -155,6 +159,7 @@ export function StockDailyKChart({
   dateRange: externalDateRange,
   markers,
   ranges,
+  priceBands,
   priceLines,
   showLimitMarkers = true,
   showIndicatorControls = true,
@@ -445,6 +450,7 @@ export function StockDailyKChart({
           data={rows}
           markers={allMarkers}
           ranges={ranges}
+          priceBands={priceBands}
           priceLines={priceLines}
           height={chartHeight - 22}
           showMA={showMA}

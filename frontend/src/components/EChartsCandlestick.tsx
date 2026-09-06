@@ -31,6 +31,8 @@ export interface OHLC {
   kdj_j?: number | null
   boll_upper?: number | null
   boll_lower?: number | null
+  atr_14?: number | null
+  atr14?: number | null
 }
 
 export interface ChartMarker {
@@ -48,6 +50,15 @@ export interface ChartRange {
   end: string
   label?: string
   color?: string
+}
+
+/** 横向价格区间覆盖层；与按时间的 ChartRange 保持独立。 */
+export interface ChartPriceBand {
+  low: number
+  high: number
+  label?: string
+  color?: string
+  borderColor?: string
 }
 
 export interface ChartPriceLine {
@@ -328,6 +339,7 @@ interface Props {
   data: OHLC[]
   markers?: ChartMarker[]
   ranges?: ChartRange[]
+  priceBands?: ChartPriceBand[]
   priceLines?: ChartPriceLine[]
   height?: number
   showMA?: boolean
@@ -632,6 +644,7 @@ function buildOption(
   dateIndexMap: Map<string, number>,
   markers: ChartMarker[] | undefined,
   ranges: ChartRange[] | undefined,
+  priceBands: ChartPriceBand[] | undefined,
   priceLines: ChartPriceLine[] | undefined,
   showMA: boolean,
   compact: boolean,
@@ -730,17 +743,21 @@ function buildOption(
   const priceLineValues = (priceLines ?? [])
     .map(line => line.value)
     .filter(value => Number.isFinite(value) && value > 0)
-  const axisMin = priceLineValues.length > 0
+  const priceBandValues = (priceBands ?? [])
+    .flatMap(band => [band.low, band.high])
+    .filter(value => Number.isFinite(value) && value > 0)
+  const priceOverlayValues = [...priceLineValues, ...priceBandValues]
+  const axisMin = priceOverlayValues.length > 0
     ? ({ min, max }: { min: number; max: number }) => {
-        const nextMin = Math.min(min, ...priceLineValues)
-        const nextMax = Math.max(max, ...priceLineValues)
+        const nextMin = Math.min(min, ...priceOverlayValues)
+        const nextMax = Math.max(max, ...priceOverlayValues)
         return nextMin - Math.max((nextMax - nextMin) * 0.03, nextMax * 0.001)
       }
     : undefined
-  const axisMax = priceLineValues.length > 0
+  const axisMax = priceOverlayValues.length > 0
     ? ({ min, max }: { min: number; max: number }) => {
-        const nextMin = Math.min(min, ...priceLineValues)
-        const nextMax = Math.max(max, ...priceLineValues)
+        const nextMin = Math.min(min, ...priceOverlayValues)
+        const nextMax = Math.max(max, ...priceOverlayValues)
         return nextMax + Math.max((nextMax - nextMin) * 0.03, nextMax * 0.001)
       }
     : undefined
@@ -793,6 +810,30 @@ function buildOption(
       },
       { xAxis: r.end },
     ]))
+
+  for (const band of priceBands ?? []) {
+    if (!Number.isFinite(band.low) || !Number.isFinite(band.high) || band.high < band.low) continue
+    markAreaData.push([
+      {
+        name: band.label ?? '',
+        yAxis: band.low,
+        itemStyle: {
+          color: band.color ?? 'rgba(249,115,22,0.10)',
+          borderColor: band.borderColor ?? 'rgba(249,115,22,0.42)',
+          borderWidth: 1,
+        },
+        label: {
+          show: !!band.label,
+          formatter: band.label ?? '',
+          position: 'insideTop',
+          color: band.borderColor ?? '#F97316',
+          fontSize: 9,
+          fontFamily: 'JetBrains Mono, monospace',
+        },
+      },
+      { yAxis: band.high },
+    ] as any)
+  }
 
   if (chanlunAnalysis && chanlunOverlay?.enabled && chanlunOverlay.centers) {
     for (const center of chanlunAnalysis.centers) {
@@ -1043,6 +1084,7 @@ export function EChartsCandlestick({
   data,
   markers,
   ranges,
+  priceBands,
   priceLines,
   height = 480,
   showMA = true,
@@ -1423,6 +1465,7 @@ export function EChartsCandlestick({
       data, dates, dateIndexMap,
       showMarkersProp ? markers : undefined,
       ranges,
+      priceBands,
       priceLines,
       showMA, compactRef.current,
       activeIndicators, chartHeight,
@@ -1451,7 +1494,7 @@ export function EChartsCandlestick({
     if (infoEl) {
       infoEl.innerHTML = getInfoBarHTML()
     }
-  }, [data, markers, ranges, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme, assetType, chanlunAnalysis, chanlunOverlay, elliottAnalysis, elliottOverlay])
+  }, [data, markers, ranges, priceBands, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme, assetType, chanlunAnalysis, chanlunOverlay, elliottAnalysis, elliottOverlay])
 
   // 渲染信息栏容器 (内容由 JS 直接写入)
   const initialHTML = useMemo(() => {
