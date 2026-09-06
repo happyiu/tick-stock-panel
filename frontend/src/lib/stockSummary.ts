@@ -25,6 +25,9 @@ export type StockSummaryObservation =
   | 'invalidated'
   | 'unavailable'
 
+export type StockDecisionState = 'buy' | 'probe' | 'wait' | 'reduce' | 'sell'
+export type StockDecisionInputState = 'ready' | 'provisional' | 'blocked'
+
 export type StockSummaryEvidenceSource = 'quality' | 'technical' | 'structure' | 'wave' | 'level' | 'risk'
 
 export interface StockSummaryEvidence {
@@ -42,6 +45,7 @@ export interface StockSummaryCondition {
   state: ChanlunConditionState | 'unavailable'
   text: string
   sourceId?: string
+  targetId?: string
 }
 
 export interface StockSummaryConflict {
@@ -90,6 +94,16 @@ export interface StockSummaryQualityInfo {
   latestBarClosed: boolean | null
 }
 
+export interface StockSummaryDecision {
+  state: StockDecisionState
+  flatAction: '买入' | '试仓' | '等待' | '暂不介入'
+  holdingAction: '持有' | '持有观察' | '减仓' | '卖出'
+  inputState: StockDecisionInputState
+  reason: string
+  upgradeConditions: StockSummaryCondition[]
+  riskConditions: StockSummaryCondition[]
+}
+
 export interface StockSummaryContext {
   symbol: string
   name?: string
@@ -109,6 +123,7 @@ export interface StockSummarySnapshot {
   quality: StockSummaryQualityInfo
   versions: {
     summary: 'stock-summary-v1'
+    decision: 'stock-decision-v1'
     technical: string | null
     structure: number | null
     levels: string | null
@@ -122,6 +137,7 @@ export interface StockSummarySnapshot {
     label: string
     tone: StockSummaryTone
   }
+  decision: StockSummaryDecision
   headline: string
   summary: string
   supportingEvidence: StockSummaryEvidence[]
@@ -153,6 +169,8 @@ export interface StockSummaryInput {
   rows: KlineRow[]
   technicalScores?: TechnicalScores
   dataStatus?: ChartDataStatus
+  /** API response source; enriched means the chart snapshot fell back to local canonical data. */
+  dataSource?: string
   selectedBarKey?: string | null
   chanlun: ChanlunAnalysis
   elliott: ElliottAnalysis
@@ -281,8 +299,11 @@ function buildQuality(
   if (!score || !score.available) reasons.push('当前观察时点技术评分不可用')
   if (input.chanlun.status !== 'ready') reasons.push(...input.chanlun.issues.slice(0, 1))
   if (input.elliott.status !== 'ready') reasons.push(...input.elliott.dataQuality.limitations.slice(0, 1))
-  const stale = input.dataStatus?.stale === true
-  if (stale) reasons.push('行情展示缓存为过期快照')
+  const staleSnapshot = input.dataStatus?.stale === true
+  const enrichedFallback = staleSnapshot && input.dataSource === 'enriched'
+  if (enrichedFallback) reasons.push('展示行情源暂不可用，当前使用本地 enriched 数据')
+  else if (staleSnapshot) reasons.push('行情展示缓存为过期快照')
+  const stale = staleSnapshot && !enrichedFallback
   const uniqueReasons = [...new Set(reasons.filter(Boolean))]
   const status: StockSummaryQuality = !row
     ? 'blocked'
@@ -465,6 +486,281 @@ function buildConditions(active: SignalRiskContext | null): StockSummaryConditio
   }))
 }
 
+function scoreGate(
+  id: string,
+  label: string,
+  value: number | null,
+  threshold: number,
+  direction: 'min' | 'max',
+): StockSummaryCondition {
+  if (value == null) {
+    return { id, label, state: 'unavailable', text: '当前评分不可用' }
+  }
+  const met = direction === 'min' ? value >= threshold : value <= threshold
+  return {
+    id,
+    label,
+    state: met ? 'met' : 'failed',
+    text: `当前 ${Math.round(value)} 分，${met ? '已达到' : '尚未达到'} ${direction === 'min' ? '≥' : '≤'}${threshold}`,
+  }
+}
+
+function riskGate(risk: StockSummarySnapshot['risk']): StockSummaryCondition {
+  if (risk.status !== 'calculable' || risk.riskReward1 == null) {
+    return {
+      id: 'decision-risk-space',
+      label: '结构空间 ≥ 1 : 2',
+      state: 'unavailable',
+      text: risk.reason ?? '目标一或失效边界不可计算',
+    }
+  }
+  const met = risk.riskReward1 >= 2
+  return {
+    id: 'decision-risk-space',
+    label: '结构空间 ≥ 1 : 2',
+    state: met ? 'met' : 'failed',
+    text: `当前目标一 / 风险为 1 : ${risk.riskReward1.toFixed(2)}，${met ? '达到' : '低于'}门槛`,
+  }
+}
+
+function decisionInputState(
+  input: StockSummaryInput,
+  row: KlineRow | null,
+  score: TechnicalScoreRow | null,
+): StockDecisionInputState {
+  const scoreReady = score?.available === true
+    && [score.direction_score, score.trend, score.momentum, score.volume_price].every(finite)
+  if (!row || !scoreReady || input.chanlun.status !== 'ready') return 'blocked'
+  const staleSnapshot = input.dataStatus?.stale === true && input.dataSource !== 'enriched'
+  if (row.is_closed !== true || staleSnapshot) return 'provisional'
+  return 'ready'
+}
+
+function nonLowerConditionsReady(signal: ChanlunCandidateSignal): boolean {
+  return signal.conditions
+    .filter(item => item.id !== 'lower_level')
+    .every(item => item.state === 'met')
+}
+
+function allSignalConditionsReady(signal: ChanlunCandidateSignal): boolean {
+  return signal.conditions.every(item => item.state === 'met')
+}
+
+function lowerLevelCanBeMissing(signal: ChanlunCandidateSignal): boolean {
+  const lower = signal.conditions.find(item => item.id === 'lower_level')
+  return !lower || lower.state === 'waiting' || lower.state === 'unavailable'
+}
+
+function lowerLevelConfirmed(signal: ChanlunCandidateSignal): boolean {
+  return signal.conditions.find(item => item.id === 'lower_level')?.state === 'met'
+}
+
+function buildDecisionConditions(
+  technical: StockSummaryTechnical,
+  active: SignalRiskContext | null,
+  latest: SignalRiskContext | null,
+  conditions: StockSummaryCondition[],
+  risk: StockSummarySnapshot['risk'],
+  support: PriceZone | null,
+): Pick<StockSummaryDecision, 'upgradeConditions' | 'riskConditions'> {
+  const upgradeConditions: StockSummaryCondition[] = []
+  const riskConditions: StockSummaryCondition[] = []
+  const signal = active?.signal
+
+  if (signal?.status === 'candidate' && active?.direction === 'buy') {
+    upgradeConditions.push(...conditions.filter(item => item.state !== 'met'))
+    if (signal.kind !== 'first_buy') {
+      upgradeConditions.push(
+        scoreGate('decision-direction-score', '技术方向 ≥ 60', technical.score, 60, 'min'),
+        scoreGate('decision-trend-score', '趋势 ≥ 60', technical.trend, 60, 'min'),
+        scoreGate('decision-momentum-score', '动能 ≥ 60', technical.momentum, 60, 'min'),
+        scoreGate('decision-volume-price-score', '量价 ≥ 60', technical.volumePrice, 60, 'min'),
+        riskGate(risk),
+      )
+    }
+    if (risk.invalidation != null) {
+      riskConditions.push({
+        id: 'decision-buy-invalidation',
+        label: '买侧失效位',
+        state: 'waiting',
+        text: `触及 ${risk.invalidation.toFixed(3)} 时，买侧候选需要重新评估。`,
+        sourceId: signal.id,
+      })
+    }
+  } else if (signal?.status === 'candidate' && active?.direction === 'sell') {
+    upgradeConditions.push({
+      id: 'decision-sell-recovery',
+      label: '卖侧风险缓解',
+      state: 'waiting',
+      text: risk.invalidation != null
+        ? `价格重新站回 ${risk.invalidation.toFixed(3)} 上方后再评估卖侧候选。`
+        : '卖侧候选失效后再重新评估。',
+      sourceId: signal.id,
+    })
+    upgradeConditions.push(scoreGate('decision-recovery-score', '技术方向恢复 ≥ 60', technical.score, 60, 'min'))
+    riskConditions.push({
+      id: `decision-sell-signal-${signal.id}`,
+      label: '卖侧结构',
+      state: 'met',
+      text: `当前存在${shortSignalLabel(signal)}，仅作为当前周期风险信号。`,
+      sourceId: signal.id,
+    })
+    if (risk.invalidation != null) {
+      riskConditions.push({
+        id: 'decision-sell-invalidation',
+        label: '卖侧失效 / 风险缓解位',
+        state: 'waiting',
+        text: `价格重新站回 ${risk.invalidation.toFixed(3)} 上方时，卖侧候选需要重新评估。`,
+        sourceId: signal.id,
+      })
+    }
+  } else if (signal?.status === 'waiting_pullback') {
+    upgradeConditions.push(...conditions.filter(item => item.state !== 'met'))
+    upgradeConditions.push({
+      id: 'decision-pullback-confirmation',
+      label: '回抽确认',
+      state: 'waiting',
+      text: signal.nextWatch,
+      sourceId: signal.id,
+    })
+  } else {
+    upgradeConditions.push({
+      id: 'decision-buy-candidate',
+      label: '买侧结构候选',
+      state: 'waiting',
+      text: '当前周期尚未形成可升级的买侧候选。',
+    })
+    if (latest && (latest.signal.status === 'invalidated' || latest.signal.status === 'rejected')) {
+      riskConditions.push({
+        id: `decision-latest-${latest.signal.id}`,
+        label: '最近候选状态',
+        state: 'failed',
+        text: `最近${shortSignalLabel(latest.signal)}已${latest.signal.status === 'invalidated' ? '失效' : '不成立'}。`,
+        sourceId: latest.signal.id,
+      })
+    }
+  }
+
+  if (support && riskConditions.length < 3) {
+    riskConditions.push({
+      id: `decision-support-${support.id}`,
+      label: '最近支撑观察区',
+      state: 'waiting',
+      text: '跌破该区间仅作为风险观察，不替代候选的结构失效边界。',
+      targetId: support.id,
+    })
+  }
+
+  return {
+    upgradeConditions: [...new Map(upgradeConditions.map(item => [item.id, item])).values()].slice(0, 5),
+    riskConditions: [...new Map(riskConditions.map(item => [item.id, item])).values()].slice(0, 5),
+  }
+}
+
+function buildDecision(
+  input: StockSummaryInput,
+  row: KlineRow | null,
+  score: TechnicalScoreRow | null,
+  technical: StockSummaryTechnical,
+  structure: StockSummaryStructure,
+  active: SignalRiskContext | null,
+  latest: SignalRiskContext | null,
+  conflicts: StockSummaryConflict[],
+  conditions: StockSummaryCondition[],
+  risk: StockSummarySnapshot['risk'],
+  support: PriceZone | null,
+): StockSummaryDecision {
+  const inputState = decisionInputState(input, row, score)
+  const signal = active?.signal
+  const isCandidate = signal?.status === 'candidate'
+  const isBuyCandidate = isCandidate && active?.direction === 'buy'
+  const isFollowupBuyCandidate = isBuyCandidate && (signal?.kind === 'second_buy' || signal?.kind === 'third_buy')
+  const isSellCandidate = isCandidate && active?.direction === 'sell'
+  const structureReady = !!signal && nonLowerConditionsReady(signal)
+  const lowerMissingAllowed = !!signal && lowerLevelCanBeMissing(signal)
+  const lowerConfirmed = !!signal && lowerLevelConfirmed(signal)
+  const allReady = !!signal && allSignalConditionsReady(signal)
+  const strongBull = technical.score != null
+    && technical.trend != null
+    && technical.momentum != null
+    && technical.volumePrice != null
+    && technical.score >= 60
+    && technical.trend >= 60
+    && technical.momentum >= 60
+    && technical.volumePrice >= 60
+  const strongBear = technical.score != null
+    && technical.trend != null
+    && technical.momentum != null
+    && technical.volumePrice != null
+    && technical.score <= 40
+    && technical.trend <= 40
+    && technical.momentum <= 40
+    && technical.volumePrice <= 40
+  const noConflict = conflicts.length === 0
+  const riskReady = risk.status === 'calculable' && risk.riskReward1 != null && risk.riskReward1 >= 2
+
+  let state: StockDecisionState = 'wait'
+  if (inputState === 'ready' && noConflict) {
+    if (isSellCandidate && allReady && lowerConfirmed && strongBear && structure.direction === 'bear') {
+      state = 'sell'
+    } else if (isSellCandidate && structureReady && lowerMissingAllowed
+      && (technical.score != null && technical.score <= 40 || structure.trendType === 'downtrend_proxy')
+      && !strongBull
+      && structure.direction === 'bear') {
+      state = 'reduce'
+    } else if (isFollowupBuyCandidate && allReady && lowerConfirmed && strongBull && riskReady) {
+      state = 'buy'
+    } else if (isFollowupBuyCandidate && structureReady && lowerMissingAllowed && strongBull && riskReady) {
+      state = 'probe'
+    }
+  }
+
+  let reason: string
+  if (inputState === 'blocked') {
+    reason = '当前周期数据或结构输入不足，暂不生成可复核的行动结论。'
+  } else if (inputState === 'provisional') {
+    reason = '当前行情为未闭合或过期快照，先等待数据确认后再更新行动状态。'
+  } else if (state === 'sell' && signal) {
+    reason = `${PERIOD_LABELS[input.period]} ${structure.trendLabel}且${shortSignalLabel(signal)}成立，技术维度同步偏弱，卖侧确认门已满足。`
+  } else if (state === 'reduce' && signal) {
+    reason = `${PERIOD_LABELS[input.period]} ${structure.trendLabel}且${shortSignalLabel(signal)}成立，技术分 ${technical.score ?? '—'}；低级别确认缺失，因此不升级为卖出。`
+  } else if (state === 'buy' && signal) {
+    reason = `${PERIOD_LABELS[input.period]} ${shortSignalLabel(signal)}、技术维度和结构空间均达到确认门，当前可进入买侧确认状态。`
+  } else if (state === 'probe' && signal) {
+    reason = `${PERIOD_LABELS[input.period]} ${shortSignalLabel(signal)}成立，技术维度和结构空间较好；低级别确认缺失，暂按试仓观察。`
+  } else if (conflicts.length > 0) {
+    reason = '技术、结构或波浪方向存在分歧，暂不升级行动状态。'
+  } else if (signal?.status === 'waiting_pullback') {
+    reason = `${PERIOD_LABELS[input.period]} ${shortSignalLabel(signal)}仍在等待回抽确认，当前不追随未完成结构。`
+  } else if (latest && (latest.signal.status === 'invalidated' || latest.signal.status === 'rejected')) {
+    reason = `最近${shortSignalLabel(latest.signal)}已${latest.signal.status === 'invalidated' ? '失效' : '不成立'}，等待新的可复核结构。`
+  } else {
+    reason = `${PERIOD_LABELS[input.period]} 当前没有满足行动升级门槛的有效候选，继续等待结构和技术共振。`
+  }
+
+  const conditionsByContext = buildDecisionConditions(technical, active, latest, conditions, risk, support)
+  let flatAction: StockSummaryDecision['flatAction']
+  let holdingAction: StockSummaryDecision['holdingAction']
+  if (inputState === 'blocked') {
+    flatAction = '等待'
+    holdingAction = '持有观察'
+  } else if (inputState === 'provisional') {
+    flatAction = '等待'
+    holdingAction = '持有观察'
+  } else {
+    flatAction = state === 'buy' ? '买入' : state === 'probe' ? '试仓' : state === 'reduce' || state === 'sell' ? '暂不介入' : '等待'
+    holdingAction = state === 'buy' ? '持有' : state === 'sell' ? '卖出' : state === 'reduce' ? '减仓' : '持有观察'
+  }
+  return {
+    state,
+    flatAction,
+    holdingAction,
+    inputState,
+    reason,
+    ...conditionsByContext,
+  }
+}
+
 function buildLimitations(input: StockSummaryInput, quality: StockSummaryQualityInfo): string[] {
   const limitations = [...quality.reasons]
   if (input.chanlun.definitionMode === 'structure_proxy') limitations.push(input.chanlun.approximationLoss)
@@ -518,6 +814,19 @@ export function buildStockSummary(input: StockSummaryInput): StockSummarySnapsho
     ? [{ id: `invalidation-${active.signal.id}`, label: '结构失效边界', state: 'waiting' as const, text: `若触及 ${active.signal.boundary.toFixed(3)}，${active.direction === 'buy' ? '买侧' : '卖侧'}候选需要重新评估。`, sourceId: active.signal.id }]
     : []
   const limitations = buildLimitations(input, quality)
+  const decision = buildDecision(
+    input,
+    row,
+    score,
+    technical,
+    structure,
+    active,
+    latest,
+    conflicts,
+    conditions,
+    risk,
+    support,
+  )
   return {
     context: {
       symbol: input.symbol,
@@ -535,6 +844,7 @@ export function buildStockSummary(input: StockSummaryInput): StockSummarySnapsho
     quality,
     versions: {
       summary: 'stock-summary-v1',
+      decision: 'stock-decision-v1',
       technical: input.technicalScores?.version ?? null,
       structure: input.chanlun.ruleVersion ?? null,
       levels: input.priceZones[0]?.ruleVersion ?? null,
@@ -544,6 +854,7 @@ export function buildStockSummary(input: StockSummaryInput): StockSummarySnapsho
     technical,
     structure,
     observation,
+    decision,
     headline,
     summary,
     supportingEvidence: evidence.supporting.slice(0, 3),

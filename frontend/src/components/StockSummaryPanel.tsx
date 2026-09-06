@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { fmtAssetPrice, fmtPct } from '@/lib/format'
 import type { PriceZone } from '@/lib/priceZones'
 import type {
+  StockDecisionState,
   StockSummaryEvidence,
   StockSummarySnapshot,
   StockSummaryTone,
@@ -73,6 +74,21 @@ function scoreTone(value: number | null): StockSummaryTone {
   return value >= 60 ? 'bull' : value <= 40 ? 'bear' : 'neutral'
 }
 
+const DECISION_LABELS: Record<StockDecisionState, string> = {
+  buy: '买入',
+  probe: '试仓',
+  wait: '等待',
+  reduce: '减仓',
+  sell: '卖出',
+}
+
+function decisionTone(snapshot: StockSummarySnapshot): StockSummaryTone {
+  if (snapshot.decision.inputState !== 'ready') return snapshot.decision.inputState === 'blocked' ? 'neutral' : 'warning'
+  if (snapshot.decision.state === 'buy' || snapshot.decision.state === 'probe') return 'bull'
+  if (snapshot.decision.state === 'reduce' || snapshot.decision.state === 'sell') return 'bear'
+  return 'warning'
+}
+
 function ConditionItem({ label, text, state }: { label: string; text: string; state: string }) {
   const tone: StockSummaryTone = state === 'met' ? 'bull' : state === 'failed' ? 'bear' : state === 'unavailable' ? 'warning' : 'neutral'
   const stateLabel = state === 'met' ? '满足' : state === 'failed' ? '不满足' : state === 'unavailable' ? '数据不足' : '等待'
@@ -97,6 +113,7 @@ export function StockSummaryPanel({ snapshot, onSelectZone, onSelectSignal, onFo
   const [collapsed, setCollapsed] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const tone = TONE_CLASSES[snapshot.observation.tone]
+  const actionTone = TONE_CLASSES[decisionTone(snapshot)]
   const period = snapshot.context.period
   const activeSignalId = snapshot.structure.activeCandidate?.id
   const dimensions: Array<{ label: string; value: number | null; status: string; focus: FocusSection }> = [
@@ -111,6 +128,17 @@ export function StockSummaryPanel({ snapshot, onSelectZone, onSelectSignal, onFo
     else if (item.targetId === snapshot.levels.resistance?.id) onSelectZone?.(snapshot.levels.resistance)
     else if (item.targetId === snapshot.levels.current?.id) onSelectZone?.(snapshot.levels.current)
     else onSelectSignal?.(item.targetId)
+  }
+
+  const boundary = snapshot.structure.activeCandidate?.boundary ?? snapshot.risk.invalidation
+  const boundaryLabel = snapshot.structure.activeCandidate?.kind.endsWith('_sell')
+    ? '卖侧失效 / 风险缓解位'
+    : '买侧失效位'
+  const formatBoundary = boundary == null ? '—' : fmtAssetPrice(boundary, snapshot.context.assetType)
+  const operationZoneClick = (zone: PriceZone | null) => {
+    if (!zone) return
+    onFocusSection?.('levels')
+    onSelectZone?.(zone)
   }
 
   return <section className="border-b border-border/70">
@@ -135,6 +163,56 @@ export function StockSummaryPanel({ snapshot, onSelectZone, onSelectSignal, onFo
     {!collapsed && <div className="grid gap-2 p-2">
       {isLoading && snapshot.quality.status === 'blocked' && <div className="rounded border border-border bg-elevated/40 px-2 py-1.5 text-[9px] text-muted">正在加载当前周期综合分析…</div>}
       {error && snapshot.quality.status === 'blocked' && <div className="flex items-center justify-between gap-2 rounded border border-bear/30 bg-bear/5 px-2 py-1.5 text-[9px] text-bear"><span>当前周期行情加载失败，摘要暂不可用。</span>{onRetry && <button type="button" onClick={onRetry} className="rounded-btn bg-elevated px-2 py-1 text-[9px] text-secondary hover:text-foreground">重试</button>}</div>}
+      <div className={`rounded-card border p-2.5 shadow-sm ${actionTone.badge}`}>
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className={`rounded border px-1.5 py-0.5 text-[9px] font-semibold ${actionTone.badge}`}>当前行动：{DECISION_LABELS[snapshot.decision.state]}</span>
+              <span className="text-[9px] text-muted">规则状态 {snapshot.decision.inputState === 'ready' ? '可用' : snapshot.decision.inputState === 'provisional' ? '待确认' : '数据不足'}</span>
+            </div>
+            <div className={`mt-1 text-xs font-semibold ${actionTone.text}`}>{snapshot.decision.reason}</div>
+          </div>
+          <span className={`shrink-0 font-mono text-[10px] ${actionTone.text}`}>{snapshot.technical.score == null ? '技术分 —' : `技术分 ${scoreText(snapshot.technical.score)}`}</span>
+        </div>
+        <div className="mt-2 grid grid-cols-2 gap-1.5">
+          <div className="rounded border border-border/60 bg-base/30 px-2 py-1.5">
+            <div className="text-[9px] text-muted">未持有</div>
+            <div className={`mt-0.5 text-sm font-semibold ${actionTone.text}`}>{snapshot.decision.flatAction}</div>
+            <div className="mt-0.5 text-[9px] text-muted">空仓视角</div>
+          </div>
+          <div className="rounded border border-border/60 bg-base/30 px-2 py-1.5">
+            <div className="text-[9px] text-muted">已持有</div>
+            <div className={`mt-0.5 text-sm font-semibold ${actionTone.text}`}>{snapshot.decision.holdingAction}</div>
+            <div className="mt-0.5 text-[9px] text-muted">持仓视角</div>
+          </div>
+        </div>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div className="rounded-card border border-border bg-surface/50 p-2">
+          <div className="mb-1 text-[10px] font-medium text-foreground">转强 / 升级需要</div>
+          {snapshot.decision.upgradeConditions.length > 0
+            ? snapshot.decision.upgradeConditions.slice(0, 3).map(item => <ConditionItem key={item.id} label={item.label} text={item.text} state={item.state} />)
+            : <div className="text-[9px] text-muted">当前没有待补条件</div>}
+        </div>
+        <div className="rounded-card border border-border bg-surface/50 p-2">
+          <div className="mb-1 text-[10px] font-medium text-foreground">风险 / 失效观察</div>
+          {snapshot.decision.riskConditions.length > 0
+            ? snapshot.decision.riskConditions.slice(0, 3).map(item => <ConditionItem key={item.id} label={item.label} text={item.text} state={item.state} />)
+            : <div className="text-[9px] text-muted">暂无可追溯风险条件</div>}
+        </div>
+      </div>
+      <div className="rounded-card border border-border bg-surface/50 p-2">
+        <div className="mb-1 text-[10px] font-medium text-foreground">操作参考（观察区，不是自动触发）</div>
+        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+          <div className="rounded border border-border/70 bg-base/30 px-2 py-1.5">
+            <span className="block text-[9px] text-muted">当前价</span>
+            <span className="mt-0.5 block truncate font-mono text-[10px] tabular-nums text-secondary">{fmtAssetPrice(snapshot.risk.referencePrice, snapshot.context.assetType)}</span>
+          </div>
+          {snapshot.levels.support && <ZoneButton zone={snapshot.levels.support} label="最近支撑" assetType={snapshot.context.assetType} onClick={() => operationZoneClick(snapshot.levels.support)} />}
+          {snapshot.levels.resistance && <ZoneButton zone={snapshot.levels.resistance} label="最近压力" assetType={snapshot.context.assetType} onClick={() => operationZoneClick(snapshot.levels.resistance)} />}
+          {boundary != null && <div className="rounded border border-border/70 bg-base/30 px-2 py-1.5"><span className="block text-[9px] text-muted">{boundaryLabel}</span><span className="mt-0.5 block truncate font-mono text-[10px] tabular-nums text-secondary">{formatBoundary}</span></div>}
+        </div>
+      </div>
       <div className="rounded-card border border-border bg-surface/70 p-2.5 shadow-sm">
         <div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="text-sm font-medium text-foreground">{snapshot.headline}</div><div className="mt-1 text-[10px] leading-relaxed text-secondary">{snapshot.summary}</div></div><span className={`shrink-0 rounded border px-1.5 py-0.5 text-[9px] ${TONE_CLASSES[snapshot.quality.status === 'ready' ? 'bull' : snapshot.quality.status === 'limited' ? 'warning' : 'neutral'].badge}`}>{snapshot.quality.label}</span></div>
         <div className="mt-2 grid grid-cols-3 gap-1.5 border-t border-border/50 pt-2 sm:grid-cols-4">
