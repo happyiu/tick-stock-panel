@@ -91,6 +91,8 @@ interface Props {
   dailyKlineFlex?: string
   /** 日K/分时并排时, 是否允许拖动中间分隔线调整两栏宽度。 */
   resizableSplit?: boolean
+  /** 将日K与右侧面板限制在同一高度，并让两栏内容分别滚动。 */
+  independentPaneScroll?: boolean
   /** 主蜡烛图周期；信息条仍使用日线最新两根，避免周期切换改变当日涨跌口径。 */
   period?: KlinePeriod
   periodDays?: number
@@ -125,6 +127,7 @@ export function StockPanel({
   intradayDays = DEFAULT_INTRADAY_DAYS,
   dailyKlineFlex = 'flex-1',
   resizableSplit = false,
+  independentPaneScroll = false,
   period = '1d',
   periodDays = DEFAULT_30M_DAYS,
 }: Props) {
@@ -400,26 +403,35 @@ export function StockPanel({
     : resolvedRightPaneMode === 'intraday' ? '分时图' : '右侧面板'
 
   return (
-    <div className={className}>
-      <StockInfoBar
-        symbol={symbol}
-        name={name}
-        stockInfo={stockInfo}
-        rows={rawRows}
-        assetType={assetType}
-        fields={fields}
-        onFieldsChange={handleFieldsChange}
-        financialMetrics={financialMetrics}
-        onMonitor={onMonitor}
-        inWatchlist={inWatchlist}
-        onAddToWatchlist={onAddToWatchlist}
-        onRemoveFromWatchlist={onRemoveFromWatchlist}
-        watchlistPending={watchlistPending}
-      />
+    <div className={`${independentPaneScroll ? 'flex h-full min-h-0 flex-col' : ''} ${className ?? ''}`}>
+      <div className={independentPaneScroll ? 'shrink-0' : ''}>
+        <StockInfoBar
+          symbol={symbol}
+          name={name}
+          stockInfo={stockInfo}
+          rows={rawRows}
+          assetType={assetType}
+          fields={fields}
+          onFieldsChange={handleFieldsChange}
+          financialMetrics={financialMetrics}
+          onMonitor={onMonitor}
+          inWatchlist={inWatchlist}
+          onAddToWatchlist={onAddToWatchlist}
+          onRemoveFromWatchlist={onRemoveFromWatchlist}
+          watchlistPending={watchlistPending}
+        />
+      </div>
 
       {infoBarOnly ? null : (
-      <div ref={splitContainerRef} className={`relative flex gap-3 items-stretch ${splitDragging ? 'select-none' : ''}`}>
-        <div ref={dailyPaneRef} className={`${dailyKlineFlex} min-w-0`} style={dailyPaneStyle}>
+      <div
+        ref={splitContainerRef}
+        className={`relative flex gap-3 items-stretch ${independentPaneScroll ? 'min-h-0 flex-1 overflow-hidden' : ''} ${splitDragging ? 'select-none' : ''}`}
+      >
+        <div
+          ref={dailyPaneRef}
+          className={`${dailyKlineFlex} min-w-0 ${independentPaneScroll ? 'min-h-0 overflow-y-auto' : ''}`}
+          style={dailyPaneStyle}
+        >
           <StockDailyKChart
             symbol={symbol}
             height={height}
@@ -442,7 +454,7 @@ export function StockPanel({
         </div>
 
         {rightPaneVisible && (
-          <div className="relative flex-1 min-h-0 min-w-0 border-l border-border pl-3">
+          <div className={`relative flex-1 min-h-0 min-w-0 border-l border-border pl-3 ${independentPaneScroll ? 'overflow-hidden' : ''}`}>
             {resizableSplit && (
               <div
                 role="separator"

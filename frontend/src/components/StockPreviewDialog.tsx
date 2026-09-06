@@ -334,7 +334,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
             transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
             className={cn(
               'relative rounded-card border border-border bg-base shadow-2xl overflow-hidden flex flex-col transition-all duration-200 ease-smooth',
-              maximized ? 'w-screen h-screen max-w-none max-h-none' : 'w-[92vw] max-w-[1200px] max-h-[95vh]',
+              maximized ? 'w-screen h-screen max-w-none max-h-none' : 'w-[92vw] h-[95vh] max-w-[1200px] max-h-[95vh]',
             )}
           >
             {/* 顶栏 */}
@@ -619,7 +619,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
             })()}
 
             {/* 图表内容 */}
-            <div className="flex-1 overflow-auto p-4">
+            <div className={cn('flex-1 min-h-0 p-4', view === 'daily' ? 'overflow-hidden' : 'overflow-auto')}>
               {view === 'daily' ? (
                 <StockPanel
                   symbol={symbol}
@@ -636,6 +636,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                   intradayDays={effectiveIntradayDays}
                   dailyKlineFlex="flex-[1.4]"
                   resizableSplit
+                  independentPaneScroll
                   period={period}
                   periodDays={DEFAULT_30M_DAYS}
                 />
