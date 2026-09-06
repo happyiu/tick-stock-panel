@@ -696,7 +696,8 @@ function buildOption(
         }
       } else {
         markPointData.push({
-          name: m.label ?? '',
+          // markPoint 点击需要回传对应 K 线日期；显示文字由 label.formatter 单独负责。
+          name: m.date,
           coord: [m.date, isBuy ? d.low : d.high],
           symbol: 'arrow', symbolSize: 12,
           symbolRotate: isBuy ? 0 : 180,
@@ -1409,7 +1410,8 @@ export function EChartsCandlestick({
         }
       } else {
         markPointData.push({
-          name: m.label ?? '',
+          // markPoint 点击需要回传对应 K 线日期；显示文字由 label.formatter 单独负责。
+          name: m.date,
           coord: [m.date, isBuy ? d.low : d.high],
           symbol: 'arrow', symbolSize: 12,
           symbolRotate: isBuy ? 0 : 180,

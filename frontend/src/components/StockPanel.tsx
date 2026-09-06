@@ -35,12 +35,22 @@ import { buildPriceZones, type PriceZone } from '@/lib/priceZones'
 import { buildSignalRiskContexts, selectPreferredSignal, type SignalRiskContext } from '@/lib/signalRisk'
 import { buildStockSummary } from '@/lib/stockSummary'
 import { StockSummaryPanel } from '@/components/StockSummaryPanel'
+import { actionSignalMarkers, buildActionSignals, compareActionSignals, type ActionSignalInput, type ActionSignalResult } from '@/lib/actionSignals'
 
 const DEFAULT_SPLIT_RATIO = 1.4 / 2.4
 const MIN_SPLIT_RATIO = 0.25
 const MAX_SPLIT_RATIO = 0.75
 const SPLIT_GAP_PX = 12
 const CHANLUN_PERIODS: KlinePeriod[] = ['30m', '1d', '1w', '1mo']
+const DAILY_CLOSE_TIME = '15:00'
+
+function previousCalendarDate(value: string): string {
+  const date = new Date(`${value}T12:00:00`)
+  if (Number.isNaN(date.getTime())) return value
+  date.setDate(date.getDate() - 1)
+  return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-')
+}
+
 function clampSplitRatioValue(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_SPLIT_RATIO
   return Math.max(MIN_SPLIT_RATIO, Math.min(MAX_SPLIT_RATIO, value))
@@ -227,6 +237,7 @@ export function StockPanel({
   // 弹窗整体高度在切换瞬间不塌陷 (不抖动)。
   const kline = useQuery({ ...klineDailyQueryOptions(symbol, infoDateRange, extColumns, includeTechnicalScores), enabled: !!symbol })
   const rawRows: KlineRow[] = kline.data?.rows ?? []
+  const assetType = kline.data?.asset_type
   // OHLC 视图用于日期选中/昨收价推导 (与图表侧同口径)
   const rows = useMemo(() => toOHLC(rawRows, '1d'), [rawRows])
   // 技术面板观察与左侧 K 线完全相同的 period query; 1d 时会与上面的日K query 共享缓存。
@@ -242,6 +253,17 @@ export function StockPanel({
     () => toOHLC(periodKline.data?.rows ?? [], period),
     [period, periodKline.data?.rows],
   )
+  const comparisonPeriod: KlinePeriod | null = period === '1d' ? '30m' : period === '30m' ? '1d' : null
+  const comparisonEndDate = selectedBarKey?.slice(0, 10) ?? chartDateRange.end
+  const comparisonRange = useMemo(() => {
+    const endDate = new Date(`${comparisonEndDate}T12:00:00`)
+    return defaultKlineRange(comparisonPeriod ?? '1d', Number.isNaN(endDate.getTime()) ? new Date() : endDate)
+  }, [comparisonEndDate, comparisonPeriod])
+  const comparisonKline = useQuery({
+    ...klinePeriodQueryOptions(symbol, comparisonPeriod ?? '1d', comparisonRange, periodDays, extColumns, true),
+    enabled: !!symbol && resolvedRightPaneMode === 'technical' && comparisonPeriod != null,
+    staleTime: 30_000,
+  })
   const chanlunAnalysis = useMemo(
     () => analyzeChanlun(periodRows, selectedBarKey, { period, source: chanlunSource }),
     [chanlunSource, period, periodRows, selectedBarKey],
@@ -266,6 +288,125 @@ export function StockPanel({
     () => signalRiskContexts.find(context => context.signal.id === selectedSignalId) ?? preferredSignal,
     [preferredSignal, selectedSignalId, signalRiskContexts],
   )
+  const actionInput = useMemo<ActionSignalInput | null>(() => {
+    if (period !== '1d' && period !== '30m') return null
+    return {
+      symbol,
+      assetType,
+      period,
+      rows: periodRows,
+      technicalScores: periodKline.data?.technical_scores,
+      dataStatus: periodKline.data?.data_status,
+      selectedDate: selectedBarKey,
+    }
+  }, [assetType, period, periodKline.data?.data_status, periodKline.data?.technical_scores, periodRows, selectedBarKey, symbol])
+  const actionInputKey = `${symbol}|${period}|${chartDateRange.start}|${chartDateRange.end}|${selectedBarKey ?? ''}|${periodKline.dataUpdatedAt}|${periodRows.length}`
+  const actionContextKey = `${symbol}|${period}|${chartDateRange.start}|${chartDateRange.end}`
+  const actionSnapshotKey = `${symbol}|${period}|${chartDateRange.start}|${chartDateRange.end}|${selectedBarKey ?? ''}`
+  const actionWorkerRef = useRef<Worker | null>(null)
+  const actionWorkerRequestRef = useRef(0)
+  const actionResultCacheRef = useRef(new Map<string, ActionSignalResult>())
+  const [workerAction, setWorkerAction] = useState<{ key: string; contextKey: string; requestId: number; result: ActionSignalResult } | null>(null)
+  useEffect(() => {
+    const requestId = actionWorkerRequestRef.current + 1
+    actionWorkerRequestRef.current = requestId
+    if (!actionInput) {
+      setWorkerAction(null)
+      return
+    }
+    const resolveActionResult = (result: ActionSignalResult) => {
+      if (result.status === 'stale') {
+        const previous = actionResultCacheRef.current.get(actionSnapshotKey)
+        if (previous) {
+          return {
+            ...previous,
+            status: 'stale' as const,
+            dataStatus: 'stale' as const,
+            reason: '当前为过期快照，保留上一份有效行动信号，不确认新的行动信号。',
+          }
+        }
+      } else if (result.status === 'ready' || result.status === 'provisional') {
+        const cache = actionResultCacheRef.current
+        cache.set(actionSnapshotKey, result)
+        if (cache.size > 20) {
+          const oldestKey = cache.keys().next().value
+          if (typeof oldestKey === 'string') cache.delete(oldestKey)
+        }
+      }
+      return result
+    }
+    let worker = actionWorkerRef.current
+    try {
+      if (!worker) {
+        worker = new Worker(new URL('../lib/actionSignals.worker.ts', import.meta.url), { type: 'module' })
+        actionWorkerRef.current = worker
+      }
+    } catch {
+      setWorkerAction({ key: actionInputKey, contextKey: actionContextKey, requestId, result: resolveActionResult(buildActionSignals(actionInput)) })
+      return
+    }
+    const handleMessage = (event: MessageEvent<{ requestId: number; result: ActionSignalResult }>) => {
+      if (event.data.requestId !== requestId || actionWorkerRequestRef.current !== requestId) return
+      setWorkerAction({ key: actionInputKey, contextKey: actionContextKey, requestId, result: resolveActionResult(event.data.result) })
+    }
+    const handleError = () => {
+      if (actionWorkerRequestRef.current !== requestId) return
+      setWorkerAction({ key: actionInputKey, contextKey: actionContextKey, requestId, result: resolveActionResult(buildActionSignals(actionInput)) })
+    }
+    worker.addEventListener('message', handleMessage)
+    worker.addEventListener('error', handleError)
+    worker.postMessage({ requestId, input: actionInput })
+    return () => {
+      worker?.removeEventListener('message', handleMessage)
+      worker?.removeEventListener('error', handleError)
+    }
+  }, [actionContextKey, actionInput, actionInputKey, actionSnapshotKey])
+  useEffect(() => () => {
+    actionWorkerRef.current?.terminate()
+    actionWorkerRef.current = null
+  }, [])
+  const actionSignals = useMemo(
+    () => {
+      if (!actionInput || !workerAction) return null
+      // 行情轮询或历史 K 线点选会触发下一次 Worker 计算。保留同一标的、周期和窗口
+      // 的上一份结果，避免计算空窗让行动卡在新旧两套摘要之间闪烁。
+      if (workerAction.key === actionInputKey || workerAction.contextKey === actionContextKey) return workerAction.result
+      return null
+    },
+    [actionContextKey, actionInput, actionInputKey, workerAction],
+  )
+  const comparisonRows = useMemo(
+    () => comparisonPeriod ? toOHLC(comparisonKline.data?.rows ?? [], comparisonPeriod) : [],
+    [comparisonKline.data?.rows, comparisonPeriod],
+  )
+  const comparisonSelectedDate = useMemo(() => {
+    if (!selectedBarKey || !comparisonPeriod) return null
+    const selectedDay = selectedBarKey.slice(0, 10)
+    if (period === '30m' && comparisonPeriod === '1d' && selectedBarKey.slice(11, 16) < DAILY_CLOSE_TIME) {
+      return previousCalendarDate(selectedDay)
+    }
+    return comparisonPeriod === '30m' ? `${selectedDay} 23:59` : selectedDay
+  }, [comparisonPeriod, period, selectedBarKey])
+  const comparisonActionSignals = useMemo(() => {
+    if (!comparisonPeriod) return null
+    return buildActionSignals({
+      symbol,
+      assetType,
+      period: comparisonPeriod,
+      rows: comparisonRows,
+      technicalScores: comparisonKline.data?.technical_scores,
+      dataStatus: comparisonKline.data?.data_status,
+      selectedDate: comparisonSelectedDate,
+    })
+  }, [assetType, comparisonKline.data?.data_status, comparisonKline.data?.technical_scores, comparisonPeriod, comparisonRows, comparisonSelectedDate, symbol])
+  const actionComparison = useMemo(
+    () => actionSignals ? compareActionSignals(actionSignals, comparisonActionSignals) : null,
+    [actionSignals, comparisonActionSignals],
+  )
+  const actionMarkers = useMemo(
+    () => actionSignals ? actionSignalMarkers(actionSignals) : [],
+    [actionSignals],
+  )
   const summaryRows = periodKline.data?.rows ?? []
   const stockSummary = useMemo(
     () => buildStockSummary({
@@ -283,6 +424,8 @@ export function StockPanel({
       priceZones,
       signalRiskContexts,
       preferredSignal,
+      actionSignals,
+      actionComparison,
     }),
     [
       symbol,
@@ -299,6 +442,8 @@ export function StockPanel({
       priceZones,
       signalRiskContexts,
       preferredSignal,
+      actionSignals,
+      actionComparison,
     ],
   )
   const priceBands: ChartPriceBand[] = useMemo(() => {
@@ -346,7 +491,6 @@ export function StockPanel({
   const selectableRows = period !== '1d' && periodRows.length > 0 ? periodRows : rows
   const stockInfo = kline.data?.stock_info
   const name = kline.data?.name
-  const assetType = kline.data?.asset_type
 
   const multiObservationEnd = selectedBarKey?.slice(0, 10) ?? chartDateRange.end
   const multiPeriodQueries = useQueries({
@@ -624,6 +768,7 @@ export function StockPanel({
             height={height}
             dateRange={chartDateRange}
             markers={markers}
+            actionMarkers={actionMarkers}
             ranges={ranges}
             priceBands={decisionSections.showPriceZones ? priceBands : undefined}
             priceLines={chartPriceLines}

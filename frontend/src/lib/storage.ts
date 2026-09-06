@@ -150,6 +150,9 @@ export const storage = {
   /** 个股预览 K 线艾略特波浪覆盖层配置 */
   stockPreviewElliottOverlay: kv<StockPreviewElliottOverlayConfig>('stock_preview_elliott_overlay'),
 
+  /** 个股预览行动信号显示状态（默认开启） */
+  stockPreviewActionSignals: kv<boolean>('stock_preview_action_signals'),
+
   /** 个股预览 K 线与右侧面板的分栏比例 */
   stockPreviewSplitRatio: kv<number>('stock_preview_split_ratio'),
 

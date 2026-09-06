@@ -15,6 +15,7 @@ import type {
 } from '@/lib/chanlun'
 import type { PriceZone } from '@/lib/priceZones'
 import type { SignalRiskContext } from '@/lib/signalRisk'
+import type { ActionSignalComparison, ActionSignalResult } from '@/lib/actionSignals'
 
 export type StockSummaryQuality = 'ready' | 'limited' | 'blocked'
 export type StockSummaryTone = 'bull' | 'bear' | 'neutral' | 'warning'
@@ -159,6 +160,8 @@ export interface StockSummarySnapshot {
     reason?: string
   }
   limitations: string[]
+  action?: ActionSignalResult | null
+  actionComparison?: ActionSignalComparison | null
 }
 
 export interface StockSummaryInput {
@@ -177,6 +180,8 @@ export interface StockSummaryInput {
   priceZones: PriceZone[]
   signalRiskContexts: SignalRiskContext[]
   preferredSignal: SignalRiskContext | null
+  actionSignals?: ActionSignalResult | null
+  actionComparison?: ActionSignalComparison | null
 }
 
 const PERIOD_LABELS: Record<KlinePeriod, string> = {
@@ -865,6 +870,8 @@ export function buildStockSummary(input: StockSummaryInput): StockSummarySnapsho
     levels: { support, resistance, current },
     risk,
     limitations,
+    action: input.actionSignals ?? null,
+    actionComparison: input.actionComparison ?? null,
   }
 }
 

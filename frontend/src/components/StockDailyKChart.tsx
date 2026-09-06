@@ -70,6 +70,8 @@ interface Props {
   className?: string
   dateRange?: { start: string; end: string }
   markers?: ChartMarker[]
+  /** 行动决策层历史事件标记；仅日线和30分钟周期接入。 */
+  actionMarkers?: ChartMarker[]
   ranges?: ChartRange[]
   priceBands?: ChartPriceBand[]
   priceLines?: ChartPriceLine[]
@@ -158,6 +160,7 @@ export function StockDailyKChart({
   className,
   dateRange: externalDateRange,
   markers,
+  actionMarkers,
   ranges,
   priceBands,
   priceLines,
@@ -180,6 +183,7 @@ export function StockDailyKChart({
 }: Props) {
   const [activeIndicators, setActiveIndicators] = useState<string[]>(['vol'])
   const [showMarkers, setShowMarkers] = useState(true)
+  const [showActionSignals, setShowActionSignals] = useState(() => storage.stockPreviewActionSignals.get(true))
   const [volumeCompare, setVolumeCompare] = useState<VolumeCompareConfig>(() =>
     normalizeVolumeCompare(storage.stockVolumeCompare.get(DEFAULT_VOLUME_COMPARE)),
   )
@@ -206,8 +210,17 @@ export function StockDailyKChart({
   const effectiveShowLimitMarkers = showLimitMarkers && period === '1d'
   const allMarkers = useMemo(() => [
     ...(markers ?? []),
+    ...(showActionSignals && (period === '1d' || period === '30m') ? (actionMarkers ?? []) : []),
     ...(effectiveShowLimitMarkers ? limitMarkers : []),
-  ], [effectiveShowLimitMarkers, limitMarkers, markers])
+  ], [actionMarkers, effectiveShowLimitMarkers, limitMarkers, markers, period, showActionSignals])
+
+  const toggleActionSignals = useCallback(() => {
+    setShowActionSignals(value => {
+      const next = !value
+      storage.stockPreviewActionSignals.set(next)
+      return next
+    })
+  }, [])
 
   const toggleIndicator = useCallback((key: string) => {
     setActiveIndicators(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key])
@@ -431,6 +444,19 @@ export function StockDailyKChart({
               }`}
             >
               异动
+            </button>
+          )}
+          {actionMarkers && (period === '1d' || period === '30m') && (
+            <button
+              type="button"
+              onClick={toggleActionSignals}
+              className={`ml-1 px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors ${
+                showActionSignals ? 'text-accent bg-accent/10' : 'bg-elevated text-muted hover:text-secondary'
+              }`}
+              aria-pressed={showActionSignals}
+              title={showActionSignals ? '隐藏行动信号' : '显示行动信号'}
+            >
+              行动信号
             </button>
           )}
         </div>

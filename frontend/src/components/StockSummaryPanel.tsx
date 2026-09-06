@@ -8,6 +8,7 @@ import type {
   StockSummarySnapshot,
   StockSummaryTone,
 } from '@/lib/stockSummary'
+import type { ActionCurrentAction, ActionSignalComparison, ActionSignalResult } from '@/lib/actionSignals'
 
 type FocusSection = 'technical' | 'structure' | 'levels' | 'risk'
 
@@ -80,6 +81,58 @@ const DECISION_LABELS: Record<StockDecisionState, string> = {
   wait: '等待',
   reduce: '减仓',
   sell: '卖出',
+}
+
+const ACTION_LABELS: Record<ActionCurrentAction, string> = {
+  attack: '进攻',
+  add: '加仓',
+  reduce: '减仓',
+  retreat: '撤退',
+  hold: '持有',
+  defensive: '偏防守',
+  wait: '等待',
+  wait_defensive: '等待·偏防守',
+}
+
+function actionTone(action: ActionSignalResult): StockSummaryTone {
+  if (action.status === 'blocked') return 'neutral'
+  if (action.status === 'provisional' || action.status === 'stale') return 'warning'
+  if (action.current.action === 'attack' || action.current.action === 'add' || action.current.action === 'hold') return 'bull'
+  if (action.current.action === 'reduce' || action.current.action === 'retreat' || action.current.action === 'defensive') return 'bear'
+  return 'warning'
+}
+
+function ActionSignalCard({ action, comparison, assetType }: { action: ActionSignalResult; comparison?: ActionSignalComparison | null; assetType?: string }) {
+  const tone = TONE_CLASSES[actionTone(action)]
+  const event = action.currentEvent
+  const score = action.current.score
+  const scoreValues = [score?.direction, score?.trend, score?.momentum, score?.volumePrice]
+  const scoreLabel = score && scoreValues.every(value => value != null) ? `方向 ${Math.round(score.direction!)} · 趋势 ${Math.round(score.trend!)} · 动能 ${Math.round(score.momentum!)} · 量价 ${Math.round(score.volumePrice!)}` : '技术评分 —'
+  const statusLabel = action.status === 'ready' ? '已确认' : action.status === 'provisional' ? '待收盘确认' : action.status === 'stale' ? '过期快照' : '数据不足'
+  return <div className={`rounded-card border p-2.5 shadow-sm ${tone.badge}`}>
+    <div className="flex items-start justify-between gap-2">
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className={`rounded border px-1.5 py-0.5 text-[9px] font-semibold ${tone.badge}`}>行动信号：{ACTION_LABELS[action.current.action]}</span>
+          <span className="text-[9px] text-muted">{statusLabel}</span>
+        </div>
+        <div className={`mt-1 text-xs font-semibold ${tone.text}`}>{action.reason}</div>
+      </div>
+      <span className={`shrink-0 font-mono text-[9px] ${tone.text}`}>{scoreLabel}</span>
+    </div>
+    {event && <div className="mt-2 rounded border border-border/60 bg-base/30 px-2 py-1.5 text-[9px]">
+      <div className="flex items-center justify-between gap-2"><span className="font-medium text-secondary">最近事件 · {ACTION_LABELS[event.type]}{event.structureMode === 'structure_proxy' ? ' · 结构代理' : ''}</span><span className="font-mono text-muted">{shortDate(event.confirmedAt, action.period === '30m' ? '30m' : action.period)}</span></div>
+      <div className="mt-0.5 leading-relaxed text-muted">{event.reasons.join('；')}</div>
+      {event.referencePrice != null && <div className="mt-0.5 text-secondary">参考位 {fmtAssetPrice(event.referencePrice, assetType)}</div>}
+      {event.invalidationPrice != null && <div className="mt-0.5 text-bear">防守位 {fmtAssetPrice(event.invalidationPrice, assetType)}</div>}
+    </div>}
+    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+      <div className="rounded border border-border/60 bg-base/30 px-2 py-1.5"><div className="mb-1 text-[9px] font-medium text-foreground">升级条件</div>{action.nextConditions.map((item, index) => <div key={`${item}-${index}`} className="text-[9px] leading-relaxed text-muted">· {item}</div>)}</div>
+      <div className="rounded border border-border/60 bg-base/30 px-2 py-1.5"><div className="mb-1 text-[9px] font-medium text-foreground">风险条件</div>{action.riskConditions.map((item, index) => <div key={`${item}-${index}`} className="text-[9px] leading-relaxed text-muted">· {item}</div>)}</div>
+    </div>
+    <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[8px] text-muted"><span>回放起点 {shortDate(action.analysisStartDate, action.period === '30m' ? '30m' : action.period)}</span><span>事件 {action.events.length} 次</span>{action.pendingConfirmation && <span className="text-warning">有待确认变化</span>}</div>
+    {comparison && <div className={`mt-1.5 rounded border px-2 py-1 text-[9px] ${comparison.status === 'divergent' ? 'border-warning/30 bg-warning/5 text-warning' : comparison.status === 'aligned' ? 'border-bull/20 bg-bull/5 text-bull' : 'border-border/60 bg-base/30 text-muted'}`}>跨周期：{comparison.text}</div>}
+  </div>
 }
 
 function decisionTone(snapshot: StockSummarySnapshot): StockSummaryTone {
@@ -163,7 +216,7 @@ export function StockSummaryPanel({ snapshot, onSelectZone, onSelectSignal, onFo
     {!collapsed && <div className="grid gap-2 p-2">
       {isLoading && snapshot.quality.status === 'blocked' && <div className="rounded border border-border bg-elevated/40 px-2 py-1.5 text-[9px] text-muted">正在加载当前周期综合分析…</div>}
       {error && snapshot.quality.status === 'blocked' && <div className="flex items-center justify-between gap-2 rounded border border-bear/30 bg-bear/5 px-2 py-1.5 text-[9px] text-bear"><span>当前周期行情加载失败，摘要暂不可用。</span>{onRetry && <button type="button" onClick={onRetry} className="rounded-btn bg-elevated px-2 py-1 text-[9px] text-secondary hover:text-foreground">重试</button>}</div>}
-      <div className={`rounded-card border p-2.5 shadow-sm ${actionTone.badge}`}>
+      {snapshot.action ? <ActionSignalCard action={snapshot.action} comparison={snapshot.actionComparison} assetType={snapshot.context.assetType} /> : <div className={`rounded-card border p-2.5 shadow-sm ${actionTone.badge}`}>
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-1.5">
@@ -186,21 +239,21 @@ export function StockSummaryPanel({ snapshot, onSelectZone, onSelectSignal, onFo
             <div className="mt-0.5 text-[9px] text-muted">持仓视角</div>
           </div>
         </div>
-      </div>
-      <div className="grid gap-2 sm:grid-cols-2">
-        <div className="rounded-card border border-border bg-surface/50 p-2">
-          <div className="mb-1 text-[10px] font-medium text-foreground">转强 / 升级需要</div>
-          {snapshot.decision.upgradeConditions.length > 0
-            ? snapshot.decision.upgradeConditions.slice(0, 3).map(item => <ConditionItem key={item.id} label={item.label} text={item.text} state={item.state} />)
-            : <div className="text-[9px] text-muted">当前没有待补条件</div>}
-        </div>
-        <div className="rounded-card border border-border bg-surface/50 p-2">
-          <div className="mb-1 text-[10px] font-medium text-foreground">风险 / 失效观察</div>
-          {snapshot.decision.riskConditions.length > 0
-            ? snapshot.decision.riskConditions.slice(0, 3).map(item => <ConditionItem key={item.id} label={item.label} text={item.text} state={item.state} />)
-            : <div className="text-[9px] text-muted">暂无可追溯风险条件</div>}
-        </div>
-      </div>
+      </div>}
+      {!snapshot.action && <div className="grid gap-2 sm:grid-cols-2">
+          <div className="rounded-card border border-border bg-surface/50 p-2">
+            <div className="mb-1 text-[10px] font-medium text-foreground">转强 / 升级需要</div>
+            {snapshot.decision.upgradeConditions.length > 0
+              ? snapshot.decision.upgradeConditions.slice(0, 3).map(item => <ConditionItem key={item.id} label={item.label} text={item.text} state={item.state} />)
+              : <div className="text-[9px] text-muted">当前没有待补条件</div>}
+          </div>
+          <div className="rounded-card border border-border bg-surface/50 p-2">
+            <div className="mb-1 text-[10px] font-medium text-foreground">风险 / 失效观察</div>
+            {snapshot.decision.riskConditions.length > 0
+              ? snapshot.decision.riskConditions.slice(0, 3).map(item => <ConditionItem key={item.id} label={item.label} text={item.text} state={item.state} />)
+              : <div className="text-[9px] text-muted">暂无可追溯风险条件</div>}
+          </div>
+        </div>}
       <div className="rounded-card border border-border bg-surface/50 p-2">
         <div className="mb-1 text-[10px] font-medium text-foreground">操作参考（观察区，不是自动触发）</div>
         <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
