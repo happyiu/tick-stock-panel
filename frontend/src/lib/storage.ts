@@ -79,8 +79,10 @@ export interface StockPreviewChanlunOverlayConfig {
   enabled: boolean
   fractals: boolean
   strokes: boolean
+  segments: boolean
   centers: boolean
   candidates: boolean
+  divergences: boolean
 }
 
 export interface StockPreviewElliottOverlayConfig {

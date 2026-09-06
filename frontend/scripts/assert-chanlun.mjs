@@ -2,13 +2,19 @@ import assert from 'node:assert/strict'
 import {
   analyzeChanlun,
   buildChanlunCenters,
+  buildChanlunCandidateSignals,
+  buildChanlunSegments,
   buildChanlunStrokes,
+  classifyChanlunTrend,
+  detectChanlunDivergences,
   detectChanlunFractals,
   detectChanlunThirdSignals,
   mergeChanlunBars,
 } from '../src/lib/chanlun.ts'
 
-const bar = (date, low, high, close = (low + high) / 2) => ({ date, open: close, high, low, close })
+const bar = (date, low, high, close = (low + high) / 2, isClosed = true) => ({
+  date, open: close, high, low, close, isClosed, periodEnd: date,
+})
 
 const contained = mergeChanlunBars([
   bar('2026-01-01', 8, 10),
@@ -27,7 +33,7 @@ const mergedForFractals = [
   { sourceStartIndex: 1, sourceEndIndex: 1, startDate: 'd1', endDate: 'd1', high: 12, low: 10, highDate: 'd1', lowDate: 'd1', highSourceIndex: 1, lowSourceIndex: 1, direction: 'up', uncertain: false },
   { sourceStartIndex: 2, sourceEndIndex: 2, startDate: 'd2', endDate: 'd2', high: 11, low: 9, highDate: 'd2', lowDate: 'd2', highSourceIndex: 2, lowSourceIndex: 2, direction: 'down', uncertain: false },
   { sourceStartIndex: 3, sourceEndIndex: 3, startDate: 'd3', endDate: 'd3', high: 10, low: 8, highDate: 'd3', lowDate: 'd3', highSourceIndex: 3, lowSourceIndex: 3, direction: 'down', uncertain: false },
-]
+].map(item => ({ ...item, closed: true, periodEnd: item.endDate }))
 assert.deepEqual(detectChanlunFractals(mergedForFractals).map(item => item.type), ['top'])
 assert.equal(detectChanlunFractals(mergedForFractals.slice(0, 3)).length, 0)
 assert.equal(detectChanlunFractals(mergedForFractals)[0].confirmedAt, 'd3')
@@ -46,6 +52,8 @@ const mergedForStrokes = Array.from({ length: 19 }, (_, index) => ({
   lowSourceIndex: index,
   direction: 'up',
   uncertain: false,
+  closed: true,
+  periodEnd: `d${index}`,
 }))
 mergedForStrokes[1].low = 5
 mergedForStrokes[5].high = 10
@@ -166,5 +174,50 @@ const cutoff = history[14].date
 const beforeFuture = analyzeChanlun(history.slice(0, 15), cutoff)
 const afterFuture = analyzeChanlun(history, cutoff)
 assert.deepEqual(afterFuture, beforeFuture)
+
+const segmentSeed = [
+  stroke(0, 'up', 8, 12),
+  stroke(1, 'down', 12, 9),
+  stroke(2, 'up', 9, 13),
+  stroke(3, 'down', 13, 8),
+]
+const segmentResult = buildChanlunSegments(segmentSeed)
+assert.equal(segmentResult.length, 1)
+assert.equal(segmentResult[0].direction, 'up')
+assert.equal(segmentResult[0].componentCount, 3)
+assert.equal(segmentResult[0].confirmed, true)
+assert.equal(segmentResult[0].confirmedAt, segmentSeed[3].confirmedAt)
+
+const trendCenters = [
+  { ...centers[0], id: 'c-low', zd: 8, zg: 10 },
+  { ...centers[0], id: 'c-high', zd: 11, zg: 13 },
+]
+assert.equal(classifyChanlunTrend(trendCenters), 'uptrend_proxy')
+assert.equal(classifyChanlunTrend([trendCenters[0]]), 'consolidation_proxy')
+
+const divergenceCenter = { ...centers[0], id: 'c-div', startStrokeIndex: 1, endStrokeIndex: 3 }
+const divergenceUnits = [
+  stroke(0, 'down', 15, 10),
+  stroke(1, 'up', 10, 13),
+  stroke(2, 'down', 13, 11),
+  stroke(3, 'up', 11, 12.5),
+  { ...stroke(4, 'down', 12.5, 9), mergedBars: 20 },
+  stroke(5, 'up', 9, 11),
+  stroke(6, 'down', 11, 9.5),
+]
+const divergences = detectChanlunDivergences([divergenceCenter], divergenceUnits, [], 'stroke')
+assert.equal(divergences.length, 1)
+assert.equal(divergences[0].status, 'candidate')
+const firstSecond = buildChanlunCandidateSignals(divergences, divergenceUnits, [], [], 'stroke')
+assert.deepEqual(firstSecond.map(item => item.kind), ['first_buy', 'second_buy'])
+assert.equal(firstSecond[1].relatedSignalId, firstSecond[0].id)
+
+const openTail = bar('2026-01-21', 1, 20, 10, false)
+const closedView = analyzeChanlun(history, null, { period: '1d' })
+const withOpenTail = analyzeChanlun([...history, openTail], null, { period: '1d' })
+assert.deepEqual(withOpenTail.fractals, closedView.fractals)
+assert.deepEqual(withOpenTail.strokes, closedView.strokes)
+assert.equal(withOpenTail.currentPrice, 10)
+assert.match(withOpenTail.issues[0], /未闭合/)
 
 console.log('chanlun assertions passed')

@@ -13,6 +13,8 @@ export interface OHLC {
   high: number
   low: number
   close: number
+  periodEnd?: string | null
+  isClosed?: boolean
   volume?: number
   ma5?: number | null
   ma10?: number | null
@@ -403,15 +405,20 @@ function appendChanlunMarkPoints(
           fontSize: 9,
           fontFamily: 'JetBrains Mono, monospace',
         },
+        tooltip: { formatter: `${isBottom ? '底' : '顶'}分型<br/>结构发生：${fractal.date}<br/>最早可知：${fractal.confirmedAt}` },
         z: 90,
       })
     }
   }
   if (config.candidates) {
-    for (const signal of analysis.thirdSignals) {
+    const labels = {
+      first_buy: '1买', second_buy: '2买', third_buy: '3买',
+      first_sell: '1卖', second_sell: '2卖', third_sell: '3卖',
+    } as const
+    for (const signal of analysis.candidateSignals) {
       if ((signal.status !== 'candidate' && signal.status !== 'invalidated')
         || !dateIndexMap.has(signal.availableDate)) continue
-      const isBuy = signal.kind === 'third_buy'
+      const isBuy = signal.kind.endsWith('_buy')
       const invalidated = signal.status === 'invalidated'
       const color = isBuy ? THEME.bull : THEME.bear
       target.push({
@@ -428,14 +435,34 @@ function appendChanlunMarkPoints(
         },
         label: {
           show: true,
-          formatter: invalidated ? `3${isBuy ? '买' : '卖'}失效` : `3${isBuy ? '买' : '卖'}候选`,
+          formatter: invalidated ? `${labels[signal.kind]}失效` : `${labels[signal.kind]}候选`,
           position: isBuy ? 'bottom' : 'top',
           distance: 7,
           color: invalidated ? CT().text : color,
           fontSize: compact ? 8 : 9,
           fontFamily: 'JetBrains Mono, monospace',
         },
+        tooltip: {
+          formatter: `${labels[signal.kind]}${invalidated ? '失效' : '候选'}<br/>结构发生：${signal.structureDate}<br/>最早可知：${signal.availableDate}<br/>失效边界：${signal.boundary}`,
+        },
         z: 95,
+      })
+    }
+  }
+  if (config.divergences) {
+    for (const divergence of analysis.divergences.filter(item => item.status === 'candidate')) {
+      if (!dateIndexMap.has(divergence.c.endDate)) continue
+      const price = analysis.bars.find(bar => bar.date === divergence.c.endDate)?.close ?? analysis.currentPrice
+      if (price == null) continue
+      target.push({
+        name: divergence.c.endDate,
+        coord: [divergence.c.endDate, price],
+        symbol: 'diamond',
+        symbolSize: compact ? 7 : 10,
+        itemStyle: { color: '#F59E0B', opacity: 0.9 },
+        label: { show: !compact, formatter: '背驰候选', position: 'top', color: '#F59E0B', fontSize: 9 },
+        tooltip: { formatter: `${divergence.kind === 'trend' ? '趋势' : '盘整'}背驰代理<br/>${divergence.evidence}` },
+        z: 94,
       })
     }
   }
@@ -858,6 +885,22 @@ function buildOption(
             width: stroke.confirmed ? 1.4 : 1.2,
             opacity: stroke.confirmed ? 0.82 : 0.6,
           },
+          label: { show: false },
+        },
+      ])
+    }
+  }
+
+  if (chanlunAnalysis && chanlunOverlay?.enabled && chanlunOverlay.segments) {
+    for (const segment of chanlunAnalysis.segments) {
+      if (!dateIndexMap.has(segment.startDate) || !dateIndexMap.has(segment.endDate)) continue
+      const color = segment.direction === 'up' ? THEME.bull : THEME.bear
+      markLineData.push([
+        { coord: [segment.startDate, segment.startPrice], symbol: 'none' },
+        {
+          coord: [segment.endDate, segment.endPrice],
+          symbol: 'none',
+          lineStyle: { color, type: segment.confirmed ? 'solid' : 'dashed', width: 2.4, opacity: segment.confirmed ? 0.95 : 0.55 },
           label: { show: false },
         },
       ])

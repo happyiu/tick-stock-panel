@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, PanelRightOpen, X } from 'lucide-react'
 import { type KlinePeriod, type KlineRow, type FinancialMetricRecord } from '@/lib/api'
 import {
@@ -26,7 +26,7 @@ import {
   buildInfoExtColumnsParam,
   type ColumnConfig,
 } from '@/lib/stock-info-fields'
-import { analyzeChanlun } from '@/lib/chanlun'
+import { analyzeChanlun, type ChanlunStructureSource } from '@/lib/chanlun'
 import { analyzeElliott } from '@/lib/elliott'
 import { storage, type StockPreviewAnalysisSectionsV2, type StockPreviewAnalysisSectionsV3 } from '@/lib/storage'
 
@@ -34,6 +34,7 @@ const DEFAULT_SPLIT_RATIO = 1.4 / 2.4
 const MIN_SPLIT_RATIO = 0.25
 const MAX_SPLIT_RATIO = 0.75
 const SPLIT_GAP_PX = 12
+const CHANLUN_PERIODS: KlinePeriod[] = ['30m', '1d', '1w', '1mo']
 function clampSplitRatioValue(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_SPLIT_RATIO
   return Math.max(MIN_SPLIT_RATIO, Math.min(MAX_SPLIT_RATIO, value))
@@ -140,6 +141,8 @@ export function StockPanel({
   const [linkedPrice, setLinkedPrice] = useState<number | null>(null)
   const [selectedBarKey, setSelectedBarKey] = useState<string | null>(null)
   const [rightPaneDismissed, setRightPaneDismissed] = useState(false)
+  const [chanlunSource, setChanlunSource] = useState<ChanlunStructureSource>('stroke')
+  const [multiPeriodExpanded, setMultiPeriodExpanded] = useState(false)
   const [splitRatio, setSplitRatio] = useState(() => clampSplitRatioValue(
     storage.stockPreviewSplitRatio.get(DEFAULT_SPLIT_RATIO),
   ))
@@ -211,8 +214,8 @@ export function StockPanel({
     [period, periodKline.data?.rows],
   )
   const chanlunAnalysis = useMemo(
-    () => analyzeChanlun(periodRows, selectedBarKey),
-    [periodRows, selectedBarKey],
+    () => analyzeChanlun(periodRows, selectedBarKey, { period, source: chanlunSource }),
+    [chanlunSource, period, periodRows, selectedBarKey],
   )
   const elliottAnalysis = useMemo(
     () => analyzeElliott(periodRows, period, selectedBarKey),
@@ -223,6 +226,35 @@ export function StockPanel({
   const stockInfo = kline.data?.stock_info
   const name = kline.data?.name
   const assetType = kline.data?.asset_type
+
+  const multiObservationEnd = selectedBarKey?.slice(0, 10) ?? chartDateRange.end
+  const multiPeriodQueries = useQueries({
+    queries: CHANLUN_PERIODS.map(candidatePeriod => {
+      const endDate = new Date(`${multiObservationEnd}T12:00:00`)
+      const range = defaultKlineRange(candidatePeriod, Number.isNaN(endDate.getTime()) ? new Date() : endDate)
+      return {
+        ...klinePeriodQueryOptions(symbol, candidatePeriod, range, periodDays, extColumns, true),
+        enabled: multiPeriodExpanded && !!symbol && (candidatePeriod === '1d' || assetType !== 'index'),
+        staleTime: 30_000,
+      }
+    }),
+  })
+  const multiPeriodAnalysis = useMemo(() => CHANLUN_PERIODS.map((candidatePeriod, index) => {
+    const query = multiPeriodQueries[index]
+    const candidateRows = toOHLC(query.data?.rows ?? [], candidatePeriod)
+    return {
+      period: candidatePeriod,
+      analysis: query.data ? analyzeChanlun(candidateRows, null, { period: candidatePeriod, source: chanlunSource }) : undefined,
+      isLoading: query.isLoading || query.isFetching && !query.data,
+      error: query.error,
+    }
+  }), [
+    chanlunSource,
+    multiPeriodQueries[0].data, multiPeriodQueries[0].error, multiPeriodQueries[0].isFetching, multiPeriodQueries[0].isLoading,
+    multiPeriodQueries[1].data, multiPeriodQueries[1].error, multiPeriodQueries[1].isFetching, multiPeriodQueries[1].isLoading,
+    multiPeriodQueries[2].data, multiPeriodQueries[2].error, multiPeriodQueries[2].isFetching, multiPeriodQueries[2].isLoading,
+    multiPeriodQueries[3].data, multiPeriodQueries[3].error, multiPeriodQueries[3].isFetching, multiPeriodQueries[3].isLoading,
+  ])
 
   useEffect(() => {
     if (assetType) onAssetTypeChange?.(assetType)
@@ -550,6 +582,11 @@ export function StockPanel({
                         onToggleCollapsed={() => toggleAnalysisSection('chanlunCollapsed')}
                         isLoading={periodKline.isLoading || periodKline.isFetching && !periodKline.data}
                         error={periodKline.error}
+                        source={chanlunSource}
+                        onSourceChange={setChanlunSource}
+                        multiPeriodExpanded={multiPeriodExpanded}
+                        onToggleMultiPeriod={() => setMultiPeriodExpanded(value => !value)}
+                        multiPeriod={multiPeriodAnalysis}
                       />
                       <StockElliottPanel
                         symbol={symbol}

@@ -180,13 +180,16 @@ def test_period_api_returns_weekly_contract():
     })
 
     result = kline_api.get_period_kline(
-        _request(_Repo(daily=daily)), "600000.SH", "1w", "2026-09-01", "2026-09-05", 20,
+        _request(_Repo(daily=daily)), "600000.SH", "1w", "2026-09-01", "2026-09-04", 20,
     )
 
     assert result["period"] == "1w"
     assert result["asset_type"] == "stock"
     assert result["rows"][0]["date"] == date(2026, 9, 4)
     assert result["rows"][0]["volume"] == 300.0
+    assert result["rows"][0]["period_start"] == date(2026, 9, 3)
+    assert result["rows"][0]["period_end"] == date(2026, 9, 4)
+    assert result["rows"][0]["is_closed"] is True
 
 
 def test_period_api_routes_monthly_etf_to_etf_storage():
@@ -206,6 +209,7 @@ def test_period_api_routes_monthly_etf_to_etf_storage():
     assert result["asset_type"] == "etf"
     assert result["name"] == "沪深300ETF"
     assert [row["date"] for row in result["rows"]] == [date(2026, 8, 31), date(2026, 9, 1)]
+    assert [row["is_closed"] for row in result["rows"]] == [True, False]
 
 
 def test_period_api_returns_latest_requested_30m_trade_days():
@@ -228,6 +232,7 @@ def test_period_api_returns_latest_requested_30m_trade_days():
     assert result["requested_days"] == 1
     assert result["available_days"] == 1
     assert {row["date"][:10] for row in result["rows"]} == {"2026-09-04"}
+    assert all(row["is_closed"] is True for row in result["rows"])
 
 
 def test_period_api_rejects_index_scope():

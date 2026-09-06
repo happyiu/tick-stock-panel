@@ -25,8 +25,10 @@ const DEFAULT_CHANLUN_OVERLAY: StockPreviewChanlunOverlayConfig = {
   enabled: true,
   fractals: false,
   strokes: true,
+  segments: false,
   centers: true,
   candidates: true,
+  divergences: false,
 }
 const DEFAULT_ELLIOTT_OVERLAY: StockPreviewElliottOverlayConfig = {
   enabled: false,
@@ -46,8 +48,10 @@ function normalizeChanlunOverlay(config: StockPreviewChanlunOverlayConfig): Stoc
     enabled: config?.enabled !== false,
     fractals: config?.fractals === true,
     strokes: config?.strokes !== false,
+    segments: config?.segments === true,
     centers: config?.centers !== false,
     candidates: config?.candidates !== false,
+    divergences: config?.divergences === true,
   }
 }
 
@@ -105,6 +109,8 @@ export function toOHLC(rows: KlineRow[], period: KlinePeriod = '1d'): OHLC[] {
       high: Number(r.high),
       low: Number(r.low),
       close: Number(r.close),
+      periodEnd: r.period_end != null ? String(r.period_end).replace('T', ' ').slice(0, 16) : null,
+      isClosed: r.is_closed === true,
       volume: Number(r.volume ?? 0),
       ma5: r.ma5 != null ? Number(r.ma5) : null,
       ma10: r.ma10 != null ? Number(r.ma10) : null,
@@ -302,8 +308,10 @@ export function StockDailyKChart({
                   {([
                     ['fractals', '分型'],
                     ['strokes', '笔'],
+                    ['segments', '线段代理'],
                     ['centers', '中枢'],
-                    ['candidates', '三类候选'],
+                    ['candidates', '买卖点候选'],
+                    ['divergences', '背驰代理'],
                   ] as const).map(([key, label]) => (
                     <button
                       key={key}

@@ -5,7 +5,7 @@ import gzip
 import json
 import logging
 import math
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Optional
@@ -67,6 +67,56 @@ def _rows_and_score_payload(frame, include_technical_scores: bool):
     visible = _clean_technical_columns(frame)
     payload = technical_score_payload(frame) if include_technical_scores else None
     return visible.to_dicts(), payload
+
+
+def _annotate_bar_closure(rows: list[dict], period: str, requested_end: date) -> list[dict]:
+    """Attach an explicit close-state contract without changing stored market data."""
+    now = cn_now()
+    today = now.date()
+    result: list[dict] = []
+    for index, raw in enumerate(rows):
+        row = dict(raw)
+        raw_date = row.get("date")
+        text = raw_date.isoformat() if hasattr(raw_date, "isoformat") else str(raw_date or "")
+        row.setdefault("period_start", row.get("period_start") or raw_date)
+        row.setdefault("period_end", row.get("period_end") or raw_date)
+        if period == "30m":
+            # The visible label is the scheduled bucket end; raw sources may carry the first/last tick.
+            row["period_end"] = text.replace("T", " ")[:16]
+        is_last = index == len(rows) - 1
+        closed = not is_last
+        try:
+            if period == "30m":
+                scheduled = datetime.fromisoformat(text.replace("T", " "))
+                closed = scheduled <= now.replace(tzinfo=None)
+            elif period == "1d":
+                bar_date = date.fromisoformat(text[:10])
+                closed = bar_date < today or (bar_date == today and now.hour >= 15)
+            else:
+                bar_end = row.get("period_end")
+                end_date = bar_end if isinstance(bar_end, date) else date.fromisoformat(str(bar_end)[:10])
+                if period == "1w":
+                    end_bucket = end_date.isocalendar()[:2]
+                    request_bucket = requested_end.isocalendar()[:2]
+                    closed = not is_last or request_bucket > end_bucket or (
+                        request_bucket == end_bucket and requested_end.weekday() >= 5
+                    ) or (
+                        request_bucket == end_bucket
+                        and requested_end.weekday() == 4
+                        and end_date == requested_end
+                        and (end_date < today or now.hour >= 15)
+                    )
+                else:
+                    end_bucket = (end_date.year, end_date.month)
+                    request_bucket = (requested_end.year, requested_end.month)
+                    closed = not is_last or request_bucket > end_bucket
+                if end_date == today and now.hour < 15:
+                    closed = False
+        except (TypeError, ValueError):
+            closed = False
+        row["is_closed"] = closed
+        result.append(row)
+    return result
 
 
 def _gzip_payload(request: Request, payload: dict, *, pref_key: str) -> dict | Response:
@@ -432,6 +482,7 @@ def get_daily(
         scored = _score_frame_if_requested(snapshot.frame, include_technical_scores)
         visible = scored.filter(pl.col("date").is_between(start, end))
         rows, score_payload = _rows_and_score_payload(visible, include_technical_scores)
+        rows = _annotate_bar_closure(rows, "1d", end)
         resp = {"symbol": symbol, "name": stock_name, "asset_type": asset_type,
                 "stock_info": stock_info, "rows": rows, "source": "chart",
                 "data_status": snapshot.metadata()}
@@ -468,6 +519,8 @@ def get_daily(
         rows, score_payload = _rows_and_score_payload(visible, True)
     else:
         rows, score_payload = raw_rows, None
+
+    rows = _annotate_bar_closure(rows, "1d", end)
 
     resp = {"symbol": symbol, "name": stock_name, "asset_type": asset_type,
             "stock_info": stock_info, "rows": rows, "source": "enriched",
@@ -537,6 +590,7 @@ def get_period_kline(
             else:
                 native = native.filter(pl.col("datetime").dt.date().is_in(trade_dates))
                 rows, score_payload = _rows_and_score_payload(prepare_native_30m(native), False)
+            rows = _annotate_bar_closure(rows, "30m", end)
             response = {**base, "rows": rows, "source": "chart",
                         "requested_days": days, "available_days": len(trade_dates)}
             if score_payload is not None:
@@ -579,6 +633,7 @@ def get_period_kline(
         else:
             minute = minute.filter(pl.col("_trade_date").is_in(trade_dates)).drop("_trade_date")
             rows, score_payload = _rows_and_score_payload(aggregate_minute_30m(minute), False)
+        rows = _annotate_bar_closure(rows, "30m", end)
         response = {
             **base,
             "rows": rows,
@@ -638,6 +693,7 @@ def get_period_kline(
             (pl.col("period_end") >= start) & (pl.col("period_start") <= end),
         )
     rows, score_payload = _rows_and_score_payload(scored, include_technical_scores)
+    rows = _annotate_bar_closure(rows, period, end)
     response = {**base, "rows": rows, "source": source}
     if score_payload is not None:
         response["technical_scores"] = score_payload

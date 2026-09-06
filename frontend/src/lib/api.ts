@@ -223,6 +223,8 @@ export interface KlineRow {
   date: string
   period_start?: string
   period_end?: string
+  /** 服务端按北京时间与请求截面判定；缺失时结构分析保守视为未闭合。 */
+  is_closed?: boolean
   open: number
   high: number
   low: number
