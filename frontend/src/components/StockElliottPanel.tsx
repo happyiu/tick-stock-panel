@@ -232,7 +232,7 @@ export function StockElliottPanel({
             </div>
           )}
 
-          <div className="grid gap-2 p-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
+          <div className="grid gap-2 p-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
             <WaveCard title="当前计数" tone="amber">
               <div className="font-medium text-foreground">{primary ? `${primary.label} · ${countFamily(primary)}` : '暂无可用主计数'}</div>
               <div className="mt-1 text-secondary">{primary ? `${countDirection(primary)} · ${currentStage}` : '等待新的确认拐点'}</div>

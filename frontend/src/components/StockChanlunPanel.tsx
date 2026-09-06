@@ -257,7 +257,7 @@ export function StockChanlunPanel({
 
       {!collapsed && (
         isLoading && analysis.window.bars === 0 ? (
-          <div className="grid gap-2 p-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
+          <div className="grid gap-2 p-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
             {Array.from({ length: 4 }, (_, index) => (
               <div key={index} className="h-[116px] animate-pulse rounded-card border border-border bg-surface/60" />
             ))}
@@ -265,7 +265,7 @@ export function StockChanlunPanel({
         ) : error && analysis.window.bars === 0 ? (
           <div className="px-4 py-6 text-center text-xs text-muted">缠论结构暂时不可用，周期行情加载失败。</div>
         ) : (
-          <div className="grid gap-2 p-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
+          <div className="grid gap-2 p-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
             {cards.map(card => <ChanlunCard key={card.title} card={card} />)}
           </div>
         )
