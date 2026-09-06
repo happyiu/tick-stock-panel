@@ -154,7 +154,7 @@ class _Repo:
             "symbol": ["510300.SH"], "name": ["沪深300ETF"], "asset_type": [asset_type],
         })
 
-    def get_enriched_latest_asset(self, _asset_type: str):
+    def get_enriched_latest_asset(self, _asset_type: str, refresh: bool = True):
         return pl.DataFrame(), None
 
     def get_daily_asset(self, asset_type, _symbol, _start, _end, columns=None):

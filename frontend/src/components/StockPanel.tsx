@@ -126,6 +126,8 @@ interface Props {
   /** 主蜡烛图周期；信息条仍使用日线最新两根，避免周期切换改变当日涨跌口径。 */
   period?: KlinePeriod
   periodDays?: number
+  /** 初始可见蜡烛根数 (默认 60); 'all' = 初始适配显示全部数据 (用于全区间回放) */
+  visibleBars?: number | 'all'
 }
 
 export { getDefaultRange }
@@ -160,6 +162,7 @@ export function StockPanel({
   independentPaneScroll = false,
   period = '1d',
   periodDays = DEFAULT_30M_DAYS,
+  visibleBars,
 }: Props) {
   const resolvedRightPaneMode: StockPanelRightPaneMode = rightPaneMode
     ?? (showIntradayChart ? 'intraday' : 'empty')
@@ -777,7 +780,7 @@ export function StockPanel({
             linkedPrice={linkedPrice}
             onDateClick={handleDateClick}
             onPriceDoubleClick={onPriceDoubleClick}
-            visibleBars={showIntraday ? 40 : 60}
+            visibleBars={visibleBars ?? (showIntraday ? 40 : 60)}
             extColumns={extColumns}
             refetchIntervalMs={refetchIntervalMs}
             period={period}

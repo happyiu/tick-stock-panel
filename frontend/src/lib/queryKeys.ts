@@ -53,6 +53,7 @@ export const QK = {
   // Backtest
   backtestStatus:       ['backtest-status'] as const,
   factorColumns:        ['backtest-factor-columns'] as const,
+  factorLibrary:        (assetType: string) => ['factors-library', assetType] as const,
   miningRuns:           ['backtest-mining-runs'] as const,
   miningAvailability:   (assetType: string, profile: string, start: string, end: string) =>
                           ['backtest-mining-availability', assetType, profile, start, end] as const,
@@ -81,6 +82,7 @@ export const QK = {
                            ['kline', symbol, start, end, extColumns ?? '', includeTechnicalScores] as const,
   klinePeriod:          (symbol: string, period: string, start: string, end: string, days: number, includeTechnicalScores = false) =>
                            ['kline-period', symbol, period, start, end, days, includeTechnicalScores] as const,
+  klineLatest:          (symbol: string) => ['kline-latest', symbol] as const,
   stockLevels:          (symbol: string, days?: number) => ['stock-levels', symbol, days ?? 120] as const,
   elliottAssessment:    (symbol: string, period: string, asOf: string, fingerprint: string) =>
                              ['elliott-assessment', symbol, period, asOf, fingerprint] as const,
@@ -104,6 +106,8 @@ export const QK = {
   // Monitor (监控规则 + 触发记录)
   monitorRules:         ['monitor-rules'] as const,
   monitorRuleOptions:   ['monitor-rule-options'] as const,
+  lots:                 ['lots'] as const,
+  lotsKline:            (symbols: string) => ['lots-kline', symbols] as const,
   alerts:               (source?: string) => ['alerts', source ?? ''] as const,
 
   // AI 大盘复盘
