@@ -68,6 +68,8 @@ interface Props {
   refetchIntervalMs?: number
   period?: KlinePeriod
   periodDays?: number
+  /** 技术分析模式下附带后端统一评分序列。 */
+  includeTechnicalScores?: boolean
   /** 当前周期、当前历史截面的缠论结构近似结果；未传入时不显示相关控件和覆盖层。 */
   chanlunAnalysis?: ChanlunAnalysis
 }
@@ -145,6 +147,7 @@ export function StockDailyKChart({
   refetchIntervalMs,
   period = '1d',
   periodDays = DEFAULT_30M_DAYS,
+  includeTechnicalScores = false,
   chanlunAnalysis,
 }: Props) {
   const [activeIndicators, setActiveIndicators] = useState<string[]>(['vol'])
@@ -160,7 +163,7 @@ export function StockDailyKChart({
 
   // 日K仍与 StockPanel 信息条共享 cache key；其余周期走独立、含 period 的查询键。
   const kline = useQuery({
-    ...klinePeriodQueryOptions(symbol, period, dateRange, periodDays, extColumns),
+    ...klinePeriodQueryOptions(symbol, period, dateRange, periodDays, extColumns, includeTechnicalScores),
     enabled: !!symbol,
     refetchInterval: refetchIntervalMs,
   })

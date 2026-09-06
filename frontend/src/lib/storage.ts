@@ -38,9 +38,33 @@ export interface StockPreviewTechnicalCardsConfig {
   visible: Partial<Record<StockTechnicalCardKey, boolean>>
 }
 
+export type StockTechnicalIndicatorKey =
+  | 'ma_alignment'
+  | 'ma_slope'
+  | 'macd'
+  | 'rsi'
+  | 'kdj'
+  | 'roc'
+  | 'volume_price'
+  | 'atr'
+  | 'boll_width'
+  | 'volume_ratio'
+  | 'volume_trend'
+
+export interface StockPreviewTechnicalLayoutConfig {
+  version: 2
+  visible: Partial<Record<StockTechnicalIndicatorKey, boolean>>
+}
+
 export interface StockPreviewAnalysisSectionsState {
   technicalCollapsed: boolean
   chanlunCollapsed: boolean
+}
+
+export interface StockPreviewAnalysisSectionsV2 {
+  version: 2
+  technicalCollapsed: boolean
+  structureCollapsed: boolean
 }
 
 export interface StockPreviewChanlunOverlayConfig {
@@ -81,8 +105,14 @@ export const storage = {
   /** 个股预览右侧技术指标卡片配置 (显隐 + 顺序) */
   stockPreviewTechnicalCards: kv<StockPreviewTechnicalCardsConfig>('stock_preview_technical_cards'),
 
+  /** 个股预览技术指标分组配置 v2 (固定分组顺序, 仅显隐) */
+  stockPreviewTechnicalLayout: kv<StockPreviewTechnicalLayoutConfig | null>('stock_preview_technical_layout_v2'),
+
   /** 个股预览右侧技术指标与缠论分区的折叠状态 */
   stockPreviewAnalysisSections: kv<StockPreviewAnalysisSectionsState>('stock_preview_analysis_sections'),
+
+  /** 个股预览右侧技术指标与结构分析分区的折叠状态 v2 */
+  stockPreviewAnalysisSectionsV2: kv<StockPreviewAnalysisSectionsV2 | null>('stock_preview_analysis_sections_v2'),
 
   /** 个股预览 K 线缠论覆盖层配置 */
   stockPreviewChanlunOverlay: kv<StockPreviewChanlunOverlayConfig>('stock_preview_chanlun_overlay'),

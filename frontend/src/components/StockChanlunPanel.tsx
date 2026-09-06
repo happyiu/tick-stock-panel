@@ -222,7 +222,7 @@ export function StockChanlunPanel({
         <div className="min-w-0">
           <div className="flex items-center gap-1.5">
             <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#8B5CF6]" />
-            <span className="text-xs font-medium text-foreground">缠论分析</span>
+            <span className="text-xs font-medium text-foreground">缠论</span>
             <span className="rounded bg-[#8B5CF6]/10 px-1.5 py-0.5 text-[9px] text-[#A78BFA]">结构近似</span>
             <span className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[9px] text-secondary">{PERIOD_LABELS[period]}</span>
           </div>
@@ -234,16 +234,18 @@ export function StockChanlunPanel({
             </div>
           )}
         </div>
-        <button
-          type="button"
-          onClick={onToggleCollapsed}
-          className="shrink-0 rounded-btn p-1 text-muted transition-colors hover:bg-elevated hover:text-foreground"
-          title={collapsed ? '展开缠论分析' : '收起缠论分析'}
-          aria-label={collapsed ? '展开缠论分析' : '收起缠论分析'}
-          aria-expanded={!collapsed}
-        >
-          <ChevronDown className={`h-3.5 w-3.5 transition-transform ${collapsed ? '-rotate-90' : ''}`} />
-        </button>
+        {onToggleCollapsed && (
+          <button
+            type="button"
+            onClick={onToggleCollapsed}
+            className="shrink-0 rounded-btn p-1 text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            title={collapsed ? '展开缠论' : '收起缠论'}
+            aria-label={collapsed ? '展开缠论' : '收起缠论'}
+            aria-expanded={!collapsed}
+          >
+            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${collapsed ? '-rotate-90' : ''}`} />
+          </button>
+        )}
       </div>
 
       {!collapsed && (

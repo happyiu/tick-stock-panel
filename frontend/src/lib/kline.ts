@@ -42,10 +42,11 @@ export function klineDailyQueryOptions(
   symbol: string,
   dateRange: { start: string; end: string },
   extColumns?: string,
+  includeTechnicalScores = false,
 ) {
   return {
-    queryKey: QK.kline(symbol, dateRange.start, dateRange.end, extColumns),
-    queryFn: () => api.klineDaily(symbol, undefined, dateRange, extColumns),
+    queryKey: QK.kline(symbol, dateRange.start, dateRange.end, extColumns, includeTechnicalScores),
+    queryFn: () => api.klineDaily(symbol, undefined, dateRange, extColumns, includeTechnicalScores),
     // 工厂无 TData 泛型, 参数用 any 以便 useQuery/prefetchQuery 共用
     placeholderData: (prev: any, prevQuery: any) => {
       const prevKey = prevQuery?.queryKey as readonly unknown[] | undefined
@@ -60,11 +61,12 @@ export function klinePeriodQueryOptions(
   dateRange: { start: string; end: string },
   days = DEFAULT_30M_DAYS,
   extColumns?: string,
+  includeTechnicalScores = false,
 ): UseQueryOptions<KlineResponse, Error, KlineResponse, readonly unknown[]> {
-  if (period === '1d') return klineDailyQueryOptions(symbol, dateRange, extColumns)
+  if (period === '1d') return klineDailyQueryOptions(symbol, dateRange, extColumns, includeTechnicalScores)
   return {
-    queryKey: QK.klinePeriod(symbol, period, dateRange.start, dateRange.end, days),
-    queryFn: () => api.klinePeriod(symbol, period, dateRange, days),
+    queryKey: QK.klinePeriod(symbol, period, dateRange.start, dateRange.end, days, includeTechnicalScores),
+    queryFn: () => api.klinePeriod(symbol, period, dateRange, days, includeTechnicalScores),
     placeholderData: (prev: any, prevQuery: any) => {
       const prevKey = prevQuery?.queryKey as readonly unknown[] | undefined
       return prevKey?.[1] === symbol && prevKey?.[2] === period ? prev : undefined

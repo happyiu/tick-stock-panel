@@ -255,6 +255,24 @@ export interface KlineRow {
   [key: string]: any
 }
 
+export interface TechnicalScoreRow {
+  as_of: string
+  direction_score: number | null
+  confidence: number
+  coverage: number
+  trend: number | null
+  momentum: number | null
+  volume_price: number | null
+  volatility_risk: number | null
+  activity: number | null
+  available: boolean
+}
+
+export interface TechnicalScores {
+  version: 'technical-score-v1' | string
+  rows: TechnicalScoreRow[]
+}
+
 export interface ChartDataStatus {
   data_through?: string | null
   provider: string
@@ -280,6 +298,7 @@ export interface KlineResponse {
   period?: KlinePeriod
   requested_days?: number
   available_days?: number
+  technical_scores?: TechnicalScores
 }
 
 // ===== Watchlist =====
@@ -2115,12 +2134,13 @@ export const api = {
   redetectCapabilities: () =>
     request<CapabilitiesResponse>('/api/capabilities/redetect', { method: 'POST' }),
 
-  klineDaily: (symbol: string, days = 120, dateRange?: { start: string; end: string }, extColumns?: string) =>
+  klineDaily: (symbol: string, days = 120, dateRange?: { start: string; end: string }, extColumns?: string, includeTechnicalScores = false) =>
     request<KlineResponse>(
       (dateRange
         ? `/api/kline/daily?symbol=${encodeURIComponent(symbol)}&start_date=${dateRange.start}&end_date=${dateRange.end}`
         : `/api/kline/daily?symbol=${encodeURIComponent(symbol)}&days=${days}`)
-      + (extColumns ? `&ext_columns=${encodeURIComponent(extColumns)}` : ''),
+      + (extColumns ? `&ext_columns=${encodeURIComponent(extColumns)}` : '')
+      + (includeTechnicalScores ? '&include_technical_scores=true' : ''),
     ),
   klineDailyBatch: (symbols: string[], days = 12) =>
     request<{ data: Record<string, KlineRow[]> }>('/api/kline/daily-batch', {
@@ -2132,10 +2152,12 @@ export const api = {
     period: Exclude<KlinePeriod, '1d'>,
     dateRange: { start: string; end: string },
     days = 20,
+    includeTechnicalScores = false,
   ) =>
     request<KlineResponse>(
       `/api/kline/period?symbol=${encodeURIComponent(symbol)}&period=${period}`
-      + `&start_date=${dateRange.start}&end_date=${dateRange.end}&days=${days}`,
+      + `&start_date=${dateRange.start}&end_date=${dateRange.end}&days=${days}`
+      + (includeTechnicalScores ? '&include_technical_scores=true' : ''),
     ),
   klineMinuteBatch: (symbols: string[], date?: string, preferLocal?: boolean, since?: string) =>
     request<{ data: Record<string, MinuteKlineRow[]>; full_minute_local?: boolean; incremental?: boolean }>('/api/kline/minute-batch', {

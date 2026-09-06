@@ -77,10 +77,10 @@ export const QK = {
   analysisMenu:         (id: string) => ['analysis-menu', id] as const,
 
   // Kline
-  kline:                (symbol: string, start: string, end: string, extColumns?: string) =>
-                           ['kline', symbol, start, end, extColumns ?? ''] as const,
-  klinePeriod:          (symbol: string, period: string, start: string, end: string, days: number) =>
-                           ['kline-period', symbol, period, start, end, days] as const,
+  kline:                (symbol: string, start: string, end: string, extColumns?: string, includeTechnicalScores = false) =>
+                           ['kline', symbol, start, end, extColumns ?? '', includeTechnicalScores] as const,
+  klinePeriod:          (symbol: string, period: string, start: string, end: string, days: number, includeTechnicalScores = false) =>
+                           ['kline-period', symbol, period, start, end, days, includeTechnicalScores] as const,
   stockLevels:          (symbol: string, days?: number) => ['stock-levels', symbol, days ?? 120] as const,
   klineMinute:          (symbol: string, date: string) =>
                              ['kline-minute', symbol, date] as const,

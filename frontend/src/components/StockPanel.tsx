@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { PanelRightOpen, X } from 'lucide-react'
+import { ChevronDown, PanelRightOpen, X } from 'lucide-react'
 import { type KlinePeriod, type KlineRow, type FinancialMetricRecord } from '@/lib/api'
 import {
   DEFAULT_30M_DAYS,
@@ -26,15 +26,16 @@ import {
   type ColumnConfig,
 } from '@/lib/stock-info-fields'
 import { analyzeChanlun } from '@/lib/chanlun'
-import { storage, type StockPreviewAnalysisSectionsState } from '@/lib/storage'
+import { storage, type StockPreviewAnalysisSectionsV2 } from '@/lib/storage'
 
 const DEFAULT_SPLIT_RATIO = 1.4 / 2.4
 const MIN_SPLIT_RATIO = 0.25
 const MAX_SPLIT_RATIO = 0.75
 const SPLIT_GAP_PX = 12
-const DEFAULT_ANALYSIS_SECTIONS: StockPreviewAnalysisSectionsState = {
+const DEFAULT_ANALYSIS_SECTIONS: StockPreviewAnalysisSectionsV2 = {
+  version: 2,
   technicalCollapsed: false,
-  chanlunCollapsed: false,
+  structureCollapsed: false,
 }
 
 function clampSplitRatioValue(value: number): number {
@@ -42,10 +43,11 @@ function clampSplitRatioValue(value: number): number {
   return Math.max(MIN_SPLIT_RATIO, Math.min(MAX_SPLIT_RATIO, value))
 }
 
-function normalizeAnalysisSections(value: StockPreviewAnalysisSectionsState): StockPreviewAnalysisSectionsState {
+function normalizeAnalysisSections(value: StockPreviewAnalysisSectionsV2 | null | undefined): StockPreviewAnalysisSectionsV2 {
   return {
+    version: 2,
     technicalCollapsed: value?.technicalCollapsed === true,
-    chanlunCollapsed: value?.chanlunCollapsed === true,
+    structureCollapsed: value?.structureCollapsed === true,
   }
 }
 
@@ -133,6 +135,7 @@ export function StockPanel({
 }: Props) {
   const resolvedRightPaneMode: StockPanelRightPaneMode = rightPaneMode
     ?? (showIntradayChart ? 'intraday' : 'empty')
+  const includeTechnicalScores = resolvedRightPaneMode === 'technical'
   const [linkedPrice, setLinkedPrice] = useState<number | null>(null)
   const [selectedBarKey, setSelectedBarKey] = useState<string | null>(null)
   const [rightPaneDismissed, setRightPaneDismissed] = useState(false)
@@ -140,7 +143,7 @@ export function StockPanel({
     storage.stockPreviewSplitRatio.get(DEFAULT_SPLIT_RATIO),
   ))
   const [analysisSections, setAnalysisSections] = useState(() => normalizeAnalysisSections(
-    storage.stockPreviewAnalysisSections.get(DEFAULT_ANALYSIS_SECTIONS),
+    storage.stockPreviewAnalysisSectionsV2.get(DEFAULT_ANALYSIS_SECTIONS),
   ))
   const [splitDragging, setSplitDragging] = useState(false)
   const splitContainerRef = useRef<HTMLDivElement>(null)
@@ -157,10 +160,10 @@ export function StockPanel({
     saveInfoFields(next)
   }, [])
 
-  const toggleAnalysisSection = useCallback((key: keyof StockPreviewAnalysisSectionsState) => {
+  const toggleAnalysisSection = useCallback((key: 'technicalCollapsed' | 'structureCollapsed') => {
     setAnalysisSections(previous => {
       const next = { ...previous, [key]: !previous[key] }
-      storage.stockPreviewAnalysisSections.set(next)
+      storage.stockPreviewAnalysisSectionsV2.set(next)
       return next
     })
   }, [])
@@ -188,13 +191,13 @@ export function StockPanel({
   // 日K查询由本组件持有 (与 StockDailyKChart 共享同一 cache key/配置, 只发一次请求)。
   // 信息条直接读 query data: 切股到已预取邻股时首帧即有数据, 配合 StockInfoBar 加载态占位,
   // 弹窗整体高度在切换瞬间不塌陷 (不抖动)。
-  const kline = useQuery({ ...klineDailyQueryOptions(symbol, infoDateRange, extColumns), enabled: !!symbol })
+  const kline = useQuery({ ...klineDailyQueryOptions(symbol, infoDateRange, extColumns, includeTechnicalScores), enabled: !!symbol })
   const rawRows: KlineRow[] = kline.data?.rows ?? []
   // OHLC 视图用于日期选中/昨收价推导 (与图表侧同口径)
   const rows = useMemo(() => toOHLC(rawRows, '1d'), [rawRows])
   // 技术面板观察与左侧 K 线完全相同的 period query; 1d 时会与上面的日K query 共享缓存。
   const periodKline = useQuery({
-    ...klinePeriodQueryOptions(symbol, period, chartDateRange, periodDays, extColumns),
+    ...klinePeriodQueryOptions(symbol, period, chartDateRange, periodDays, extColumns, includeTechnicalScores),
     enabled: !!symbol && (
       resolvedRightPaneMode === 'technical'
       || (resolvedRightPaneMode === 'intraday' && period !== '1d')
@@ -329,11 +332,11 @@ export function StockPanel({
       // 日K用 fetchQuery (返回数据) 以便级联预取分时; 邻股预取失败静默, 不影响切股。
       if (period !== '1d') {
         qc.prefetchQuery({
-          ...klinePeriodQueryOptions(s, period, chartDateRange, periodDays, extColumns),
+          ...klinePeriodQueryOptions(s, period, chartDateRange, periodDays, extColumns, includeTechnicalScores),
           staleTime: 30_000,
         })
       }
-      void qc.fetchQuery({ ...klineDailyQueryOptions(s, infoDateRange, extColumns), staleTime: 30_000 })
+      void qc.fetchQuery({ ...klineDailyQueryOptions(s, infoDateRange, extColumns, includeTechnicalScores), staleTime: 30_000 })
         .then((res) => {
           if (prefetchTickRef.current !== prefetchKey) return
           // 日K到货后级联预取其默认选中日的分时数据: 日K视图并排展示分时图(默认选中最后交易日)。
@@ -346,7 +349,7 @@ export function StockPanel({
         })
         .catch(() => {})
     }
-  }, [prefetchKey, symbol, chartDateRange, infoDateRange, extColumns, hasFinanceField, hasFinancialCap, intradayDays, period, periodDays, qc])
+  }, [prefetchKey, symbol, chartDateRange, infoDateRange, extColumns, hasFinanceField, hasFinancialCap, intradayDays, period, periodDays, includeTechnicalScores, qc])
 
   // symbol 变化时重置分时相关状态，避免切股后残留旧日期。
   // 日K信息直接读 query data (切股到已预取邻股首帧即有), 无需清空或门控。
@@ -449,6 +452,7 @@ export function StockPanel({
             refetchIntervalMs={refetchIntervalMs}
             period={period}
             periodDays={periodDays}
+            includeTechnicalScores={includeTechnicalScores}
             chanlunAnalysis={resolvedRightPaneMode === 'technical' ? chanlunAnalysis : undefined}
           />
         </div>
@@ -501,6 +505,7 @@ export function StockPanel({
               <div className="h-full min-h-0 overflow-y-auto">
                 <StockTechnicalPanel
                   rows={periodKline.data?.rows ?? []}
+                  technicalScores={periodKline.data?.technical_scores}
                   period={period}
                   selectedDate={selectedBarKey}
                   assetType={assetType}
@@ -511,15 +516,33 @@ export function StockPanel({
                   collapsed={analysisSections.technicalCollapsed}
                   onToggleCollapsed={() => toggleAnalysisSection('technicalCollapsed')}
                 />
-                <StockChanlunPanel
-                  analysis={chanlunAnalysis}
-                  period={period}
-                  assetType={assetType}
-                  collapsed={analysisSections.chanlunCollapsed}
-                  onToggleCollapsed={() => toggleAnalysisSection('chanlunCollapsed')}
-                  isLoading={periodKline.isLoading || periodKline.isFetching && !periodKline.data}
-                  error={periodKline.error}
-                />
+                <section className="border-b border-border/70">
+                  <div className={`flex shrink-0 items-start justify-between px-2.5 py-2 ${analysisSections.structureCollapsed ? '' : 'border-b border-border/70'}`}>
+                    <div className="flex items-center gap-1.5">
+                      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#8B5CF6]" />
+                      <span className="text-xs font-medium text-foreground">结构分析</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => toggleAnalysisSection('structureCollapsed')}
+                      className="rounded-btn p-1 text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                      title={analysisSections.structureCollapsed ? '展开结构分析' : '收起结构分析'}
+                      aria-label={analysisSections.structureCollapsed ? '展开结构分析' : '收起结构分析'}
+                      aria-expanded={!analysisSections.structureCollapsed}
+                    >
+                      <ChevronDown className={`h-3.5 w-3.5 transition-transform ${analysisSections.structureCollapsed ? '-rotate-90' : ''}`} />
+                    </button>
+                  </div>
+                  {!analysisSections.structureCollapsed && (
+                    <StockChanlunPanel
+                      analysis={chanlunAnalysis}
+                      period={period}
+                      assetType={assetType}
+                      isLoading={periodKline.isLoading || periodKline.isFetching && !periodKline.data}
+                      error={periodKline.error}
+                    />
+                  )}
+                </section>
               </div>
             )}
           </div>
