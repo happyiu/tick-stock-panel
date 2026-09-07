@@ -340,7 +340,7 @@ _WATCHLIST_COLS = [
     "vol_ratio_5d",
     "ma5", "ma10", "ma20", "ma60",
     "vol_ma5", "vol_ma10",
-    "high_60d", "low_60d",
+    "high_60d", "low_60d", "high_20d", "low_20d",
     "rsi_6", "rsi_14", "rsi_24",
     "macd_dif", "macd_dea", "macd_hist",
     "kdj_k", "kdj_d", "kdj_j",
@@ -440,6 +440,11 @@ def watchlist_enriched(
     df = df.with_columns(
         pl.col("symbol").replace_strict(asset_map, default="stock", return_dtype=pl.Utf8).alias("asset_type")
     )
+
+    # 新增运行时指标兼容旧 enriched 分区: 旧缓存没有该列时仍返回稳定的 null 字段。
+    for column in ("high_20d", "low_20d"):
+        if column not in df.columns:
+            df = df.with_columns(pl.lit(None, dtype=pl.Float64).alias(column))
 
     # 选择内置需要的列
     keep = [c for c in _WATCHLIST_COLS + ["name", "float_shares", "asset_type"] if c in df.columns]

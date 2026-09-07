@@ -60,15 +60,17 @@ TickFlow 的「先探后存」语义:
 | `node` | 需要 Node.js 运行时, `npm install` | stock-sdk |
 | `none` | 无额外依赖 | 纯 HTTP API 源 |
 
-> ⚠️ stock-sdk 在 Docker 中默认不打包(合规考虑:它抓取第三方财经网站接口,存在版权与
-> 反爬风险)。如需启用,构建时传 `--build-arg INCLUDE_STOCKSDK=1`,使用风险自负。
+> ⚠️ stock-sdk 默认随 Docker 镜像与 `dev.sh` 安装(它抓取第三方财经网站接口,存在版权与
+> 反爬风险)。如需关闭 Docker 内置依赖,传 `--build-arg INCLUDE_STOCKSDK=0`；使用风险自负。
 > 详见 [deployment.md](./deployment.md)。
 
 仓库还提供 `backend/app/plugins/astockdata/` 作为 Python 型可选插件：它按
 [a-stock-data](https://github.com/simonlin1212/a-stock-data) 的行情层接入 mootdx
 日K/分钟K（7709 不可达时降级腾讯最近分钟K）、新浪复权因子和腾讯实时行情，当前只声明 `daily`、`adj_factor`、`minute`、
 `realtime` 四个标准数据集。研报、资金流、新闻、公告等端点没有对应的系统 service/API，
-因此暂不随 provider 暴露；标的维表也继续走系统现有 TickFlow/本地 instruments 路径。
+因此暂不随 provider 暴露；标的维表也继续走系统现有 TickFlow/本地 instruments 路径。它随基础环境默认安装；
+由于 mootdx 的上游元数据包含过时的 httpx/py-mini-racer 约束，安装入口对 mootdx 本体使用 `--no-deps`，
+其 `quotes` 路径所需的兼容依赖由后端基础环境锁定。
 
 `runtime` 字段当前仅用于 UI 展示, 实际依赖检测由 `check` 函数负责。
 

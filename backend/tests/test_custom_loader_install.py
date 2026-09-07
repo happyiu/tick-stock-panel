@@ -31,12 +31,15 @@ def _patch_uv_install(monkeypatch, returncodes):
     return calls
 
 
-def _fake_python_plugin(monkeypatch, tmp_path):
+def _fake_python_plugin(monkeypatch, tmp_path, *, no_deps=False):
     """在临时目录铺设最小 python 插件, 并把 plugins_dir 指过去 (自包含)。"""
     pdir = tmp_path / "baostock"
     pdir.mkdir()
     (pdir / "plugin.yaml").write_text(
-        "name: baostock\nruntime: python\nentry: p:provider\n", encoding="utf-8",
+        "name: baostock\nruntime: python\n"
+        f"install_no_deps: {'true' if no_deps else 'false'}\n"
+        "entry: p:provider\n",
+        encoding="utf-8",
     )
     (pdir / "requirements.txt").write_text("baostock\n", encoding="utf-8")
     monkeypatch.setattr(loader, "plugins_dir", lambda: tmp_path)
@@ -70,6 +73,16 @@ def test_install_plugin_uv_retry_keeps_python_target(monkeypatch, tmp_path):
         assert "--python" in cmd
         idx = cmd.index("--python")
         assert cmd[idx + 1] == sys.executable
+
+
+def test_install_plugin_can_skip_upstream_dependency_conflicts(monkeypatch, tmp_path):
+    """插件声明 install_no_deps 时, 安装命令必须保留该安全边界。"""
+    _fake_python_plugin(monkeypatch, tmp_path, no_deps=True)
+    calls = _patch_uv_install(monkeypatch, [0])
+
+    ok, msg = loader.install_plugin("baostock")
+    assert ok, msg
+    assert "--no-deps" in calls[0]
 
 
 def test_uninstall_plugin_uv_targets_running_interpreter(monkeypatch, tmp_path):

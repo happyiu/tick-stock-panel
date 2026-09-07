@@ -1579,6 +1579,18 @@ wheels = [
 ]
 
 [[package]]
+name = "prettytable"
+version = "3.18.0"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+dependencies = [
+    { name = "wcwidth" },
+]
+sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/81/74/ba08d81e668ccfe8658d7520a307e63c19862c08eb4ccb26f356c5239a7a/prettytable-3.18.0.tar.gz", hash = "sha256:439217116152244369caf3d9f1caf2f9fe29b03bd79e88d2928c8e718c95d680", size = 76373, upload-time = "2026-06-22T16:07:50.174Z" }
+wheels = [
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/fe/be/2e6798ace5cc036f5d05d36b7b2fd85346f1a708c87060890b070d0ec607/prettytable-3.18.0-py3-none-any.whl", hash = "sha256:b3346e0e6f79180833aebaac088ae926340586cf6d7d991b9eb125b65f72313a", size = 37357, upload-time = "2026-06-22T16:07:48.595Z" },
+]
+
+[[package]]
 name = "prompt-toolkit"
 version = "3.0.52"
 source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
@@ -2483,6 +2495,27 @@ wheels = [
 ]
 
 [[package]]
+name = "tdxpy"
+version = "0.2.7"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+dependencies = [
+    { name = "pandas" },
+]
+sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/e3/63/ecc88446a1e693336dfe57aa3c95d02b3a1dc0d7ba0c4b256bea471c6033/tdxpy-0.2.7.tar.gz", hash = "sha256:e2462cf61f5cef845e70ac9be071ba6386b226bec4075de4af9807b60b7ae70d", size = 34175, upload-time = "2024-03-10T04:59:03.066Z" }
+wheels = [
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/e2/db/6513418e77e3635148d251eb15e6fbd32bad7ee4842b81bda8be7d2fbd0a/tdxpy-0.2.7-py3-none-any.whl", hash = "sha256:5514d35608fac2c7b2acf693de6f41ba7ccda58207b65a3f374c89887560737c", size = 56830, upload-time = "2024-03-10T04:59:00.591Z" },
+]
+
+[[package]]
+name = "tenacity"
+version = "8.5.0"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/a3/4d/6a19536c50b849338fcbe9290d562b52cbdcf30d8963d3588a68a4107df1/tenacity-8.5.0.tar.gz", hash = "sha256:8bc6c0c8a09b31e6cad13c47afbed1a567518250a9a171418582ed8d9c20ca78", size = 47309, upload-time = "2024-07-05T07:25:31.836Z" }
+wheels = [
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/d2/3f/8ba87d9e287b9d385a02a7114ddcef61b26f86411e121c9003eb509a1773/tenacity-8.5.0-py3-none-any.whl", hash = "sha256:b594c2a5945830c267ce6b79a166228323ed52718f30302c1359836112346687", size = 28165, upload-time = "2024-07-05T07:25:29.591Z" },
+]
+
+[[package]]
 name = "threadpoolctl"
 version = "3.6.0"
 source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
@@ -2513,7 +2546,7 @@ all = [
 
 [[package]]
 name = "tickflow-stock-panel-backend"
-version = "0.2.2"
+version = "0.2.3"
 source = { editable = "." }
 dependencies = [
     { name = "apscheduler" },
@@ -2528,6 +2561,7 @@ dependencies = [
     { name = "platformdirs" },
     { name = "plyer" },
     { name = "polars" },
+    { name = "prettytable" },
     { name = "psutil" },
     { name = "pyarrow" },
     { name = "pydantic" },
@@ -2537,8 +2571,12 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "python-multipart" },
     { name = "pyyaml" },
+    { name = "requests" },
     { name = "sse-starlette" },
+    { name = "tdxpy" },
+    { name = "tenacity" },
     { name = "tickflow", extra = ["all"] },
+    { name = "tqdm" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "winotify", marker = "sys_platform == 'win32'" },
 ]
@@ -2576,6 +2614,7 @@ requires-dist = [
     { name = "plyer", specifier = ">=2.1" },
     { name = "polars", specifier = ">=1.0" },
     { name = "polars", extras = ["rtcompat"], marker = "extra == 'legacy-cpu'", specifier = ">=1.0" },
+    { name = "prettytable", specifier = ">=3.5,<4" },
     { name = "psutil", specifier = ">=5.9" },
     { name = "pyarrow", specifier = ">=16.0" },
     { name = "pydantic", specifier = ">=2.7" },
@@ -2588,9 +2627,13 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.6" },
     { name = "pywebview", marker = "extra == 'desktop'", specifier = ">=5.0" },
     { name = "pyyaml", specifier = ">=6.0" },
+    { name = "requests", specifier = ">=2.31" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
     { name = "sse-starlette", specifier = ">=2.0" },
+    { name = "tdxpy", specifier = ">=0.2.5,<0.3" },
+    { name = "tenacity", specifier = ">=8.1,<9" },
     { name = "tickflow", extras = ["all"], specifier = ">=0.1.23" },
+    { name = "tqdm", specifier = ">=4.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
     { name = "vectorbt", marker = "extra == 'backtest'", specifier = ">=0.26" },
     { name = "winotify", marker = "sys_platform == 'win32'", specifier = ">=1.1" },

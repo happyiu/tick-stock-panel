@@ -121,6 +121,8 @@ def _live_state() -> pl.DataFrame:
         "_boll_partial_sq_sum": [1900.0],
         "_high_59d": [10.1],
         "_low_59d": [9.9],
+        "_high_19d": [10.1],
+        "_low_19d": [9.9],
         "_close_5d_ago": [10.0],
         "_close_10d_ago": [10.0],
         "_close_20d_ago": [10.0],
@@ -192,6 +194,8 @@ def test_realtime_enriched_keeps_rows_without_history_and_limits_technical_field
     halted = result.filter(pl.col("symbol") == "600002.SH").row(0, named=True)
 
     assert existing["ma5"] is not None
+    assert existing["high_20d"] == 10.2
+    assert existing["low_20d"] == 9.9
     assert resumed["raw_close"] == 11.0
     assert resumed["signal_limit_up"] is True
     assert resumed["consecutive_limit_ups"] == 1

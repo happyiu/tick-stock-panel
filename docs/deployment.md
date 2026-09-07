@@ -27,6 +27,8 @@ cp .env.example .env       # 按需填 TICKFLOW_API_KEY(留空 = None 模式)
 ```bash
 # 后端
 cd backend && uv sync --extra backtest   # 含回测依赖
+# a-stock-data 默认依赖（手动启动时补装 mootdx 本体）
+uv pip install --no-deps --python .venv/bin/python -r app/plugins/astockdata/requirements.txt
 # 老 CPU: uv sync --extra legacy-cpu
 # 老 CPU + 回测: uv sync --extra legacy-cpu --extra backtest
 uv run uvicorn app.main:app --reload --port 3018
@@ -47,17 +49,16 @@ docker compose up --build
 
 Docker 采用两阶段构建,前端 dist 拷进后端镜像,**单容器**运行,数据完全在自己手里。
 
-> ⚠️ **stock-sdk 插件默认不打包(合规考虑)**
+> ⚠️ **stock-sdk 插件默认内置(合规提示)**
 >
-> stock-sdk 数据源本质是抓取第三方财经网站(如东方财富)的行情接口,未经对方授权,可能违反其服务条款并涉及交易所行情版权问题。**出于合规考虑,Docker 默认构建不再内置 stock-sdk 插件依赖**。
+> stock-sdk 数据源本质是抓取第三方财经网站(如东方财富)的行情接口,未经对方授权,可能违反其服务条款并涉及交易所行情版权问题。使用者需自行评估合规责任。
 >
-> - **默认行为**:`docker compose up --build` 构建出的镜像**不含** stock-sdk,插件不可用。
-> - **如确需启用**(自行承担合规责任):
+> - **默认行为**:`docker compose up --build` 构建出的镜像内置 Node.js 与 stock-sdk,设置页可直接使用。
+> - **如需关闭**:
 >   ```bash
->   docker compose build --build-arg INCLUDE_STOCKSDK=1
+>   docker compose build --build-arg INCLUDE_STOCKSDK=0
 >   docker compose up -d
 >   ```
-> - 启用后镜像会额外内置 Node.js 运行时并预装 stock-sdk 依赖,插件开箱即用。
 > - **建议优先使用 TickFlow 等正规授权数据源。**
 
 更新到新版本:

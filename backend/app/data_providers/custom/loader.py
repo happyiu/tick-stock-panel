@@ -185,18 +185,25 @@ def install_plugin(name: str) -> tuple[bool, str]:
             req = pdir / "requirements.txt"
             if not req.exists():
                 return False, "Python 型插件需要 requirements.txt"
+            no_deps = bool(manifest.get("install_no_deps"))
             uv_bin = shutil.which("uv")
             if uv_bin:
+                uv_args = [uv_bin, "pip", "install"]
+                if no_deps:
+                    uv_args.append("--no-deps")
                 result = subprocess.run(
-                    [uv_bin, "pip", "install", "--python", sys.executable, "-r", str(req)],
+                    [*uv_args, "--python", sys.executable, "-r", str(req)],
                     capture_output=True, text=True, timeout=300,
                     env={**__import__("os").environ, "UV_HTTP_TIMEOUT": "300"},
                 )
                 # exit 2 通常是配置文件解析错误, 绕过配置重试
                 # --no-config 会丢镜像, 显式传国内镜像加速 (与用户 uv.toml 意图一致)
                 if result.returncode == 2:
+                    fallback_args = [uv_bin, "pip", "install"]
+                    if no_deps:
+                        fallback_args.append("--no-deps")
                     result = subprocess.run(
-                        [uv_bin, "pip", "install", "--no-config",
+                        [*fallback_args, "--no-config",
                          "--index-url", "https://pypi.tuna.tsinghua.edu.cn/simple",
                          "--python", sys.executable,
                          "-r", str(req)],
@@ -204,8 +211,11 @@ def install_plugin(name: str) -> tuple[bool, str]:
                         env={**__import__("os").environ, "UV_HTTP_TIMEOUT": "300"},
                     )
             else:
+                pip_args = [sys.executable, "-m", "pip", "install"]
+                if no_deps:
+                    pip_args.append("--no-deps")
                 result = subprocess.run(
-                    [sys.executable, "-m", "pip", "install", "-r", str(req)],
+                    [*pip_args, "-r", str(req)],
                     capture_output=True, text=True, timeout=300,
                 )
         else:

@@ -3,9 +3,10 @@
 name: astockdata
 display_name: "a-stock-data（多源行情）"
 runtime: python
+install_no_deps: true
 entry: app.plugins.astockdata.provider:AStockDataProvider
 check: app.plugins.astockdata.provider:availability
 datasets: [daily, adj_factor, minute, realtime]
 description: "通达信 mootdx 日K/分钟K（7709 不可达时降级腾讯最近分钟K）+ 新浪复权因子 + 腾讯实时行情；仅覆盖系统标准行情数据集。"
-install_hint: "点击安装 Python 依赖（mootdx、requests）；通达信 TCP 7709 在部分网络环境可能不可达。"
+install_hint: "基础环境默认安装 mootdx、requests；若当前环境未同步可点击安装。通达信 TCP 7709 在部分网络环境可能不可达。"
 homepage: "https://github.com/simonlin1212/a-stock-data"

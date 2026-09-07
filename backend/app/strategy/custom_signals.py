@@ -47,7 +47,7 @@ ALLOWED_FIELDS: frozenset[str] = frozenset({
     "atr_14",
     # 量价 / 极值 / 动量 / 波动率 / RSI
     "vol_ma5", "vol_ma10", "vol_ratio_5d",
-    "high_60d", "low_60d",
+    "high_60d", "low_60d", "high_20d", "low_20d",
     "momentum_5d", "momentum_10d", "momentum_20d", "momentum_30d", "momentum_60d",
     "annual_vol_20d",
     "rsi_6", "rsi_14", "rsi_24",

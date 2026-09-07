@@ -987,7 +987,7 @@ export function Layout() {
             <ThemeToggle />
             <NavLink
               to="/settings"
-              title={railMode ? '设置' : undefined}
+              title="设置"
               className={({ isActive }) =>
                 cn(
                   'group relative flex items-center rounded-btn text-sm transition-all duration-150 ease-smooth',
@@ -1007,7 +1007,6 @@ export function Layout() {
                     )}
                   />
                   <Settings className={cn('h-4 w-4 shrink-0 transition-colors', isActive ? 'text-accent' : 'text-foreground/60 group-hover:text-foreground/85')} />
-                  {!railMode && <span>设置</span>}
                   {!railMode && version && (
                     <span className="ml-auto font-mono text-[10px] text-muted/50 select-none shrink-0">
                       {version}

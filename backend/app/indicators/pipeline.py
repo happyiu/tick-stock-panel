@@ -158,6 +158,8 @@ ENRICHED_COLUMNS: dict[str, dict[str, str]] = {
     # ── 极值 ─────────────────────────────────────────────
     "high_60d":                "60日最高价",
     "low_60d":                 "60日最低价",
+    "high_20d":                "20日最高价",
+    "low_20d":                 "20日最低价",
     # ── 动量 ─────────────────────────────────────────────
     "momentum_5d":             "5日动量(涨跌幅小数)",
     "momentum_10d":            "10日动量",
@@ -212,7 +214,7 @@ ENRICHED_COLUMNS_BY_CATEGORY: dict[str, list[str]] = {
     "kdj":      ["kdj_k", "kdj_d", "kdj_j"],
     "atr":      ["atr_14"],
     "volume":   ["vol_ma5", "vol_ma10", "vol_ratio_5d"],
-    "extremes": ["high_60d", "low_60d"],
+    "extremes": ["high_60d", "low_60d", "high_20d", "low_20d"],
     "momentum": ["momentum_5d", "momentum_10d", "momentum_20d", "momentum_30d", "momentum_60d"],
     "deviation": ["deviate_3d", "deviate_10d", "deviate_30d"],
     "volatility": ["annual_vol_20d"],
@@ -333,7 +335,7 @@ _ALL_INDICATOR_COLS: frozenset[str] = frozenset({
     "prev_close", "ma5", "ma10", "ma20", "ma30", "ma60",
     "ema5", "ema10", "ema20", "ema30", "ema60", "_ema12", "_ema26",
     "_boll_std", "_kdj_ln", "_kdj_hn", "_tr", "vol_ma5", "vol_ma10",
-    "_vol_ma5", "high_60d", "low_60d",
+    "_vol_ma5", "high_60d", "low_60d", "high_20d", "low_20d",
     "macd_dif", "boll_upper", "boll_lower", "macd_dea", "macd_hist",
     "kdj_k", "kdj_d", "kdj_j",
     "atr_14", "vol_ratio_5d",
@@ -440,6 +442,10 @@ def compute_indicators(
         _p1.append(pl.col("close").rolling_max(60).over("symbol").alias("high_60d"))
     if "low_60d" in want:
         _p1.append(pl.col("close").rolling_min(60).over("symbol").alias("low_60d"))
+    if "high_20d" in want:
+        _p1.append(pl.col("close").rolling_max(20).over("symbol").alias("high_20d"))
+    if "low_20d" in want:
+        _p1.append(pl.col("close").rolling_min(20).over("symbol").alias("low_20d"))
     if _p1:
         df = df.with_columns(_p1)
 
@@ -1825,7 +1831,7 @@ def compute_enriched_today(
         ((pl.col("volume") * time_factor) / vol_ma5_prev).alias("vol_ratio_5d"),
     ])
 
-    # ---- 极值 60 日 ----
+    # ---- 极值 60 日 / 20 日 ----
     df = df.with_columns([
         pl.when(has_history_state)
           .then(pl.max_horizontal(pl.col("_high_59d"), pl.col("high")))
@@ -1835,6 +1841,14 @@ def compute_enriched_today(
           .then(pl.min_horizontal(pl.col("_low_59d"), pl.col("low")))
           .otherwise(None)
           .alias("low_60d"),
+        pl.when(has_history_state)
+            .then(pl.max_horizontal(pl.col("_high_19d"), pl.col("close")))
+            .otherwise(None)
+            .alias("high_20d"),
+        pl.when(has_history_state)
+            .then(pl.min_horizontal(pl.col("_low_19d"), pl.col("close")))
+            .otherwise(None)
+            .alias("low_20d"),
     ])
 
     # ---- 动量 (5d/10d/20d/30d/60d) ----
@@ -1937,7 +1951,7 @@ def compute_enriched_today(
         "_ma5_partial_sum", "_ma10_partial_sum", "_ma20_partial_sum",
         "_ma30_partial_sum", "_ma60_partial_sum",
         "_boll_partial_sum", "_boll_partial_sq_sum",
-        "_high_59d", "_low_59d",
+        "_high_59d", "_low_59d", "_high_19d", "_low_19d",
         "_close_5d_ago", "_close_10d_ago", "_close_20d_ago",
         "_close_30d_ago", "_close_60d_ago",
         "_vol_ma5_partial_sum", "_vol_ma10_partial_sum", "_vol_ma5_prev_sum",

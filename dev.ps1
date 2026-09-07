@@ -153,7 +153,14 @@ if (-not [string]::IsNullOrWhiteSpace($BackendExtras)) {
     }
 }
 
-if (-not (Test-Path (Join-Path $BackendDir '.venv')) -or $BackendExtraArgs.Count) {
+$BackendPython = Join-Path $BackendDir '.venv/Scripts/python.exe'
+$BackendNeedsSync = -not (Test-Path (Join-Path $BackendDir '.venv'))
+if (-not $BackendNeedsSync) {
+    & $BackendPython -c 'import requests, prettytable, tdxpy, tenacity, tqdm' 2>$null
+    $BackendNeedsSync = $LASTEXITCODE -ne 0
+}
+
+if ($BackendNeedsSync -or $BackendExtraArgs.Count) {
     if ($BackendExtraArgs.Count) {
         Log-Info "syncing Python deps with extras: $BackendExtras"
     } else {
@@ -171,6 +178,38 @@ if (-not (Test-Path (Join-Path $FrontendDir 'node_modules'))) {
     try { & pnpm install } finally { Pop-Location }
     if ($LASTEXITCODE -ne 0) { Log-Err 'pnpm install failed'; exit 1 }
     Log-Ok 'frontend deps installed'
+}
+
+$AStockDataDir = Join-Path $BackendDir 'app/plugins/astockdata'
+$AStockDataPython = Join-Path $BackendDir '.venv/Scripts/python.exe'
+& $AStockDataPython -c 'import mootdx.quotes' 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Log-Info 'first run - installing a-stock-data Python deps...'
+    & uv pip install --no-deps --python $AStockDataPython -r (Join-Path $AStockDataDir 'requirements.txt')
+    if ($LASTEXITCODE -eq 0) {
+        Log-Ok 'a-stock-data deps installed'
+    } else {
+        Log-Warn 'a-stock-data install failed; continuing (retry from Settings)'
+    }
+}
+
+$StockSdkDir = Join-Path $BackendDir 'app/plugins/stocksdk'
+$StockSdkModule = Join-Path $StockSdkDir 'node_modules/stock-sdk'
+if (-not (Test-Path $StockSdkModule)) {
+    if (-not (Get-Command 'node' -ErrorAction SilentlyContinue) -or
+        -not (Get-Command 'npm' -ErrorAction SilentlyContinue)) {
+        Log-Warn 'Node.js/npm not found; skipping stock-sdk (install Node.js 18+ and retry from Settings)'
+    } else {
+        Log-Info 'first run - installing stock-sdk data source...'
+        $npmExit = 0
+        Push-Location $StockSdkDir
+        try { & npm ci --omit=dev --no-audit --no-fund; $npmExit = $LASTEXITCODE } finally { Pop-Location }
+        if ($npmExit -eq 0) {
+            Log-Ok 'stock-sdk deps installed'
+        } else {
+            Log-Warn 'stock-sdk install failed; continuing (retry from Settings)'
+        }
+    }
 }
 
 # ===== 4. Banner (ASCII so it renders on any codepage) =====

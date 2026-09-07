@@ -1,2 +1,4 @@
-mootdx>=0.10
+# mootdx 的上游元数据会拉入与本项目冲突的旧版 httpx 和无 ARM wheel 的
+# py-mini-racer；当前 provider 只使用 mootdx.quotes，安装入口统一带 --no-deps。
+mootdx==0.11.7
 requests>=2.31

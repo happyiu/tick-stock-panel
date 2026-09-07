@@ -65,7 +65,8 @@ def _make_request(repo):
 def _enriched_df(symbols_data):
     """symbols_data: [(symbol, close, change_pct, amount), ...]"""
     return pl.DataFrame(
-        [{"symbol": s, "close": c, "change_pct": p, "amount": a, "turnover_rate": 1.0}
+        [{"symbol": s, "close": c, "change_pct": p, "amount": a, "turnover_rate": 1.0,
+          "high_20d": c + 1.0, "low_20d": c - 1.0}
          for s, c, p, a in symbols_data],
         schema_overrides={
             "close": pl.Float64, "change_pct": pl.Float64,
@@ -95,11 +96,15 @@ def test_watchlist_symbol_not_in_enriched_still_returned(monkeypatch):
     # 缺失标的指标应为 null
     row_999 = next(r for r in res["rows"] if r["symbol"] == "999999")
     assert row_999["close"] is None, f"缺失指标应为 null, 实际: {row_999['close']}"
+    assert row_999["high_20d"] is None
+    assert row_999["low_20d"] is None
     assert row_999["name"] == "未知股", "name 走 get_name_map, 应正常返回"
 
     # 命中标的指标正常
     row_519 = next(r for r in res["rows"] if r["symbol"] == "600519")
     assert row_519["close"] == 1800.0
+    assert row_519["high_20d"] == 1801.0
+    assert row_519["low_20d"] == 1799.0
 
 
 def test_all_watchlist_missing_from_enriched(monkeypatch):

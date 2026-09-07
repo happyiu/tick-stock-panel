@@ -41,6 +41,25 @@ def test_compute_indicators_assume_sorted_matches_default_values():
     assert fast.equals(default)
 
 
+def test_compute_indicators_high20_uses_close_window_and_needed_pruning():
+    bars = _bars(22).filter(pl.col("symbol") == "600000").with_columns(
+        pl.int_range(1, 23).cast(pl.Float64).alias("close"),
+    ).with_columns([
+        (pl.col("close") + 0.1).alias("high"),
+        (pl.col("close") - 0.1).alias("low"),
+    ]).sort(["symbol", "date"])
+
+    result = compute_indicators(bars, needed={"high_20d", "low_20d"})
+
+    assert "high_20d" in result.columns
+    assert "low_20d" in result.columns
+    assert "high_60d" not in result.columns
+    assert result["high_20d"][:19].null_count() == 19
+    assert result["low_20d"][:19].null_count() == 19
+    assert result["high_20d"][19:].to_list() == [20.0, 21.0, 22.0]
+    assert result["low_20d"][19:].to_list() == [1.0, 2.0, 3.0]
+
+
 def test_compute_signals_subset_matches_full_values():
     indicators = compute_indicators(_bars())
     full = compute_signals(indicators)

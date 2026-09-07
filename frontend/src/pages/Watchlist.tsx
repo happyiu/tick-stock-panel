@@ -431,33 +431,14 @@ function RealtimeDot({ title = '实时监控中' }: { title?: string }) {
 
 // ===== 卡片组件 =====
 
-// 共享的空 K 线数组常量 — 避免每次渲染传入新的 [] 破坏 StockCard 的 memo
-const EMPTY_KLINE: KlineRow[] = []
-
-function cardColumnCount(viewportWidth: number): number {
-  if (viewportWidth >= 1536) return 6
-  if (viewportWidth >= 1280) return 5
-  if (viewportWidth >= 768) return 4
-  if (viewportWidth >= 640) return 3
-  return 2
-}
-
-function useCardColumnCount(): number {
-  const [count, setCount] = useState(() => cardColumnCount(window.innerWidth))
-
-  useEffect(() => {
-    const update = () => setCount(cardColumnCount(window.innerWidth))
-    window.addEventListener('resize', update)
-    return () => window.removeEventListener('resize', update)
-  }, [])
-
-  return count
+function finiteNumber(value: unknown): number | null {
+  if (value == null) return null
+  const number = Number(value)
+  return Number.isFinite(number) ? number : null
 }
 
 const StockCard = React.memo(function StockCard({
   r,
-  candleRows,
-  showCandle,
   onPreview,
   onConfirmRemove,
   onCancelRemove,
@@ -474,8 +455,6 @@ const StockCard = React.memo(function StockCard({
   groupChangePending,
 }: {
   r: any
-  candleRows: KlineRow[]
-  showCandle: boolean
   onPreview: (symbol: string, name: string) => void
   onConfirmRemove: (symbol: string) => void
   onCancelRemove: () => void
@@ -493,12 +472,33 @@ const StockCard = React.memo(function StockCard({
   groupChangePending: boolean
 }) {
   const board = boardTag(r.symbol)
-  const price = r.rt_price ?? r.close
-  const pct = r.rt_pct ?? r.change_pct
+  const price = finiteNumber(r.rt_price ?? r.close)
+  const pct = finiteNumber(r.rt_pct ?? r.change_pct)
   const name = r.rt_name ?? r.name
   const signals = getSignals(r)
   const isUp = (pct ?? 0) > 0
   const isDown = (pct ?? 0) < 0
+  const ma5 = finiteNumber(r.ma5)
+  const ma10 = finiteNumber(r.ma10)
+  const ma20 = finiteNumber(r.ma20)
+  const macdDif = finiteNumber(r.macd_dif)
+  const macdDea = finiteNumber(r.macd_dea)
+  const high20 = finiteNumber(r.high_20d)
+  const low20 = finiteNumber(r.low_20d)
+  const turnover = finiteNumber(r.turnover_rate)
+  const rangePosition = price != null && high20 != null && low20 != null && high20 > low20
+    ? Math.min(100, Math.max(0, (price - low20) / (high20 - low20) * 100))
+    : null
+  const maAlignment = ma5 != null && ma10 != null && ma20 != null
+    ? ma5 > ma10 && ma10 > ma20
+      ? { label: '多头排列', className: 'text-bull' }
+      : ma5 < ma10 && ma10 < ma20
+        ? { label: '空头排列', className: 'text-bear' }
+        : { label: '震荡', className: 'text-muted' }
+    : null
+  const macdDirection = macdDif != null && macdDea != null
+    ? { label: macdDif >= macdDea ? '多头' : '空头', className: macdDif >= macdDea ? 'text-bull' : 'text-bear' }
+    : null
 
   // 动态背景渐变: 涨=红底, 跌=绿底, 平=无色
   const bgGlow = isUp
@@ -553,75 +553,81 @@ const StockCard = React.memo(function StockCard({
         )}
       </div>
 
-      {/* 卡片内容 */}
-      <div className="pl-4 pr-2.5 pt-2.5 pb-0">
-        {/* 第一行: 代码 + 名称 + 板块标识 */}
-        <div className="flex items-center gap-1.5 min-w-0 mb-2 pr-8">
-          <span className="shrink-0 font-mono text-foreground text-xs tracking-wide">
-            {r.symbol}
-          </span>
-          {name && (
-            <span className="text-xs text-secondary truncate">{name}</span>
-          )}
-          {board && (
-            <span className={`shrink-0 inline-flex items-center justify-center px-1 h-[16px] rounded text-[9px] font-bold leading-none ${board.color}`}>
-              {board.label}
+      {/* 第一行: 名称、代码、标签、价格与操作 */}
+      <div className="flex min-w-0 flex-wrap items-center gap-x-5 gap-y-2 pl-4 pr-24 pt-2.5 pb-2.5">
+        <div className="w-40 max-w-full min-w-0 shrink-0">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="min-w-0 truncate text-sm font-semibold text-foreground">
+              {name || r.symbol}
             </span>
-          )}
-          {r.consecutive_limit_ups > 0 && (
-            <span className="shrink-0 inline-flex items-center justify-center px-1 h-[16px] rounded bg-danger/15 text-danger text-[9px] font-bold tabular-nums">
-              {r.consecutive_limit_ups === 1 ? '首板' : `${r.consecutive_limit_ups}连`}
-            </span>
-          )}
-          {isMonitored && <span className="ml-auto"><RealtimeDot /></span>}
+            {board && (
+              <span className={`shrink-0 inline-flex items-center justify-center px-1 h-[16px] rounded text-[9px] font-bold leading-none ${board.color}`}>
+                {board.label}
+              </span>
+            )}
+            {r.consecutive_limit_ups > 0 && (
+              <span className="shrink-0 inline-flex items-center justify-center px-1 h-[16px] rounded bg-danger/15 text-danger text-[9px] font-bold tabular-nums">
+                {r.consecutive_limit_ups === 1 ? '首板' : `${r.consecutive_limit_ups}连`}
+              </span>
+            )}
+            {isMonitored && <RealtimeDot />}
+          </div>
+          <div className="mt-0.5 font-mono text-[10px] tracking-wide text-muted">{r.symbol}</div>
         </div>
 
-        {/* 第二行: 大价格 + 涨跌幅胶囊 */}
-        <div className="flex items-end justify-between gap-2 mb-2">
+        <div className="flex shrink-0 items-baseline gap-2">
           <span className={`text-xl tabular-nums tracking-tighter leading-none ${priceColorClass(pct)}`}>
             {fmtAssetPrice(price, r.asset_type)}
           </span>
           {pct != null && (
-            <span className={`shrink-0 inline-flex items-center px-1.5 py-[2px] rounded text-[11px] tabular-nums ${pctBg}`}>
+            <span className={`inline-flex items-center rounded px-1.5 py-[2px] text-[11px] tabular-nums ${pctBg}`}>
               {fmtPct(pct)}
             </span>
           )}
         </div>
+      </div>
 
-        {/* 第三行: 指标 */}
-        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[10px] text-muted leading-relaxed">
-          <span title="换手率">换手<span className={`font-mono ml-0.5 ${turnoverColor(r.turnover_rate)}`}>{r.turnover_rate != null ? `${r.turnover_rate.toFixed(2)}%` : '—'}</span></span>
-          <span title="量比">量比<span className="font-mono ml-0.5">{fmtPrice(r.vol_ratio_5d)}</span></span>
-          <span title="RSI14">RSI<span className="font-mono ml-0.5">{r.rsi_14 != null ? r.rsi_14.toFixed(1) : '—'}</span></span>
-          {/* 扩展数据列展示在卡片中 */}
-          {extCols.map(col => {
-            if (col.source.type !== 'ext') return null
-            const { configId, fieldName } = col.source
-            const val = r[`${configId}__${fieldName}`]
-            if (val == null) return null
+      {/* 第二行: 技术指标；窄屏自动换行 */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-dashed border-border/60 px-4 py-2 text-[10px] leading-relaxed text-muted">
+        <span title="MA5" className="shrink-0"><span className="text-muted/70">MA5</span><span className="ml-1 font-mono text-secondary">{fmtAssetPrice(ma5, r.asset_type)}</span></span>
+        <span title="MA10" className="shrink-0"><span className="text-muted/70">MA10</span><span className="ml-1 font-mono text-secondary">{fmtAssetPrice(ma10, r.asset_type)}</span></span>
+        <span title="MA20" className="shrink-0"><span className="text-muted/70">MA20</span><span className="ml-1 font-mono text-secondary">{fmtAssetPrice(ma20, r.asset_type)}</span></span>
+        <span className="shrink-0">均线 <span className={`ml-1 ${maAlignment?.className ?? 'text-muted'}`}>{maAlignment?.label ?? '—'}</span></span>
+        <span className="shrink-0">MACD <span className={`ml-1 ${macdDirection?.className ?? 'text-muted'}`}>{macdDirection?.label ?? '—'}</span></span>
+        <span title="RSI14" className="shrink-0">RSI <span className="ml-1 font-mono text-secondary">{finiteNumber(r.rsi_14)?.toFixed(1) ?? '—'}</span></span>
+        <span title="5日动量" className="shrink-0">5日 <span className={`ml-1 font-mono ${priceColorClass(finiteNumber(r.momentum_5d))}`}>{fmtPct(finiteNumber(r.momentum_5d))}</span></span>
+        <span title="20日动量" className="shrink-0">20日 <span className={`ml-1 font-mono ${priceColorClass(finiteNumber(r.momentum_20d))}`}>{fmtPct(finiteNumber(r.momentum_20d))}</span></span>
+        <span title="当前价在最近20个交易日收盘区间的位置" className="shrink-0">20日区间 <span className="ml-1 font-mono text-secondary">{rangePosition != null ? `${rangePosition.toFixed(0)}%` : '—'}</span></span>
+        <span title="量比" className="shrink-0">量比 <span className="ml-1 font-mono text-secondary">{fmtPrice(finiteNumber(r.vol_ratio_5d))}</span></span>
+        <span title="换手率" className="shrink-0">换手 <span className={`ml-1 font-mono ${turnoverColor(turnover)}`}>{turnover != null ? `${turnover.toFixed(2)}%` : '—'}</span></span>
+        {/* 扩展数据列展示在卡片中 */}
+        {extCols.map(col => {
+          if (col.source.type !== 'ext') return null
+          const { configId, fieldName } = col.source
+          const val = r[`${configId}__${fieldName}`]
+          if (val == null) return null
 
-            const cellKey = `${r.symbol}::${col.id}`
-            const expanded = expandedCells.has(cellKey)
-            const sourceField = `${configId}.${fieldName}`
-            const dimensionKind = dimensionKindForSourceField(sourceField)
+          const cellKey = `${r.symbol}::${col.id}`
+          const expanded = expandedCells.has(cellKey)
+          const sourceField = `${configId}.${fieldName}`
+          const dimensionKind = dimensionKindForSourceField(sourceField)
 
-            return (
-              <span key={col.id} title={col.label}>
-                <span className="text-secondary">{col.label}</span>
-                <span className="font-mono ml-0.5">
-                  {renderExtValue(
-                    val,
-                    col,
-                    expanded,
-                    () => onToggleExpand(cellKey),
-                    true,
-                    dimensionKind ? value => onDimensionClick({ kind: dimensionKind, value, sourceField }) : undefined,
-                  )}
-                </span>
+          return (
+            <span key={col.id} title={col.label} className="shrink-0">
+              <span className="text-secondary">{col.label}</span>
+              <span className="ml-1 font-mono">
+                {renderExtValue(
+                  val,
+                  col,
+                  expanded,
+                  () => onToggleExpand(cellKey),
+                  true,
+                  dimensionKind ? value => onDimensionClick({ kind: dimensionKind, value, sourceField }) : undefined,
+                )}
               </span>
-            )
-          })}
-        </div>
+            </span>
+          )
+        })}
       </div>
 
       {/* 信号标签区 */}
@@ -640,12 +646,6 @@ const StockCard = React.memo(function StockCard({
         </div>
       )}
 
-      {/* 迷你蜡烛图 */}
-      {showCandle && candleRows.length > 0 && (
-        <div className="border-t border-border/40 px-3 py-1.5">
-          <MiniCandlestick rows={candleRows} height={32} />
-        </div>
-      )}
     </div>
   )
 })
@@ -823,11 +823,11 @@ export function Watchlist() {
   const quoteStatus = useQuoteStatus()
   const realtimeRunning = quoteStatus.data?.running ?? false
 
-  // 批量日k数据 (天数由列配置决定; 分组卡片视图不展示蜡烛, 挂起请求)
+  // 批量日k数据 (天数由列配置决定; 仅列表模式展示, 卡片/分组视图挂起请求)
   const klineBatch = useQuery({
     queryKey: QK.watchlistKlineBatch(`${symbolsKey}|${candleDays}`),
     queryFn: () => api.klineDailyBatch(symbols, candleDays),
-    enabled: dailyKVisible && symbols.length > 0 && !groupCardsOpen,
+    enabled: dailyKVisible && viewMode === 'table' && symbols.length > 0 && !groupCardsOpen,
     staleTime: 5 * 60_000,  // 5 分钟内不重请求
   })
 
@@ -1244,20 +1244,18 @@ export function Watchlist() {
     [previewSymbol, sortedRows],
   )
 
-  const cardColumns = useCardColumnCount()
   const cardGridRef = useRef<HTMLDivElement>(null)
   const virtualizeCards = viewMode === 'card' && !groupCardsOpen && sortedRows.length > VIRTUAL_LIST_THRESHOLD
-  const cardRowCount = Math.ceil(sortedRows.length / cardColumns)
   const { getScrollElement: getCardScrollElement, scrollMargin: cardScrollMargin } = useParentScroll(
     cardGridRef,
     virtualizeCards,
   )
   const cardRowVirtualizer = useVirtualizer({
-    count: virtualizeCards ? cardRowCount : 0,
+    count: virtualizeCards ? sortedRows.length : 0,
     getScrollElement: getCardScrollElement,
-    estimateSize: () => dailyKVisible ? 180 : 140,
-    getItemKey: index => `${cardColumns}:${(sortedRows[index * cardColumns] as any)?.symbol ?? index}`,
-    gap: 12,
+    estimateSize: () => 96,
+    getItemKey: index => (sortedRows[index] as any)?.symbol ?? index,
+    gap: 8,
     overscan: 3,
     scrollMargin: cardScrollMargin,
   })
@@ -1272,10 +1270,8 @@ export function Watchlist() {
     const items = cardRowVirtualizer.getVirtualItems()
     const out: string[] = []
     for (const item of items) {
-      for (let i = item.index * cardColumns; i < (item.index + 1) * cardColumns && i < sortedRows.length; i++) {
-        const s = (sortedRows[i] as any)?.symbol
-        if (typeof s === 'string' && scope.has(s)) out.push(s)
-      }
+      const s = (sortedRows[item.index] as any)?.symbol
+      if (typeof s === 'string' && scope.has(s)) out.push(s)
     }
     return out.length ? out : null
   })()
@@ -1318,8 +1314,6 @@ export function Watchlist() {
     <StockCard
       key={r.symbol}
       r={r}
-      candleRows={klineData[r.symbol] ?? EMPTY_KLINE}
-      showCandle={dailyKVisible}
       onPreview={handleCardPreview}
       onConfirmRemove={handleCardConfirmRemove}
       onCancelRemove={handleCardCancelRemove}
@@ -1889,7 +1883,7 @@ export function Watchlist() {
               className="rounded-card overflow-x-auto"
             />
           ) : !virtualizeCards ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
+            <div className="flex w-full flex-col gap-2">
               {sortedRows.map(renderStockCard)}
             </div>
           ) : (
@@ -1899,17 +1893,15 @@ export function Watchlist() {
               style={{ height: cardRowVirtualizer.getTotalSize() }}
             >
               {cardRowVirtualizer.getVirtualItems().map(virtualRow => {
-                const start = virtualRow.index * cardColumns
-                const row = sortedRows.slice(start, start + cardColumns)
                 return (
                   <div
                     key={virtualRow.key}
                     ref={cardRowVirtualizer.measureElement}
                     data-index={virtualRow.index}
-                    className="absolute left-0 top-0 w-full grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3"
+                    className="absolute left-0 top-0 w-full"
                     style={{ transform: `translateY(${virtualRow.start - cardScrollMargin}px)` }}
                   >
-                    {row.map(renderStockCard)}
+                    {renderStockCard(sortedRows[virtualRow.index])}
                   </div>
                 )
               })}

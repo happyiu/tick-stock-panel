@@ -46,6 +46,7 @@ from app.extensions.loader import (
     current_extension_context,
     start_backend_extensions,
 )
+from app.fork_version import DISPLAY_VERSION
 from app.jobs import daily_pipeline
 from app.services.matrix_prewarm_owner import MatrixCachePrewarmOwner
 from app.services.mining_process_lock import MiningProcessLock
@@ -86,8 +87,8 @@ if not getattr(sys, "frozen", False):
 @asynccontextmanager
 async def _application_lifespan(app: FastAPI):
     logger.info(
-        "Seek Hub v%s starting (mode=%s)",
-        __version__, tf_client.current_mode(),
+        "Seek Hub %s starting (mode=%s)",
+        DISPLAY_VERSION, tf_client.current_mode(),
     )
 
     # 首次启动: 若配置了 AUTH_PASSWORD 环境变量且未设过密码, 用它初始化。
