@@ -488,12 +488,6 @@ export function StockPanel({
         color: selectedSignal.direction === 'buy' ? '#EF4444' : '#22C55E',
       })
     }
-    if (selectedSignal.target1) {
-      lines.push({ value: selectedSignal.direction === 'buy' ? selectedSignal.target1.low : selectedSignal.target1.high, label: '目标一', color: '#F59E0B' })
-    }
-    if (selectedSignal.target2) {
-      lines.push({ value: selectedSignal.direction === 'buy' ? selectedSignal.target2.low : selectedSignal.target2.high, label: '目标二', color: '#F59E0B' })
-    }
     return lines
   }, [decisionSections.showInvalidationLine, selectedSignal])
   const chartPriceLines = useMemo(
