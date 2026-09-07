@@ -156,6 +156,12 @@ export const storage = {
   /** 个股预览 K 线与右侧面板的分栏比例 */
   stockPreviewSplitRatio: kv<number>('stock_preview_split_ratio'),
 
+  /** 个股预览弹窗宽度 */
+  stockPreviewWidth: kv<number>('stock_preview_width'),
+
+  /** 个股预览 30F 展示交易日数量 */
+  stockPreview30mDays: kv<number>('stock_preview_30m_days'),
+
   /** 策略结果列表列配置 */
   screenerResultColumns: kv<unknown[]>('screener_result_columns'),
 

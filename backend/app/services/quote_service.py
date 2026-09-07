@@ -665,6 +665,35 @@ class QuoteService:
                     now_ts = time.perf_counter()
                     provider = custom_sources.get_provider(provider_name)
                     records = provider.get_realtime()
+                    # 扶摇全市场快照不支持 ETF 代码; ETF 自选用已接入腾讯的
+                    # astockdata 单标的接口补拉, 仍汇入同一轮缓存/详情页链路。
+                    if (
+                        provider_name != "astockdata"
+                        and self._repo
+                        and custom_sources.provider_has_dataset(
+                            "astockdata", "realtime"
+                        )
+                    ):
+                        try:
+                            from app.services import watchlist
+                            etf_symbols = sorted(
+                                {
+                                    row.get("symbol")
+                                    for row in watchlist.list_symbols()
+                                    if row.get("symbol")
+                                }
+                                & self._repo.get_etf_symbol_set()
+                            )
+                            if etf_symbols:
+                                etf_provider = custom_sources.get_provider("astockdata")
+                                records.extend(
+                                    etf_provider.get_realtime(symbols=etf_symbols) or []
+                                )
+                                logger.info(
+                                    "自选 ETF 实时行情补拉完成: %d 只", len(etf_symbols)
+                                )
+                        except Exception as e:  # noqa: BLE001
+                            logger.warning("自选 ETF 实时行情补拉失败: %s", e)
                     # 指数补充: A 股快照通常不含指数。插件可选实现
                     # get_realtime_indices(symbols) 用独立端点补拉 (如 fuyao 指数快照);
                     # 未实现的源指数缓存为空, 由日K兜底接管。
@@ -724,6 +753,17 @@ class QuoteService:
                 etf_inst = self._repo.get_etf_instruments()
                 if not etf_inst.is_empty() and "symbol" in etf_inst.columns:
                     all_etf_symbols = set(etf_inst["symbol"].cast(pl.Utf8).to_list())
+            # 全市场 ETF 默认关闭以控制请求量, 但自选标的必须跟随行情轮询。
+            # 只补拉自选集合, 不改变全市场拉取开关的资源语义。
+            try:
+                from app.services import watchlist
+                watchlist_symbols = {
+                    row.get("symbol") for row in watchlist.list_symbols() if row.get("symbol")
+                }
+            except Exception:  # noqa: BLE001
+                watchlist_symbols = set()
+            watchlist_etf_symbols = watchlist_symbols & all_etf_symbols
+            watchlist_stock_symbols = watchlist_symbols - all_etf_symbols - all_index_symbols
 
             universes: list[str] = []
             if preferences.get_realtime_pull_stock():
@@ -737,6 +777,10 @@ class QuoteService:
                 logger.info("拉取全市场行情 (universes=%s, SDK超时=30s×重试3)", universes)
                 resp.extend(tf.quotes.get_by_universes(universes=universes) or [])
                 logger.info("全市场行情拉取完成: %d 条 (%.2fs)", len(resp), time.perf_counter() - _u0)
+            if watchlist_stock_symbols and not preferences.get_realtime_pull_stock():
+                resp.extend(tf.quotes.get(symbols=sorted(watchlist_stock_symbols)) or [])
+            if watchlist_etf_symbols and not preferences.get_realtime_pull_etf():
+                resp.extend(tf.quotes.get(symbols=sorted(watchlist_etf_symbols)) or [])
             # 指数: 固定核心四只 + 偏离值基准指数 + 监控规则标的, 按码显式拉取
             from app.indicators.pipeline import BENCHMARK_INDEX_SYMBOLS
             _core_syms = sorted(

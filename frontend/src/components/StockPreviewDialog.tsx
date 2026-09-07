@@ -14,7 +14,7 @@ import { DatePicker } from '@/components/DatePicker'
 import { RuleEditor } from '@/components/monitor/RuleEditor'
 import { PriceAlertDialog } from '@/components/stock-analysis/PriceAlertDialog'
 import { buildMonitorPriceLines } from '@/lib/price-alerts'
-import { usePreferences } from '@/lib/useSharedQueries'
+import { usePreferences, useQuoteStatus } from '@/lib/useSharedQueries'
 import { setFocusSymbol, clearFocusSymbol } from '@/lib/useQuoteStream'
 import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 import { storage } from '@/lib/storage'
@@ -22,6 +22,7 @@ import {
   DEFAULT_30M_DAYS,
   DEFAULT_INTRADAY_DAYS,
   KLINE_PERIOD_OPTIONS,
+  PERIOD_30M_DAY_OPTIONS,
   defaultKlineRange,
 } from '@/lib/kline'
 import { ExtensionSlot } from '@/extensions/ExtensionSlot'
@@ -87,6 +88,23 @@ function loadIntradayDays(): number {
     : DEFAULT_INTRADAY_DAYS
 }
 
+function load30mDays(): number {
+  const saved = storage.stockPreview30mDays.get(DEFAULT_30M_DAYS)
+  return PERIOD_30M_DAY_OPTIONS.includes(saved as typeof PERIOD_30M_DAY_OPTIONS[number])
+    ? saved
+    : DEFAULT_30M_DAYS
+}
+
+function previewKlineRange(
+  period: KlinePeriod,
+  assetType?: 'stock' | 'etf' | 'index',
+  periodDays = DEFAULT_30M_DAYS,
+): { start: string; end: string } {
+  return period === '1d' && assetType === 'etf'
+    ? defaultKlineRange('1mo')
+    : defaultKlineRange(period, new Date(), periodDays)
+}
+
 function boardTag(symbol: string): { label: string; color: string } | null {
   if (/^(300|301)/.test(symbol)) return { label: '创', color: 'text-[#f97316] bg-[#f97316]/12 border-[#f97316]/25' }
   if (/^688/.test(symbol))       return { label: '科', color: 'text-purple-400 bg-purple-400/12 border-purple-400/25' }
@@ -109,17 +127,67 @@ function fmtAbnormalCalcTime(asofSec: number): string {
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
+function fmtQuoteTime(timestampMs: number | null | undefined): string {
+  if (!timestampMs) return '—'
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }).format(new Date(timestampMs))
+}
+
 export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList: navListSource, onNavigate }: Props) {
   const [view, setView] = useState<PreviewView>('daily')
   const [assetType, setAssetType] = useState<'stock' | 'etf' | 'index' | undefined>(triggerInfo?.asset_type)
   const [intradayDays, setIntradayDays] = useState<number | null>(loadIntradayDays)
   const [period, setPeriod] = useState<KlinePeriod>('1d')
-  const [dateRange, setDateRange] = useState(() => defaultKlineRange('1d'))
+  const [periodDays, setPeriodDays] = useState(load30mDays)
+  const [dateRange, setDateRange] = useState(() => previewKlineRange('1d', triggerInfo?.asset_type))
   const [showMonitorEditor, setShowMonitorEditor] = useState(false)
   const [priceAlertDraft, setPriceAlertDraft] = useState<PriceAlertDraft | null>(null)
   const [maximized, setMaximized] = useState(false)
+  const [dialogWidth, setDialogWidth] = useState<number | null>(() => {
+    const saved = storage.stockPreviewWidth.get(0)
+    return saved >= 640 ? saved : null
+  })
+  const [widthResizing, setWidthResizing] = useState(false)
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const widthResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
   const qc = useQueryClient()
   const backdrop = useDialogBackdrop(onClose)
+
+  const clampDialogWidth = useCallback((value: number) => {
+    const max = Math.max(640, window.innerWidth - 24)
+    return Math.round(Math.min(max, Math.max(640, value)))
+  }, [])
+
+  const handleWidthPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (maximized || (event.pointerType === 'mouse' && event.button !== 0)) return
+    event.preventDefault()
+    widthResizeRef.current = {
+      startX: event.clientX,
+      startWidth: dialogRef.current?.getBoundingClientRect().width ?? dialogWidth ?? window.innerWidth * 0.92,
+    }
+    setWidthResizing(true)
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }, [dialogWidth, maximized])
+
+  const handleWidthPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const start = widthResizeRef.current
+    if (!start) return
+    setDialogWidth(clampDialogWidth(start.startWidth + event.clientX - start.startX))
+  }, [clampDialogWidth])
+
+  const handleWidthPointerUp = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!widthResizeRef.current) return
+    widthResizeRef.current = null
+    setWidthResizing(false)
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (dialogWidth != null) storage.stockPreviewWidth.set(dialogWidth)
+  }, [dialogWidth])
 
   const watchlist = useQuery({
     queryKey: QK.watchlist,
@@ -257,6 +325,12 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
     }
   }, [assetType, period])
 
+  useEffect(() => {
+    if (assetType === 'etf' && period === '1d' && dateRange.start === defaultKlineRange('1d').start) {
+      setDateRange(defaultKlineRange('1mo'))
+    }
+  }, [assetType, dateRange.start, period])
+
   // 焦点股票注册: SSE quotes_updated 推送时精准 invalidate 当前股票日K,
   // 让对话框日K最后一根蜡烛随实时价变化 (后端只读内存, 不调 TickFlow)。
   // 关闭/切股时清除, 避免无谓刷新。
@@ -270,6 +344,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
   // 与实时行情运行状态 (打开详情就是要看实时分时); 间隔沿用偏好, 默认 6s。
   // 最新一根K由后端 live 参数直接实时拉取, 与行情列表节奏一致。
   const { data: prefs } = usePreferences()
+  const { data: quoteStatus } = useQuoteStatus()
   const intradayRefetchMs = (prefs?.minute_intraday_refresh_interval ?? 6) * 1000
 
   // 分时档位按分钟源历史深度收窄: 浅源(如 stock-sdk=5日)只显示可行档位、默认 5日;
@@ -303,9 +378,15 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
     storage.stockPreviewIntradayDays.set(days)
   }
 
+  const select30mDays = (days: number) => {
+    setPeriodDays(days)
+    storage.stockPreview30mDays.set(days)
+    if (period === '30m') setDateRange(previewKlineRange('30m', assetType, days))
+  }
+
   const selectPeriod = (next: KlinePeriod) => {
     setPeriod(next)
-    setDateRange(defaultKlineRange(next))
+    setDateRange(previewKlineRange(next, assetType, periodDays))
   }
 
   const openPriceAlert = (targetPrice: number, currentPrice: number) => {
@@ -332,11 +413,30 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.97, y: 8 }}
             transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+            ref={dialogRef}
+            style={!maximized && dialogWidth != null ? { width: `${dialogWidth}px`, maxWidth: 'calc(100vw - 24px)' } : undefined}
             className={cn(
-              'relative rounded-card border border-border bg-base shadow-2xl overflow-hidden flex flex-col transition-all duration-200 ease-smooth',
-              maximized ? 'w-screen h-screen max-w-none max-h-none' : 'w-[92vw] h-[95vh] max-w-[1200px] max-h-[95vh]',
+              'relative rounded-card border border-border bg-base shadow-2xl overflow-hidden flex flex-col',
+              widthResizing ? 'transition-none' : 'transition-all duration-200 ease-smooth',
+              maximized ? 'w-screen h-screen max-w-none max-h-none' : 'w-[92vw] h-[95vh] max-w-[1600px] max-h-[95vh]',
             )}
           >
+            {!maximized && (
+              <div
+                role="separator"
+                aria-label="调整详情页宽度"
+                className={cn(
+                  'absolute inset-y-0 right-0 z-10 flex w-2 cursor-col-resize items-center justify-center touch-none',
+                  widthResizing ? 'bg-accent/10' : 'hover:bg-accent/10',
+                )}
+                onPointerDown={handleWidthPointerDown}
+                onPointerMove={handleWidthPointerMove}
+                onPointerUp={handleWidthPointerUp}
+                onPointerCancel={handleWidthPointerUp}
+              >
+                <span className="h-10 w-px rounded-full bg-border/80" />
+              </div>
+            )}
             {/* 顶栏 */}
             <div className="flex items-center justify-between gap-3 px-4 py-3 sm:px-5 shrink-0">
               <div className="flex min-w-0 items-center gap-2">
@@ -350,6 +450,12 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                 })()}
                 <span className="shrink-0 font-mono text-sm font-medium text-foreground">{symbol}</span>
                 {name && <span className="truncate text-xs text-muted">{name}</span>}
+                <span
+                  className="hidden shrink-0 items-center gap-1 rounded border border-border/60 bg-elevated/60 px-1.5 py-1 text-[10px] text-muted sm:inline-flex"
+                  title="后端行情轮询最近一次完成时间"
+                >
+                  <span>行情更新 {fmtQuoteTime(quoteStatus?.last_fetch_ms)}</span>
+                </span>
 
                 {/* 切股导航: 上一只 / n·N / 下一只 */}
                 {navEnabled && (
@@ -384,7 +490,23 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                   <div className="flex items-center gap-1">
                     {/* 日期范围/默认窗口放在周期切换左侧 */}
                     {period === '30m' ? (
-                      <span className="px-1 text-[10px] text-muted">近 {DEFAULT_30M_DAYS} 个交易日</span>
+                      <div className="inline-flex shrink-0 items-center rounded border border-border bg-elevated p-0.5" aria-label="30F交易日范围">
+                        {PERIOD_30M_DAY_OPTIONS.map(days => (
+                          <button
+                            key={days}
+                            type="button"
+                            aria-pressed={periodDays === days}
+                            onClick={() => select30mDays(days)}
+                            className={`h-5 rounded px-1.5 font-mono text-[10px] transition-colors ${
+                              periodDays === days
+                                ? 'bg-accent/20 text-accent'
+                                : 'text-muted hover:text-secondary'
+                            }`}
+                          >
+                            {days}日
+                          </button>
+                        ))}
+                      </div>
                     ) : (
                       <>
                         <DatePicker
@@ -638,7 +760,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                   resizableSplit
                   independentPaneScroll
                   period={period}
-                  periodDays={DEFAULT_30M_DAYS}
+                  periodDays={periodDays}
                 />
               ) : (
                 <>
@@ -647,6 +769,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                   dateRange={dateRange}
                   infoBarOnly
                   onAssetTypeChange={setAssetType}
+                  refetchIntervalMs={intradayRefetchMs}
                   prefetchSymbols={prefetchSymbols}
                   intradayDays={effectiveIntradayDays}
                 />

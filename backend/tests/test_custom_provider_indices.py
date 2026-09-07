@@ -156,6 +156,49 @@ def test_custom_provider_successful_empty_index_fetch_replaces_cache(monkeypatch
     assert replacements == [True]
 
 
+def test_custom_provider_adds_watchlist_etf_from_astockdata(monkeypatch):
+    """扶摇全市场快照不含 ETF 时, 自选 ETF 仍走腾讯单标的补拉。"""
+    active = _ProviderNoIndices()
+    etf_calls: list[list[str]] = []
+
+    class _ETFProvider:
+        def get_realtime(self, *, symbols=None):
+            etf_calls.append(list(symbols or []))
+            return [{"symbol": "159992.SZ", "last_price": 0.84, "prev_close": 0.845}]
+
+    service = qs.QuoteService()
+    service._repo = SimpleNamespace(get_etf_symbol_set=lambda: {"159992.SZ"})
+    captured: list[list[dict]] = []
+    monkeypatch.setattr(
+        service,
+        "_process_full_market_records",
+        lambda records, **kwargs: captured.append(records),
+    )
+    from app.services import preferences as prefs_mod, watchlist as watchlist_mod
+    monkeypatch.setattr(prefs_mod, "get_realtime_data_provider", lambda: "fuyao")
+    import app.data_providers.custom as custom_mod
+    monkeypatch.setattr(
+        custom_mod,
+        "provider_has_dataset",
+        lambda name, dataset: dataset == "realtime",
+    )
+    monkeypatch.setattr(
+        custom_mod,
+        "get_provider",
+        lambda name: _ETFProvider() if name == "astockdata" else active,
+    )
+    monkeypatch.setattr(
+        watchlist_mod,
+        "list_symbols",
+        lambda: [{"symbol": "159992.SZ"}],
+    )
+
+    service._fetch_full_market_quotes()
+
+    assert etf_calls == [["159992.SZ"]]
+    assert {row["symbol"] for row in captured[0]} == {"600519.SH", "159992.SZ"}
+
+
 def _disable_record_processing_side_effects(monkeypatch, service: qs.QuoteService) -> None:
     monkeypatch.setattr(qs, "_persist_last_fetch", lambda fetched_at: None)
     monkeypatch.setattr(service, "_update_volume_delta", lambda records, fetched_at: None)

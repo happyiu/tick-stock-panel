@@ -20,6 +20,7 @@ import { QK } from '@/lib/queryKeys'
 /** 分时 tab 多日分时默认周期 (StockPanel 预取与弹窗存储回退共用, 避免魔数两处漂移) */
 export const DEFAULT_INTRADAY_DAYS = 10
 export const DEFAULT_30M_DAYS = 20
+export const PERIOD_30M_DAY_OPTIONS = [20, 40, 60, 120] as const
 
 export const KLINE_PERIOD_OPTIONS: { value: KlinePeriod; label: string }[] = [
   { value: '30m', label: '30F' },
@@ -29,7 +30,11 @@ export const KLINE_PERIOD_OPTIONS: { value: KlinePeriod; label: string }[] = [
 ]
 
 /** 各周期首次切换时采用的展示范围。30F 的精确交易日数量由后端 days 参数裁剪。 */
-export function defaultKlineRange(period: KlinePeriod, now = new Date()): { start: string; end: string } {
+export function defaultKlineRange(
+  period: KlinePeriod,
+  now = new Date(),
+  thirtyMinuteDays = DEFAULT_30M_DAYS,
+): { start: string; end: string } {
   const formatLocalDate = (value: Date) => [
     value.getFullYear(),
     String(value.getMonth() + 1).padStart(2, '0'),
@@ -37,7 +42,7 @@ export function defaultKlineRange(period: KlinePeriod, now = new Date()): { star
   ].join('-')
   const end = formatLocalDate(now)
   const start = new Date(now)
-  if (period === '30m') start.setDate(start.getDate() - 60)
+  if (period === '30m') start.setDate(start.getDate() - (thirtyMinuteDays * 3 + 20))
   else if (period === '1d') start.setMonth(start.getMonth() - 6)
   else if (period === '1w') start.setFullYear(start.getFullYear() - 1)
   else start.setFullYear(start.getFullYear() - 2)

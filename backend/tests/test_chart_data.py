@@ -166,6 +166,61 @@ def test_chart_api_uses_etf_native_bars_without_local_minute(monkeypatch):
         assert client.get("/api/kline/daily", params={"symbol": "510300.SH", "start_date": "bad"}).status_code == 422
 
 
+def test_chart_api_overlays_live_daily_and_30m_tail(monkeypatch):
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api import kline
+
+    service, _, _ = setup(monkeypatch)
+    live_minutes = [
+        datetime(2026, 9, 4, 9, 31),
+        datetime(2026, 9, 4, 10, 0),
+    ]
+    monkeypatch.setattr(kline, "_get_asset_info", lambda *a: {"name": "沪深300ETF"})
+    monkeypatch.setattr(kline, "cn_today", lambda: date(2026, 9, 4))
+    monkeypatch.setattr(kline, "in_continuous_session", lambda: True)
+    monkeypatch.setattr(kline, "get_minute", lambda *a, **k: {
+        "rows": pl.DataFrame({
+            "datetime": live_minutes,
+            "open": [4.0, 4.2], "high": [4.3, 5.0], "low": [3.9, 4.1],
+            "close": [4.2, 4.9], "volume": [100.0, 150.0], "amount": [420.0, 735.0],
+        }).to_dicts(),
+    })
+    live_daily = pl.DataFrame({
+        "symbol": ["510300.SH"], "date": [date(2026, 9, 4)],
+        "open": [4.0], "high": [5.0], "low": [3.9], "close": [4.9],
+        "volume": [250.0], "amount": [1155.0],
+    })
+    repo = SimpleNamespace(
+        resolve_asset_type=lambda _symbol: "etf",
+        get_daily_asset=lambda *a, **k: pl.DataFrame(),
+        get_enriched_latest_asset=lambda _asset_type, refresh=True: (live_daily, date(2026, 9, 4)),
+    )
+    app = FastAPI()
+    app.include_router(kline.router)
+    app.state.repo = repo
+    app.state.chart_data_service = service
+    app.state.quote_service = None
+    with TestClient(app) as client:
+        daily = client.get("/api/kline/daily", params={
+            "symbol": "510300.SH", "start_date": "2026-09-01", "end_date": "2026-09-04",
+        }).json()
+        assert daily["source"] == "chart"
+        assert daily["rows"][-1]["close"] == 4.9
+
+        period = client.get("/api/kline/period", params={
+            "symbol": "510300.SH", "period": "30m", "days": 40,
+            "start_date": "2026-09-01", "end_date": "2026-09-04",
+        }).json()
+        assert period["source"] == "chart+live"
+        assert period["requested_days"] == 40
+        assert period["rows"][-1]["date"] == "2026-09-04 10:00"
+        assert period["rows"][-1]["close"] == 4.9
+
+
 def test_cache_is_bounded_and_daily_refresh_only_fetches_tail(monkeypatch):
     service, provider, clock = setup(monkeypatch)
     service._max_entries = 2

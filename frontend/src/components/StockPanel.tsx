@@ -238,7 +238,11 @@ export function StockPanel({
   // 日K查询由本组件持有 (与 StockDailyKChart 共享同一 cache key/配置, 只发一次请求)。
   // 信息条直接读 query data: 切股到已预取邻股时首帧即有数据, 配合 StockInfoBar 加载态占位,
   // 弹窗整体高度在切换瞬间不塌陷 (不抖动)。
-  const kline = useQuery({ ...klineDailyQueryOptions(symbol, infoDateRange, extColumns, includeTechnicalScores), enabled: !!symbol })
+  const kline = useQuery({
+    ...klineDailyQueryOptions(symbol, infoDateRange, extColumns, includeTechnicalScores),
+    enabled: !!symbol,
+    refetchInterval: refetchIntervalMs,
+  })
   const rawRows: KlineRow[] = kline.data?.rows ?? []
   const assetType = kline.data?.asset_type
   // OHLC 视图用于日期选中/昨收价推导 (与图表侧同口径)
@@ -260,8 +264,12 @@ export function StockPanel({
   const comparisonEndDate = selectedBarKey?.slice(0, 10) ?? chartDateRange.end
   const comparisonRange = useMemo(() => {
     const endDate = new Date(`${comparisonEndDate}T12:00:00`)
-    return defaultKlineRange(comparisonPeriod ?? '1d', Number.isNaN(endDate.getTime()) ? new Date() : endDate)
-  }, [comparisonEndDate, comparisonPeriod])
+    return defaultKlineRange(
+      comparisonPeriod ?? '1d',
+      Number.isNaN(endDate.getTime()) ? new Date() : endDate,
+      periodDays,
+    )
+  }, [comparisonEndDate, comparisonPeriod, periodDays])
   const comparisonKline = useQuery({
     ...klinePeriodQueryOptions(symbol, comparisonPeriod ?? '1d', comparisonRange, periodDays, extColumns, true),
     enabled: !!symbol && resolvedRightPaneMode === 'technical' && comparisonPeriod != null,

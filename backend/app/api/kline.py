@@ -479,9 +479,23 @@ def get_daily(
 
     snapshot = _chart_snapshot(request, symbol, asset_type, "1d", start - timedelta(days=180), end)
     if not snapshot.frame.is_empty():
-        scored = _score_frame_if_requested(snapshot.frame, include_technical_scores)
-        visible = scored.filter(pl.col("date").is_between(start, end))
-        rows, score_payload = _rows_and_score_payload(visible, include_technical_scores)
+        if include_technical_scores:
+            chart_rows = snapshot.frame.to_dicts()
+            if start <= cn_today() <= end and in_continuous_session():
+                chart_rows = _maybe_inject_live_candle(request, symbol, chart_rows, asset_type)
+            chart_frame = pl.DataFrame([
+                {**row, "date": _date_text(row.get("date"))}
+                for row in chart_rows
+            ], infer_schema_length=None)
+            scored = _score_frame_if_requested(chart_frame, True)
+            visible = scored.filter(pl.col("date").is_between(pl.lit(start.isoformat()), pl.lit(end.isoformat())))
+            rows, score_payload = _rows_and_score_payload(visible, True)
+        else:
+            visible = snapshot.frame.filter(pl.col("date").is_between(start, end))
+            rows = visible.to_dicts()
+            if start <= cn_today() <= end and in_continuous_session():
+                rows = _maybe_inject_live_candle(request, symbol, rows, asset_type)
+            score_payload = None
         rows = _annotate_bar_closure(rows, "1d", end)
         resp = {"symbol": symbol, "name": stock_name, "asset_type": asset_type,
                 "stock_info": stock_info, "rows": rows, "source": "chart",
@@ -537,7 +551,7 @@ def get_period_kline(
     period: Literal["30m", "1w", "1mo"] = Query(..., description="K线周期"),
     start_date: Optional[str] = Query(None, description="展示起始日期 YYYY-MM-DD"),
     end_date: Optional[str] = Query(None, description="展示截止日期 YYYY-MM-DD,默认今天"),
-    days: int = Query(20, ge=1, le=20, description="30分钟K最近交易日数量"),
+    days: int = Query(20, ge=1, le=120, description="30分钟K最近交易日数量"),
     include_technical_scores: bool = Query(False, description="是否附带 technical-score-v1 评分序列"),
 ):
     """优先原生30分钟K和展示日线, 周/月聚合后重算指标, 不落库。"""
@@ -581,6 +595,26 @@ def get_period_kline(
             from app.services.kline_periods import prepare_native_30m
 
             native = snapshot.frame
+            source = "chart"
+            if start <= cn_today() <= end and in_continuous_session():
+                latest = get_minute(request, symbol=symbol, trade_date=cn_today(), live=True)
+                latest_rows = latest.get("rows", []) if isinstance(latest, dict) else []
+                if latest_rows:
+                    live_frame = pl.DataFrame(latest_rows, infer_schema_length=None).with_columns(
+                        pl.lit(symbol).alias("symbol"),
+                    )
+                    live_bars = aggregate_minute_30m(live_frame)
+                    if not live_bars.is_empty() and "period_end" in live_bars.columns:
+                        live_native = live_bars.with_columns(
+                            pl.col("period_end").cast(pl.Datetime("us"), strict=False).alias("datetime"),
+                        ).drop([column for column in ("period_start", "period_end") if column in live_bars.columns])
+                        native = pl.concat([
+                            native.filter(pl.col("datetime").dt.date() != cn_today()),
+                            live_native,
+                        ], how="diagonal_relaxed").unique(
+                            subset=["symbol", "datetime"], keep="last",
+                        ).sort(["symbol", "datetime"])
+                        source = "chart+live"
             trade_dates = sorted(native["datetime"].dt.date().unique().to_list())[-days:]
             if include_technical_scores:
                 bars = prepare_native_30m(native)
@@ -591,7 +625,7 @@ def get_period_kline(
                 native = native.filter(pl.col("datetime").dt.date().is_in(trade_dates))
                 rows, score_payload = _rows_and_score_payload(prepare_native_30m(native), False)
             rows = _annotate_bar_closure(rows, "30m", end)
-            response = {**base, "rows": rows, "source": "chart",
+            response = {**base, "rows": rows, "source": source,
                         "requested_days": days, "available_days": len(trade_dates)}
             if score_payload is not None:
                 response["technical_scores"] = score_payload
@@ -763,8 +797,8 @@ def _latest_live_candle(
     if df_today.is_empty():
         return None
 
-    # 非交易日(周末/假日)缓存日期 != 今天, 跳过注入避免产生重复蜡烛
-    if not enriched_date or enriched_date != date.today():
+    # 非交易日(周末/假日)缓存日期 != 北京今天, 跳过注入避免产生重复蜡烛
+    if not enriched_date or str(enriched_date)[:10] != cn_today().isoformat():
         return None
 
     # 查找该 symbol 的实时 enriched 行
@@ -787,7 +821,7 @@ def _latest_live_candle(
     raw_high = q.get("high")
     raw_low = q.get("low")
     live_row = {
-        "date": str(enriched_date),
+        "date": cn_today().isoformat(),
         "symbol": symbol,
         "open": raw_open if raw_open and raw_open > 0 else close_price,
         "high": raw_high if raw_high and raw_high > 0 else close_price,
@@ -1229,7 +1263,9 @@ def get_minute(
     stock_name = stock_info.get("name")
 
     default_snapshot = None
-    if trade_date is None and getattr(request.app.state, "chart_data_service", None) is not None:
+    if live and trade_date is None and in_continuous_session():
+        trade_date = cn_today()
+    elif trade_date is None and getattr(request.app.state, "chart_data_service", None) is not None:
         # 周末或本地历史滞后时, 最新交易日由展示源返回日期决定。
         latest = _chart_snapshot(request, symbol, asset_type, "1m", cn_today() - timedelta(days=10), cn_today())
         if not latest.frame.is_empty():
@@ -1284,6 +1320,18 @@ def get_minute(
         repo, symbol, trade_date, asset_type, stock_name,
     )
 
+    if live and trade_date == cn_today() and in_continuous_session():
+        # 详情分时轮询: 当日盘中实时拉取最新一根K, 不落盘; 拉空(源侧延迟/
+        # 时段边界)则落回下方图表/本地路径。
+        live_df = kline_sync.fetch_minute_single(symbol, trade_date, asset_type=asset_type)
+        if not live_df.is_empty():
+            return {
+                "symbol": symbol, "name": stock_name, "stock_info": stock_info,
+                "date": str(trade_date), "rows": live_df.to_dicts(),
+                "source": "live", "asset_type": asset_type,
+                "price_limit": price_limit, "prev_close": prev_close,
+            }
+
     snapshot = default_snapshot or _chart_snapshot(request, symbol, asset_type, "1m", trade_date, trade_date)
     if not snapshot.frame.is_empty():
         return {"symbol": symbol, "name": stock_name, "stock_info": stock_info,
@@ -1298,18 +1346,6 @@ def get_minute(
                 "source": "local" if not local.is_empty() else "none",
                 "asset_type": asset_type, "price_limit": price_limit, "prev_close": prev_close,
                 "data_status": snapshot.metadata()}
-
-    if live and trade_date == cn_today() and in_continuous_session():
-        # 详情分时轮询: 当日盘中实时拉取最新一根K, 不落盘; 拉空(源侧延迟/
-        # 时段边界)则落回下方本地优先路径。
-        live_df = kline_sync.fetch_minute_single(symbol, trade_date, asset_type=asset_type)
-        if not live_df.is_empty():
-            return {
-                "symbol": symbol, "name": stock_name, "stock_info": stock_info,
-                "date": str(trade_date), "rows": live_df.to_dicts(),
-                "source": "live", "asset_type": asset_type,
-                "price_limit": price_limit, "prev_close": prev_close,
-            }
 
     df = repo.get_minute(symbol, trade_date, asset_type=asset_type)
 
