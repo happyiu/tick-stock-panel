@@ -22,6 +22,13 @@ from pydantic import BaseModel
 
 from app.indicators.levels import compute_levels, summarize_levels
 from app.services import stock_reports
+from app.services.ai_provider import ai_configured
+from app.services.elliott_wave_analyzer import (
+    ElliottAnalyzeRequest,
+    ElliottAssessment,
+    ElliottAssessmentError,
+    analyze_elliott,
+)
 from app.services.stock_analyzer import analyze_stock_stream
 
 logger = logging.getLogger(__name__)
@@ -176,6 +183,24 @@ async def analyze_stock(request: Request, req: AnalyzeRequest):
         media_type="application/x-ndjson",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/elliott/analyze", response_model=ElliottAssessment)
+async def analyze_elliott_wave(req: ElliottAnalyzeRequest):
+    """艾略特波浪 AI 增强评估。
+
+    K 线快照由详情页提交, 服务端再次按 as_of 截断; 该接口只返回研究评估,
+    不写入报告、不连接券商, 也不参与技术分、选股或监控。
+    """
+    if not ai_configured():
+        raise HTTPException(status_code=503, detail="AI 未配置; 请在设置页配置 API Key 与接口地址")
+    try:
+        return await analyze_elliott(req)
+    except ElliottAssessmentError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("AI Elliott assessment failed for %s: %s", req.symbol, exc)
+        raise HTTPException(status_code=502, detail=f"艾略特波浪 AI 评估失败: {exc}") from exc
 
 
 # ================================================================

@@ -18,12 +18,15 @@ _EXCHANGES = ["SH", "SZ", "BJ"]
 
 class TickFlowProvider:
     name = "tickflow"
+    minute_frequencies = ("1m", "5m", "15m", "30m", "60m")
+    minute_adjustment = "forward"
     capabilities = ProviderCapabilities(
         instruments=True,
         daily=True,
         adj_factor=True,
         minute=True,
         realtime=True,
+        depth5=True,
         financial=True,
     )
 
@@ -101,8 +104,22 @@ class TickFlowProvider:
         freq: str = "1m",  # noqa: ARG002
         on_chunk_done: Callable[[int, int], None] | None = None,  # noqa: ARG002
     ) -> pl.DataFrame:
-        # Existing minute sync remains in app.services.kline_sync for now.
-        return pl.DataFrame()
+        from app.services.kline_sync import (
+            _compact_klines_to_df,
+            _datetime_to_ms,
+            _normalize_minute,
+        )
+
+        if freq not in self.minute_frequencies:
+            raise ValueError(f"unsupported minute frequency: {freq}")
+        kwargs = {"period": freq, "adjust": "forward", "count": 10000,
+                  "as_dataframe": False, "show_progress": False}
+        if start_time is not None:
+            kwargs["start_time"] = _datetime_to_ms(start_time)
+        if end_time is not None:
+            kwargs["end_time"] = _datetime_to_ms(end_time)
+        raw = get_client().klines.batch(symbols, **kwargs)
+        return _normalize_minute(_compact_klines_to_df(raw))
 
     def get_realtime(
         self,
@@ -119,3 +136,9 @@ class TickFlowProvider:
         else:
             return pl.DataFrame()
         return pl.DataFrame(resp or [])
+
+    def get_depth_batch(self, symbols: list[str]) -> dict[str, dict]:
+        if not symbols:
+            return {}
+        data = get_client().depth.batch(symbols)
+        return data if isinstance(data, dict) else {}

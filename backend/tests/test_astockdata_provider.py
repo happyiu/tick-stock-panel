@@ -6,9 +6,30 @@ from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from app.plugins.astockdata import provider as ap
 from app.plugins.astockdata.provider import AStockDataProvider
+
+
+def test_native_30m_routes_etf_and_uses_frequency_two(monkeypatch):
+    provider = AStockDataProvider()
+    frame = _bars()
+    frame.index = pd.DatetimeIndex(pd.to_datetime(["2026-09-02 10:00", "2026-09-02 10:30"]), name="datetime")
+    fake = _FakeTdx(frame)
+    monkeypatch.setattr(provider, "_get_tdx", lambda: fake)
+    result = provider.get_minute(["510300.SH"], datetime(2026, 9, 2), datetime(2026, 9, 3), asset_type="etf", freq="30m")
+    assert fake.calls[0]["frequency"] == 2
+    assert result["symbol"].unique().to_list() == ["510300.SH"]
+    assert result.height == 2
+
+
+def test_factor_transport_failure_is_not_an_empty_event_list(monkeypatch):
+    def fail(*args):
+        raise RuntimeError("offline")
+    monkeypatch.setattr(ap, "_sina_factors", fail)
+    with pytest.raises(RuntimeError, match="除权因子获取失败"):
+        AStockDataProvider().get_adj_factors(["510300.SH"], None, None, asset_type="etf")
 
 
 class _FakeTdx:
@@ -119,6 +140,11 @@ def test_minute_falls_back_to_tencent_when_mootdx_is_unavailable(monkeypatch):
     assert frame.height == 2
     assert frame["amount"].to_list() == [1_200_500.0, 2_403_000.0]
     assert calls == ["https://ifzq.gtimg.cn/appstock/app/kline/mkline?param=sh600519,m1,,320"]
+    assert "amount_estimated" not in frame.columns
+    chart = provider.get_chart_minute(
+        ["600519.SH"], datetime(2026, 9, 4, 9, 30), datetime(2026, 9, 4, 10),
+    )
+    assert chart["amount_estimated"].to_list() == [True, True]
 
 
 def test_factor_staircase_becomes_event_ratios(monkeypatch):

@@ -3,8 +3,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
 import { api, type MinuteKlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
-import { klineMinuteQueryOptions } from '@/lib/kline'
+import { klineMinuteQueryOptions, minuteRefetchInterval } from '@/lib/kline'
 import { EChartsIntraday } from '@/components/EChartsIntraday'
+import { ChartDataNotice } from '@/components/ChartDataNotice'
 
 interface Props {
   symbol: string
@@ -42,7 +43,7 @@ export function StockIntradayChart({
     // 避免读到分钟增量落盘的上一轮本地分区; 历史日期后端自行忽略 live。
     ...klineMinuteQueryOptions(symbol, date ?? undefined, refetchIntervalMs != null),
     enabled: !!symbol && !!date,
-    refetchInterval: refetchIntervalMs,
+    refetchInterval: minuteRefetchInterval(refetchIntervalMs),
   })
 
   const fetchMinute = useMutation({
@@ -71,6 +72,7 @@ export function StockIntradayChart({
 
   return (
     <div className={className} style={{ height, flexShrink: 0 }}>
+      <ChartDataNotice status={minute.data?.data_status} />
       {minute.isLoading && <div className="text-xs text-muted py-2">分时加载中…</div>}
       {!minute.isLoading && minuteRows.length === 0 && (
         <>

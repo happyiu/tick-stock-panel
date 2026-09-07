@@ -23,6 +23,82 @@ function kv<T>(key: string) {
   }
 }
 
+export type StockTechnicalCardKey =
+  | 'ma'
+  | 'volume'
+  | 'macd'
+  | 'rsi'
+  | 'kdj'
+  | 'boll'
+  | 'momentum'
+  | 'atr'
+
+export interface StockPreviewTechnicalCardsConfig {
+  order: StockTechnicalCardKey[]
+  visible: Partial<Record<StockTechnicalCardKey, boolean>>
+}
+
+export type StockTechnicalIndicatorKey =
+  | 'ma_alignment'
+  | 'ma_slope'
+  | 'macd'
+  | 'rsi'
+  | 'kdj'
+  | 'roc'
+  | 'volume_price'
+  | 'atr'
+  | 'boll_width'
+  | 'volume_ratio'
+  | 'volume_trend'
+
+export interface StockPreviewTechnicalLayoutConfig {
+  version: 2
+  visible: Partial<Record<StockTechnicalIndicatorKey, boolean>>
+}
+
+export interface StockPreviewAnalysisSectionsState {
+  technicalCollapsed: boolean
+  chanlunCollapsed: boolean
+}
+
+export interface StockPreviewAnalysisSectionsV2 {
+  version: 2
+  technicalCollapsed: boolean
+  structureCollapsed: boolean
+}
+
+export interface StockPreviewAnalysisSectionsV3 {
+  version: 3
+  technicalCollapsed: boolean
+  structureCollapsed: boolean
+  chanlunCollapsed: boolean
+  elliottCollapsed: boolean
+}
+
+export interface StockPreviewDecisionSectionsV1 {
+  version: 1
+  priceZonesCollapsed: boolean
+  signalRiskCollapsed: boolean
+  showPriceZones: boolean
+  showInvalidationLine: boolean
+}
+
+export interface StockPreviewChanlunOverlayConfig {
+  enabled: boolean
+  fractals: boolean
+  strokes: boolean
+  segments: boolean
+  centers: boolean
+  candidates: boolean
+  divergences: boolean
+}
+
+export interface StockPreviewElliottOverlayConfig {
+  enabled: boolean
+  labels: boolean
+  strokes: boolean
+}
+
 export const storage = {
   /** 页面显示大小 */
   pageSize:             kv<'standard' | 'large'>('tf-page-size'),
@@ -50,11 +126,50 @@ export const storage = {
   /** 个股详情外链 URL 模板 (支持 {code}/{market}/{symbol}; 留空关闭) */
   stockExternalTemplate: kv<string>('stock_external_template'),
 
+  /** 个股预览右侧技术指标卡片配置 (显隐 + 顺序) */
+  stockPreviewTechnicalCards: kv<StockPreviewTechnicalCardsConfig>('stock_preview_technical_cards'),
+
+  /** 个股预览技术指标分组配置 v2 (固定分组顺序, 仅显隐) */
+  stockPreviewTechnicalLayout: kv<StockPreviewTechnicalLayoutConfig | null>('stock_preview_technical_layout_v2'),
+
+  /** 个股预览右侧技术指标与缠论分区的折叠状态 */
+  stockPreviewAnalysisSections: kv<StockPreviewAnalysisSectionsState>('stock_preview_analysis_sections'),
+
+  /** 个股预览右侧技术指标与结构分析分区的折叠状态 v2 */
+  stockPreviewAnalysisSectionsV2: kv<StockPreviewAnalysisSectionsV2 | null>('stock_preview_analysis_sections_v2'),
+
+  /** 个股预览技术指标与结构分析子区折叠状态 v3 */
+  stockPreviewAnalysisSectionsV3: kv<StockPreviewAnalysisSectionsV3 | null>('stock_preview_analysis_sections_v3'),
+
+  /** 个股预览关键价位与缠论信号区折叠及覆盖层/失效线状态 v1 */
+  stockPreviewDecisionSectionsV1: kv<StockPreviewDecisionSectionsV1 | null>('stock_preview_decision_sections_v1'),
+
+  /** 个股预览 K 线缠论覆盖层配置 */
+  stockPreviewChanlunOverlay: kv<StockPreviewChanlunOverlayConfig>('stock_preview_chanlun_overlay'),
+
+  /** 个股预览 K 线艾略特波浪覆盖层配置 */
+  stockPreviewElliottOverlay: kv<StockPreviewElliottOverlayConfig>('stock_preview_elliott_overlay'),
+
+  /** 个股预览行动信号显示状态（默认开启） */
+  stockPreviewActionSignals: kv<boolean>('stock_preview_action_signals'),
+
+  /** 个股预览 K 线与右侧面板的分栏比例 */
+  stockPreviewSplitRatio: kv<number>('stock_preview_split_ratio'),
+
+  /** 个股预览弹窗宽度 */
+  stockPreviewWidth: kv<number>('stock_preview_width'),
+
+  /** 个股预览 30F 展示交易日数量 */
+  stockPreview30mDays: kv<number>('stock_preview_30m_days'),
+
   /** 策略结果列表列配置 */
   screenerResultColumns: kv<unknown[]>('screener_result_columns'),
 
   /** 自选列表视图模式 table | card (分组卡片为临时模式, 不持久化) */
   watchlistView:        kv<string>('watchlist_view'),
+
+  /** 自选列表资产类型筛选 all | stock | etf | index */
+  watchlistAssetFilter: kv<'all' | 'stock' | 'etf' | 'index'>('watchlist_assetFilter'),
 
   /** 自选列表日K蜡烛图显示状态 */
   watchlistCandle:      kv<boolean>('watchlist_showCandle'),

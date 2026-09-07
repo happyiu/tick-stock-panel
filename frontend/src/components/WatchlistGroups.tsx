@@ -35,6 +35,8 @@ interface GroupBarProps {
   onClearGroup?: (groupId: string) => Promise<void>
   /** 手动调整分组前后顺序 (持久化到后端) */
   onReorder?: (orderedIds: string[]) => Promise<void>
+  /** 当前只展示某种资产时, 提醒清空操作仍作用于整个分组 */
+  clearScopeLabel?: string
 }
 
 export function WatchlistGroupBar({
@@ -49,6 +51,7 @@ export function WatchlistGroupBar({
   onDelete,
   onClearGroup,
   onReorder,
+  clearScopeLabel,
 }: GroupBarProps) {
   const [managerOpen, setManagerOpen] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
@@ -202,7 +205,11 @@ export function WatchlistGroupBar({
           <div className="relative w-[90vw] max-w-[380px] rounded-card border border-border bg-base shadow-2xl p-6">
             <h3 className="text-sm font-medium text-foreground mb-2">清空分组</h3>
             <p className="text-xs text-secondary mb-5">
-              确认清空「{tabs.find(t => t.id === selected)?.name}」分组? 分组内所有股票将转为未分组(不从自选中删除)。
+              确认清空「{tabs.find(t => t.id === selected)?.name}」分组？
+              {clearScopeLabel
+                ? <>当前仅显示{clearScopeLabel}，但清空操作会作用于该分组的全部标的，包括当前未显示的其他资产。</>
+                : null}
+              分组内所有标的将转为未分组（不从自选中删除）。
             </p>
             <div className="flex items-center justify-end gap-2">
               <button

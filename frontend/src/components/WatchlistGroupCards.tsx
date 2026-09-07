@@ -120,7 +120,7 @@ const GroupCard = React.memo(function GroupCard({
             const pct = rowPct(r)
             const price = r.rt_price ?? r.close
             const cls = priceColorClass(pct)
-            const board = boardTag(r.symbol)
+            const board = r.asset_type === 'etf' || r.asset_type === 'index' ? null : boardTag(r.symbol)
             return (
               <button
                 key={r.symbol}
@@ -137,6 +137,12 @@ const GroupCard = React.memo(function GroupCard({
                 <span className="shrink-0 font-mono text-xs text-foreground">{r.symbol}</span>
                 <span className="flex min-w-0 flex-1 items-center gap-1">
                   <span className="min-w-0 truncate text-xs text-secondary">{r.rt_name ?? r.name}</span>
+                  {r.asset_type === 'etf' && (
+                    <span className="shrink-0 rounded bg-accent/10 px-1 py-0.5 text-[10px] leading-none text-accent">ETF</span>
+                  )}
+                  {r.asset_type === 'index' && (
+                    <span className="shrink-0 rounded bg-sky-500/10 px-1 py-0.5 text-[10px] leading-none text-sky-400">指数</span>
+                  )}
                   {board && (
                     <span className={`shrink-0 inline-flex items-center justify-center px-1 h-[16px] rounded text-[9px] font-bold leading-none ${board.color}`}>
                       {board.label}
@@ -170,7 +176,7 @@ const GroupCard = React.memo(function GroupCard({
 
 interface WatchlistGroupCardsProps {
   groups: WatchlistGroup[]
-  /** enriched 全量行 (未经过分组/板块筛选) */
+  /** 当前资产筛选范围内的 enriched 行 (未经过列表筛选) */
   rows: any[]
   /** symbol -> 所属分组 id 列表 (空数组 = 未分组), 来自自选列表查询 */
   groupBySymbol: Map<string, string[]>

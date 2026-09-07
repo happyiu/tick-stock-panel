@@ -3,6 +3,9 @@ import { chartTheme, getTheme, useTheme } from '@/lib/theme'
 import { fmtAssetPrice, fmtPct } from '@/lib/format'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
+import type { ChanlunAnalysis } from '@/lib/chanlun'
+import type { ElliottAnalysis } from '@/lib/elliott'
+import type { StockPreviewChanlunOverlayConfig, StockPreviewElliottOverlayConfig } from '@/lib/storage'
 
 export interface OHLC {
   date: string
@@ -10,6 +13,8 @@ export interface OHLC {
   high: number
   low: number
   close: number
+  periodEnd?: string | null
+  isClosed?: boolean
   volume?: number
   ma5?: number | null
   ma10?: number | null
@@ -26,6 +31,8 @@ export interface OHLC {
   kdj_j?: number | null
   boll_upper?: number | null
   boll_lower?: number | null
+  atr_14?: number | null
+  atr14?: number | null
 }
 
 export interface ChartMarker {
@@ -43,6 +50,15 @@ export interface ChartRange {
   end: string
   label?: string
   color?: string
+}
+
+/** 横向价格区间覆盖层；与按时间的 ChartRange 保持独立。 */
+export interface ChartPriceBand {
+  low: number
+  high: number
+  label?: string
+  color?: string
+  borderColor?: string
 }
 
 export interface ChartPriceLine {
@@ -323,6 +339,7 @@ interface Props {
   data: OHLC[]
   markers?: ChartMarker[]
   ranges?: ChartRange[]
+  priceBands?: ChartPriceBand[]
   priceLines?: ChartPriceLine[]
   height?: number
   showMA?: boolean
@@ -334,13 +351,17 @@ interface Props {
   linkedPrice?: number | null
   onDateClick?: (date: string) => void
   onPriceDoubleClick?: (price: number, currentPrice: number) => void
-  /** 默认可见蜡烛根数, 默认 60 */
-  visibleBars?: number
+  /** 默认可见蜡烛根数, 默认 60; 'all' = 初始适配显示全部返回数据 */
+  visibleBars?: number | 'all'
   /** 已激活的子图 key 列表 (含 vol, 按点击顺序) */
   activeIndicators?: string[]
   /** 成交量柱相对前 N 个交易日均量的显示设置 */
   volumeCompare?: VolumeCompareConfig
   assetType?: string
+  chanlunAnalysis?: ChanlunAnalysis
+  chanlunOverlay?: StockPreviewChanlunOverlayConfig
+  elliottAnalysis?: ElliottAnalysis
+  elliottOverlay?: StockPreviewElliottOverlayConfig
 }
 
 // 序列颜色 (双主题通用); 画布轴/网格/文字等主题相关色走 CT() 动态取
@@ -366,6 +387,162 @@ const COMPACT_THRESHOLD = 60
 const INFO_BAR_H = 16
 /** 子图之间的间距 (px) */
 const SUB_GAP_PX = 4
+
+function appendChanlunMarkPoints(
+  target: any[],
+  dateIndexMap: Map<string, number>,
+  analysis: ChanlunAnalysis | undefined,
+  config: StockPreviewChanlunOverlayConfig | undefined,
+  compact: boolean,
+) {
+  if (!analysis || !config?.enabled) return
+  if (config.fractals) {
+    for (const fractal of analysis.fractals) {
+      if (!dateIndexMap.has(fractal.date)) continue
+      const isBottom = fractal.type === 'bottom'
+      target.push({
+        name: fractal.date,
+        coord: [fractal.date, fractal.price],
+        symbol: 'triangle',
+        symbolSize: compact ? 6 : 9,
+        symbolRotate: isBottom ? 0 : 180,
+        symbolOffset: isBottom ? [0, '75%'] : [0, '-75%'],
+        itemStyle: { color: isBottom ? '#60A5FA' : '#A78BFA', opacity: 0.9 },
+        label: {
+          show: !compact,
+          formatter: isBottom ? '底' : '顶',
+          position: isBottom ? 'bottom' : 'top',
+          distance: 5,
+          color: isBottom ? '#60A5FA' : '#A78BFA',
+          fontSize: 9,
+          fontFamily: 'JetBrains Mono, monospace',
+        },
+        tooltip: { formatter: `${isBottom ? '底' : '顶'}分型<br/>结构发生：${fractal.date}<br/>最早可知：${fractal.confirmedAt}` },
+        z: 90,
+      })
+    }
+  }
+  if (config.candidates) {
+    const labels = {
+      first_buy: '1买', second_buy: '2买', third_buy: '3买',
+      first_sell: '1卖', second_sell: '2卖', third_sell: '3卖',
+    } as const
+    for (const signal of analysis.candidateSignals) {
+      if ((signal.status !== 'candidate' && signal.status !== 'invalidated')
+        || !dateIndexMap.has(signal.availableDate)) continue
+      const isBuy = signal.kind.endsWith('_buy')
+      const invalidated = signal.status === 'invalidated'
+      const color = isBuy ? THEME.bull : THEME.bear
+      target.push({
+        name: signal.availableDate,
+        coord: [signal.availableDate, signal.price],
+        symbol: 'circle',
+        symbolSize: invalidated ? 7 : 9,
+        symbolOffset: isBuy ? [0, '80%'] : [0, '-80%'],
+        itemStyle: {
+          color: invalidated ? CT().text : color,
+          borderColor: CT().tooltipBg,
+          borderWidth: 1,
+          opacity: invalidated ? 0.45 : 0.95,
+        },
+        label: {
+          show: true,
+          formatter: invalidated ? `${labels[signal.kind]}失效` : `${labels[signal.kind]}候选`,
+          position: isBuy ? 'bottom' : 'top',
+          distance: 7,
+          color: invalidated ? CT().text : color,
+          fontSize: compact ? 8 : 9,
+          fontFamily: 'JetBrains Mono, monospace',
+        },
+        tooltip: {
+          formatter: `${labels[signal.kind]}${invalidated ? '失效' : '候选'}<br/>结构发生：${signal.structureDate}<br/>最早可知：${signal.availableDate}<br/>失效边界：${signal.boundary}`,
+        },
+        z: 95,
+      })
+    }
+  }
+  if (config.divergences) {
+    for (const divergence of analysis.divergences.filter(item => item.status === 'candidate')) {
+      if (!dateIndexMap.has(divergence.c.endDate)) continue
+      const price = analysis.bars.find(bar => bar.date === divergence.c.endDate)?.close ?? analysis.currentPrice
+      if (price == null) continue
+      target.push({
+        name: divergence.c.endDate,
+        coord: [divergence.c.endDate, price],
+        symbol: 'diamond',
+        symbolSize: compact ? 7 : 10,
+        itemStyle: { color: '#F59E0B', opacity: 0.9 },
+        label: { show: !compact, formatter: '背驰候选', position: 'top', color: '#F59E0B', fontSize: 9 },
+        tooltip: { formatter: `${divergence.kind === 'trend' ? '趋势' : '盘整'}背驰代理<br/>${divergence.evidence}` },
+        z: 94,
+      })
+    }
+  }
+}
+
+function appendElliottMarkPoints(
+  target: any[],
+  lineTarget: any[],
+  dateIndexMap: Map<string, number>,
+  analysis: ElliottAnalysis | undefined,
+  config: StockPreviewElliottOverlayConfig | undefined,
+  compact: boolean,
+) {
+  if (!analysis || !config?.enabled || !analysis.primaryCount) return
+  const primaryPivots = analysis.primaryCount.pivots.filter(pivot => dateIndexMap.has(pivot.eventTime) && pivot.state !== 'projected')
+  // 疑似末端只来自当前截面尾部，不属于已完成主计数；单独追加以虚线和问号呈现。
+  const suspected = analysis.pivots.find(pivot => pivot.state === 'suspected' && dateIndexMap.has(pivot.eventTime))
+  const pivots = suspected && !primaryPivots.some(pivot => pivot.eventTime === suspected.eventTime)
+    ? [...primaryPivots, suspected]
+    : primaryPivots
+  if (pivots.length === 0) return
+  for (const pivot of pivots) {
+    const isHigh = pivot.type === 'high'
+    target.push({
+      name: `elliott-${pivot.eventTime}-${pivot.label}`,
+      coord: [pivot.eventTime, pivot.price],
+      symbol: 'circle',
+      symbolSize: compact ? 5 : pivot.state === 'suspected' ? 7 : 8,
+      symbolOffset: isHigh ? [0, '-65%'] : [0, '65%'],
+      itemStyle: {
+        color: pivot.state === 'suspected' ? '#FCD34D' : '#F59E0B',
+        opacity: pivot.state === 'suspected' ? 0.65 : 0.95,
+      },
+      label: {
+        show: config.labels && !compact,
+        formatter: pivot.state === 'suspected'
+          ? (pivot.label === '?' ? '?' : `${pivot.label}?`)
+          : pivot.label,
+        position: isHigh ? 'top' : 'bottom',
+        distance: 5,
+        color: '#FBBF24',
+        fontSize: 9,
+        fontFamily: 'JetBrains Mono, monospace',
+      },
+      z: 88,
+    })
+  }
+  if (config.strokes && pivots.length > 1) {
+    for (let index = 1; index < pivots.length; index += 1) {
+      const start = pivots[index - 1]
+      const end = pivots[index]
+      lineTarget.push([
+        { coord: [start.eventTime, start.price], symbol: 'none' },
+        {
+          coord: [end.eventTime, end.price],
+          symbol: 'none',
+          lineStyle: {
+            color: '#F59E0B',
+            type: start.state === 'suspected' || end.state === 'suspected' ? 'dashed' : 'solid',
+            width: 1.2,
+            opacity: start.state === 'suspected' || end.state === 'suspected' ? 0.55 : 0.8,
+          },
+          label: { show: false },
+        },
+      ])
+    }
+  }
+}
 
 function buildSubInfoGraphics(
   data: OHLC[],
@@ -467,6 +644,7 @@ function buildOption(
   dateIndexMap: Map<string, number>,
   markers: ChartMarker[] | undefined,
   ranges: ChartRange[] | undefined,
+  priceBands: ChartPriceBand[] | undefined,
   priceLines: ChartPriceLine[] | undefined,
   showMA: boolean,
   compact: boolean,
@@ -476,6 +654,10 @@ function buildOption(
   linkedPrice: number | null | undefined,
   volumeCompare: VolumeCompareConfig,
   assetType?: string,
+  chanlunAnalysis?: ChanlunAnalysis,
+  chanlunOverlay?: StockPreviewChanlunOverlayConfig,
+  elliottAnalysis?: ElliottAnalysis,
+  elliottOverlay?: StockPreviewElliottOverlayConfig,
 ): EChartsOption {
   const candleData = data.map(d => [d.open, d.close, d.low, d.high])
 
@@ -514,7 +696,8 @@ function buildOption(
         }
       } else {
         markPointData.push({
-          name: m.label ?? '',
+          // markPoint 点击需要回传对应 K 线日期；显示文字由 label.formatter 单独负责。
+          name: m.date,
           coord: [m.date, isBuy ? d.low : d.high],
           symbol: 'arrow', symbolSize: 12,
           symbolRotate: isBuy ? 0 : 180,
@@ -530,6 +713,9 @@ function buildOption(
       }
     }
   }
+  appendChanlunMarkPoints(markPointData, dateIndexMap, chanlunAnalysis, chanlunOverlay, compact)
+  const elliottLineData: any[] = []
+  appendElliottMarkPoints(markPointData, elliottLineData, dateIndexMap, elliottAnalysis, elliottOverlay, compact)
 
   // ====== 布局计算 ======
   const left = 60
@@ -558,17 +744,21 @@ function buildOption(
   const priceLineValues = (priceLines ?? [])
     .map(line => line.value)
     .filter(value => Number.isFinite(value) && value > 0)
-  const axisMin = priceLineValues.length > 0
+  const priceBandValues = (priceBands ?? [])
+    .flatMap(band => [band.low, band.high])
+    .filter(value => Number.isFinite(value) && value > 0)
+  const priceOverlayValues = [...priceLineValues, ...priceBandValues]
+  const axisMin = priceOverlayValues.length > 0
     ? ({ min, max }: { min: number; max: number }) => {
-        const nextMin = Math.min(min, ...priceLineValues)
-        const nextMax = Math.max(max, ...priceLineValues)
+        const nextMin = Math.min(min, ...priceOverlayValues)
+        const nextMax = Math.max(max, ...priceOverlayValues)
         return nextMin - Math.max((nextMax - nextMin) * 0.03, nextMax * 0.001)
       }
     : undefined
-  const axisMax = priceLineValues.length > 0
+  const axisMax = priceOverlayValues.length > 0
     ? ({ min, max }: { min: number; max: number }) => {
-        const nextMin = Math.min(min, ...priceLineValues)
-        const nextMax = Math.max(max, ...priceLineValues)
+        const nextMin = Math.min(min, ...priceOverlayValues)
+        const nextMax = Math.max(max, ...priceOverlayValues)
         return nextMax + Math.max((nextMax - nextMin) * 0.03, nextMax * 0.001)
       }
     : undefined
@@ -622,7 +812,57 @@ function buildOption(
       { xAxis: r.end },
     ]))
 
-  const markLineData: any[] = (priceLines ?? [])
+  for (const band of priceBands ?? []) {
+    if (!Number.isFinite(band.low) || !Number.isFinite(band.high) || band.high < band.low) continue
+    markAreaData.push([
+      {
+        name: band.label ?? '',
+        yAxis: band.low,
+        itemStyle: {
+          color: band.color ?? 'rgba(249,115,22,0.10)',
+          borderColor: band.borderColor ?? 'rgba(249,115,22,0.42)',
+          borderWidth: 1,
+        },
+        label: {
+          show: !!band.label,
+          formatter: band.label ?? '',
+          position: 'insideTop',
+          color: band.borderColor ?? '#F97316',
+          fontSize: 9,
+          fontFamily: 'JetBrains Mono, monospace',
+        },
+      },
+      { yAxis: band.high },
+    ] as any)
+  }
+
+  if (chanlunAnalysis && chanlunOverlay?.enabled && chanlunOverlay.centers) {
+    for (const center of chanlunAnalysis.centers) {
+      if (!dateIndexMap.has(center.startDate) || !dateIndexMap.has(center.endDate)) continue
+      markAreaData.push([
+        {
+          name: '中枢',
+          coord: [center.startDate, center.zd],
+          itemStyle: {
+            color: 'rgba(139,92,246,0.10)',
+            borderColor: 'rgba(139,92,246,0.50)',
+            borderWidth: 1,
+          },
+          label: {
+            show: true,
+            formatter: '中枢',
+            position: 'insideTop',
+            color: '#A78BFA',
+            fontSize: 9,
+            fontFamily: 'JetBrains Mono, monospace',
+          },
+        },
+        { coord: [center.endDate, center.zg] },
+      ] as any)
+    }
+  }
+
+  const markLineData: any[] = [...elliottLineData, ...(priceLines ?? [])
     .filter(line => Number.isFinite(line.value))
     .map(line => {
       const lineStyle = {
@@ -649,7 +889,7 @@ function buildOption(
         ]
       }
       return { yAxis: line.value, lineStyle, label, symbol: 'none' }
-    })
+    })]
 
   if (linkedPrice != null) {
     markLineData.push({
@@ -670,6 +910,43 @@ function buildOption(
       },
       symbol: 'none',
     })
+  }
+
+  if (chanlunAnalysis && chanlunOverlay?.enabled && chanlunOverlay.strokes) {
+    for (const stroke of chanlunAnalysis.strokes) {
+      if (!dateIndexMap.has(stroke.startDate) || !dateIndexMap.has(stroke.endDate)) continue
+      const color = stroke.direction === 'up' ? THEME.bull : THEME.bear
+      markLineData.push([
+        { coord: [stroke.startDate, stroke.startPrice], symbol: 'none' },
+        {
+          coord: [stroke.endDate, stroke.endPrice],
+          symbol: 'none',
+          lineStyle: {
+            color,
+            type: stroke.confirmed ? 'solid' : 'dashed',
+            width: stroke.confirmed ? 1.4 : 1.2,
+            opacity: stroke.confirmed ? 0.82 : 0.6,
+          },
+          label: { show: false },
+        },
+      ])
+    }
+  }
+
+  if (chanlunAnalysis && chanlunOverlay?.enabled && chanlunOverlay.segments) {
+    for (const segment of chanlunAnalysis.segments) {
+      if (!dateIndexMap.has(segment.startDate) || !dateIndexMap.has(segment.endDate)) continue
+      const color = segment.direction === 'up' ? THEME.bull : THEME.bear
+      markLineData.push([
+        { coord: [segment.startDate, segment.startPrice], symbol: 'none' },
+        {
+          coord: [segment.endDate, segment.endPrice],
+          symbol: 'none',
+          lineStyle: { color, type: segment.confirmed ? 'solid' : 'dashed', width: 2.4, opacity: segment.confirmed ? 0.95 : 0.55 },
+          label: { show: false },
+        },
+      ])
+    }
   }
 
   series.push({
@@ -808,6 +1085,7 @@ export function EChartsCandlestick({
   data,
   markers,
   ranges,
+  priceBands,
   priceLines,
   height = 480,
   showMA = true,
@@ -823,7 +1101,12 @@ export function EChartsCandlestick({
   activeIndicators = [],
   volumeCompare = { enabled: true, days: 1 },
   assetType,
+  chanlunAnalysis,
+  chanlunOverlay,
+  elliottAnalysis,
+  elliottOverlay,
 }: Props) {
+  const hoverSurfaceRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<ECharts | null>(null)
   const dataRef = useRef(data)
@@ -847,6 +1130,14 @@ export function EChartsCandlestick({
   activeIndicatorsRef.current = activeIndicators
   const volumeCompareRef = useRef(volumeCompare)
   volumeCompareRef.current = volumeCompare
+  const chanlunAnalysisRef = useRef(chanlunAnalysis)
+  chanlunAnalysisRef.current = chanlunAnalysis
+  const chanlunOverlayRef = useRef(chanlunOverlay)
+  chanlunOverlayRef.current = chanlunOverlay
+  const elliottAnalysisRef = useRef(elliottAnalysis)
+  elliottAnalysisRef.current = elliottAnalysis
+  const elliottOverlayRef = useRef(elliottOverlay)
+  elliottOverlayRef.current = elliottOverlay
   const chartHeightRef = useRef(300)
   const subTotalHRef = useRef(0)
   const getInfoBarHTMLRef = useRef<() => string>(() => '')
@@ -897,11 +1188,13 @@ export function EChartsCandlestick({
     return m
   }, [dates])
 
-  // 计算 dataZoom 初始范围
-  const initialZoom = useMemo(() => ({
-    start: Math.max(0, 100 - (visibleBars / Math.max(data.length, 1)) * 100),
-    end: 100,
-  }), [visibleBars, data.length])
+  // dataZoom 初始范围: 'all' = 显示整段数据, 否则取末尾 visibleBars 根
+  const initialZoom = useMemo(() => {
+    const start = visibleBars === 'all'
+      ? 0
+      : Math.max(0, 100 - (visibleBars / Math.max(data.length, 1)) * 100)
+    return { start, end: 100 }
+  }, [visibleBars, data.length])
 
   // ===== 信息栏 HTML 内容 (基于 infoIdxRef.current) =====
   const getInfoBarHTML = useCallback(() => {
@@ -987,13 +1280,30 @@ export function EChartsCandlestick({
   // ===== 初始化 chart (只在 chartHeight 变化时重建) =====
   useEffect(() => {
     const el = containerRef.current
-    if (!el) return
+    const hoverEl = hoverSurfaceRef.current
+    if (!el || !hoverEl) return
 
     const chart = echarts.init(el, undefined, { renderer: 'canvas' })
     chartRef.current = chart
 
+    const updateHoverVisibility = (active: boolean) => {
+      if (active === hoverActiveRef.current) return
+      hoverActiveRef.current = active
+      const infoEl = infoBarRef.current
+      if (!infoEl) return
+      const html = getInfoBarHTMLRef.current()
+      if (html) infoEl.innerHTML = html
+    }
+
+    // The outer chart surface stays under the pointer when the info bar wraps and
+    // pushes the canvas down, so hover visibility cannot oscillate at that boundary.
+    const handlePointerEnter = () => updateHoverVisibility(true)
+    const handlePointerLeave = () => updateHoverVisibility(false)
+    hoverEl.addEventListener('mouseenter', handlePointerEnter)
+    hoverEl.addEventListener('mouseleave', handlePointerLeave)
+
     // 鼠标移动 → 只更新 ref + DOM，不触发 React re-render
-    // 设计原则: 找不到有效数据时保持上次显示，永远不清空信息栏; 鼠标移出时仅隐藏「至今」。
+    // 设计原则: 找不到有效数据时保持上次显示，永远不清空信息栏。
     chart.on('updateAxisPointer', (event: any) => {
       const axesInfo = event.axesInfo
       const d = dataRef.current
@@ -1007,20 +1317,17 @@ export function EChartsCandlestick({
           if (idx >= 0 && idx < d.length) { foundIdx = idx; break }
         }
       }
-      const active = foundIdx >= 0
-      const idxChanged = foundIdx >= 0 && infoIdxRef.current !== foundIdx
-      const visChanged = active !== hoverActiveRef.current
-      hoverActiveRef.current = active
+      if (foundIdx < 0) return
+      const idxChanged = infoIdxRef.current !== foundIdx
       if (idxChanged) infoIdxRef.current = foundIdx
-      // 竖虚线显隐或悬停 K 线变化 → 重绘一次信息栏 (控制「至今」字段显隐 + 当前 K 线数据)
-      if (visChanged || idxChanged) {
+      // 悬停 K 线变化 → 重绘一次信息栏; 显隐由外层图表区域 enter/leave 负责。
+      if (idxChanged) {
         const infoEl = infoBarRef.current
         if (infoEl) {
           const html = getInfoBarHTMLRef.current()
           if (html) infoEl.innerHTML = html  // 只在有内容时更新
         }
       }
-      if (foundIdx < 0) return
       // 更新子图 graphic (仅悬停 K 线变化时; 纯显隐切换不影响副图)
       if (idxChanged) triggerInfoBarUpdate()
     })
@@ -1075,6 +1382,8 @@ export function EChartsCandlestick({
       chart.off('updateAxisPointer')
       chart.off('click')
       chart.off('dataZoom')
+      hoverEl.removeEventListener('mouseenter', handlePointerEnter)
+      hoverEl.removeEventListener('mouseleave', handlePointerLeave)
       chart.getZr().off('dblclick', handlePriceDoubleClick)
       ro.disconnect()
       chart.dispose()
@@ -1120,7 +1429,8 @@ export function EChartsCandlestick({
         }
       } else {
         markPointData.push({
-          name: m.label ?? '',
+          // markPoint 点击需要回传对应 K 线日期；显示文字由 label.formatter 单独负责。
+          name: m.date,
           coord: [m.date, isBuy ? d.low : d.high],
           symbol: 'arrow', symbolSize: 12,
           symbolRotate: isBuy ? 0 : 180,
@@ -1135,7 +1445,24 @@ export function EChartsCandlestick({
         })
       }
     }
-    if (mkrs?.length) {
+    const currentData = dataRef.current
+    const currentDateIndexMap = new Map(currentData.map((item, index) => [item.date, index]))
+    appendChanlunMarkPoints(
+      markPointData,
+      currentDateIndexMap,
+      chanlunAnalysisRef.current,
+      chanlunOverlayRef.current,
+      compact,
+    )
+    appendElliottMarkPoints(
+      markPointData,
+      [],
+      currentDateIndexMap,
+      elliottAnalysisRef.current,
+      elliottOverlayRef.current,
+      compact,
+    )
+    if (mkrs?.length || (chanlunAnalysisRef.current && chanlunOverlayRef.current?.enabled) || (elliottAnalysisRef.current && elliottOverlayRef.current?.enabled)) {
       seriesUpdates.push({
         name: 'K',
         markPoint: markPointData.length > 0 ? { data: markPointData, animation: false } : undefined,
@@ -1159,6 +1486,7 @@ export function EChartsCandlestick({
       data, dates, dateIndexMap,
       showMarkersProp ? markers : undefined,
       ranges,
+      priceBands,
       priceLines,
       showMA, compactRef.current,
       activeIndicators, chartHeight,
@@ -1166,6 +1494,10 @@ export function EChartsCandlestick({
       linkedPrice,
       volumeCompare,
       assetType,
+      chanlunAnalysis,
+      chanlunOverlay,
+      elliottAnalysis,
+      elliottOverlay,
     )
 
     chart.setOption(option, true)
@@ -1183,7 +1515,7 @@ export function EChartsCandlestick({
     if (infoEl) {
       infoEl.innerHTML = getInfoBarHTML()
     }
-  }, [data, markers, ranges, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme, assetType])
+  }, [data, markers, ranges, priceBands, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme, assetType, chanlunAnalysis, chanlunOverlay, elliottAnalysis, elliottOverlay])
 
   // 渲染信息栏容器 (内容由 JS 直接写入)
   const initialHTML = useMemo(() => {
@@ -1229,7 +1561,7 @@ export function EChartsCandlestick({
   }, [data, stockInfo, showMA, activeIndicators, assetType])
 
   return (
-    <div className="w-full">
+    <div ref={hoverSurfaceRef} className="w-full">
       {/* 主图信息栏 — 内容由 JS 直接操作 innerHTML */}
       {showInfoBar && (
         <div ref={infoBarRef} style={{ backgroundColor: CT().infoBarBg }}

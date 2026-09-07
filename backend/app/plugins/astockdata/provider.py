@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from datetime import time as dt_time
 from pathlib import Path
+from threading import RLock
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -215,7 +216,10 @@ def _tdx_client() -> Any:
     """创建已真实验活的 mootdx client，规避 BESTIP 空串/坏节点静默空表。"""
     from mootdx.quotes import Quotes
 
+    deadline = time.monotonic() + 8
     for host, port in _TDX_SERVERS:
+        if time.monotonic() >= deadline:
+            break
         try:
             with socket.create_connection((host, port), timeout=0.7):
                 pass
@@ -223,7 +227,8 @@ def _tdx_client() -> Any:
             continue
         client = None
         try:
-            client = Quotes.factory(market="std", server=(host, port), timeout=2.0)
+            client = Quotes.factory(market="std", server=(host, port), timeout=2.0,
+                                    auto_retry=False, raise_exception=True)
             if _tdx_validate(client):
                 return client
         except Exception:
@@ -362,7 +367,8 @@ def _tencent_minute(raw_symbol: str, freq: str) -> pl.DataFrame:
                 "amount": volume * 100 * ((open_price + close) / 2),
             }
         )
-    return _normalise_minute(rows, symbol)
+    frame = _normalise_minute(rows, symbol)
+    return frame.with_columns(pl.lit(True).alias("amount_estimated")) if not frame.is_empty() else frame
 
 
 def _normalise_daily(data: Any, symbol: str) -> pl.DataFrame:
@@ -496,6 +502,8 @@ class AStockDataProvider:
     """a-stock-data 行情层的标准 Provider。"""
 
     name = "astockdata"
+    minute_frequencies = tuple(_FREQUENCIES)
+    minute_adjustment = "none"
     builtin = True
     # mootdx 分页有总量上限；与前端分时档位保持一致，默认只请求最近 5 个交易日。
     minute_history_days = 5
@@ -503,6 +511,7 @@ class AStockDataProvider:
     def __init__(self) -> None:
         self.config = _AStockDataConfig()
         self._tdx: Any = None
+        self._tdx_lock = RLock()
         self._tdx_unavailable = False
         self._symbols_cache: list[str] | None = None
 
@@ -516,15 +525,16 @@ class AStockDataProvider:
             _HTTP_SESSION = None
 
     def _get_tdx(self) -> Any:
-        if self._tdx_unavailable:
-            raise RuntimeError("mootdx 通达信连接不可用")
-        if self._tdx is None:
-            try:
-                self._tdx = _tdx_client()
-            except Exception:
-                self._tdx_unavailable = True
-                raise
-        return self._tdx
+        with self._tdx_lock:
+            if self._tdx_unavailable:
+                raise RuntimeError("mootdx 通达信连接不可用")
+            if self._tdx is None:
+                try:
+                    self._tdx = _tdx_client()
+                except Exception:
+                    self._tdx_unavailable = True
+                    raise
+            return self._tdx
 
     def get_daily(
         self,
@@ -556,7 +566,8 @@ class AStockDataProvider:
                 for raw_symbol in current:
                     try:
                         code, _, symbol = _symbol_parts(raw_symbol)
-                        pages = _tdx_pages(client, code, 9, query_start, count, str(asset_type))
+                        with self._tdx_lock:
+                            pages = _tdx_pages(client, code, 9, query_start, count, str(asset_type))
                         for page in pages:
                             df = _normalise_daily(page, symbol)
                             if not df.is_empty():
@@ -601,7 +612,8 @@ class AStockDataProvider:
                             continue
                         rows.append({"symbol": symbol, **event})
                 except Exception as exc:
-                    logger.warning("a-stock-data adj_factor %s 拉取失败: %s", raw_symbol, exc)
+                    # 空因子表示没有除权事件；网络失败不能伪装成无除权。
+                    raise RuntimeError("a-stock-data 除权因子获取失败") from exc
             if on_chunk_done:
                 on_chunk_done(index + 1, len(chunks))
         return normalize_adj_factors(rows, source=self.name) if rows else pl.DataFrame()
@@ -614,6 +626,8 @@ class AStockDataProvider:
         asset_type: AssetType = "stock",
         freq: str = "1m",
         on_chunk_done=None,
+        *,
+        include_quality: bool = False,
     ) -> pl.DataFrame:
         if not symbols:
             return pl.DataFrame()
@@ -638,9 +652,10 @@ class AStockDataProvider:
                 try:
                     if client is not None:
                         code, _, symbol = _symbol_parts(raw_symbol)
-                        pages = _tdx_pages(
-                            client, code, frequency, query_start, count, str(asset_type)
-                        )
+                        with self._tdx_lock:
+                            pages = _tdx_pages(
+                                client, code, frequency, query_start, count, str(asset_type)
+                            )
                         for page in pages:
                             df = _normalise_minute(page, symbol)
                             if not df.is_empty():
@@ -667,7 +682,14 @@ class AStockDataProvider:
             if on_chunk_done:
                 on_chunk_done(index + 1, len(chunks))
         non_empty = [frame for frame in frames if not frame.is_empty()]
-        return pl.concat(non_empty, how="diagonal_relaxed") if non_empty else pl.DataFrame()
+        result = pl.concat(non_empty, how="diagonal_relaxed") if non_empty else pl.DataFrame()
+        if not include_quality and "amount_estimated" in result.columns:
+            result = result.drop("amount_estimated")
+        return result
+
+    def get_chart_minute(self, *args, **kwargs) -> pl.DataFrame:
+        """展示专用质量标记不进入旧分钟同步的 Parquet schema。"""
+        return self.get_minute(*args, **kwargs, include_quality=True)
 
     def _all_symbols(self) -> list[str]:
         if self._symbols_cache is not None:

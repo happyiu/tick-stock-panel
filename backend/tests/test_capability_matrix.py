@@ -14,6 +14,7 @@ from app.data_providers import custom as custom_sources
 from app.data_providers.capabilities import CAPABILITY_REGISTRY, build_capability_matrix
 
 DEFAULT_CURRENT = {
+    "chart_data_provider": "tickflow",
     "daily_data_provider": "tickflow",
     "adj_factor_provider": "tickflow",
     "minute_data_provider": "tickflow",
@@ -22,6 +23,16 @@ DEFAULT_CURRENT = {
     "realtime_data_provider": "tickflow",
     "financial_data_provider": "tickflow",
 }
+
+
+def test_chart_requires_daily_minute_and_factors(monkeypatch):
+    _fake_sources(monkeypatch, [
+        {"name": "complete", "datasets": ["daily", "minute", "adj_factor"], "available": True},
+        {"name": "partial", "datasets": ["daily", "minute"], "available": True},
+    ])
+    cap = _by_id(build_capability_matrix({"chart_data_provider": "complete"}))["chart"]
+    assert cap["usable"]
+    assert [c["name"] for c in cap["candidates"]] == ["complete"]
 
 
 def _fake_sources(monkeypatch, plugins: list[dict], customs: list[dict] | None = None) -> None:
@@ -40,7 +51,7 @@ def test_registry_covers_all_routing_fields():
     assert sorted(routable) == sorted(DEFAULT_CURRENT)
     assert len(set(routable)) == len(routable)
     assert {c["id"] for c in CAPABILITY_REGISTRY} == {
-        "realtime", "daily", "minute", "full_minute", "depth5", "adj_factor", "financial",
+        "chart", "realtime", "daily", "minute", "full_minute", "depth5", "adj_factor", "financial",
     }
     full_minute = next(c for c in CAPABILITY_REGISTRY if c["id"] == "full_minute")
     assert full_minute["field"] == "full_minute_data_provider"
@@ -56,7 +67,7 @@ def test_matrix_without_third_party_sources(monkeypatch):
     _fake_sources(monkeypatch, [])
     matrix = build_capability_matrix(dict(DEFAULT_CURRENT), tickflow_tier="expert")
     assert matrix["tickflow_tier"] == "expert"
-    assert len(matrix["capabilities"]) == 7
+    assert len(matrix["capabilities"]) == 8
     for cap in matrix["capabilities"]:
         names = [c["name"] for c in cap["candidates"]]
         assert names == ["tickflow"]
@@ -203,26 +214,24 @@ def test_adj_factor_routes_independently(monkeypatch):
 
 
 def test_depth5_capability_semantics(monkeypatch):
-    """五档: pro+ 档 TickFlow 可供 (usable); 档位不足时不可用且无候选。
-
-    插件数据集白名单未开放 depth5, 假插件即使声明其他数据集也不进五档候选;
-    未来契约开放后声明 depth5 的源会自然成为候选 (candidates 按 datasets 过滤)。
-    """
+    """五档可独立路由到声明 depth5 的插件, 不受 TickFlow 档位限制。"""
     _fake_sources(
         monkeypatch,
-        [{"name": "fuyao", "display_name": "fuyao", "datasets": ["realtime"],
+        [{"name": "depth_src", "display_name": "Depth", "datasets": ["depth5"],
           "available": True, "status": "ok"}],
     )
     # pro 档: TickFlow 进候选, 默认路由 tickflow → usable
     cap = _by_id(build_capability_matrix(dict(DEFAULT_CURRENT), tickflow_tier="pro"))["depth5"]
     assert cap["tf_available"] is True
-    assert [c["name"] for c in cap["candidates"]] == ["tickflow"]
+    assert [c["name"] for c in cap["candidates"]] == ["tickflow", "depth_src"]
     assert cap["usable"] is True
-    # starter 档: 档位不足 → 无候选, usable False (连板梯队封单缺数据)
-    cap = _by_id(build_capability_matrix(dict(DEFAULT_CURRENT), tickflow_tier="starter"))["depth5"]
+    # starter 档: TickFlow 不可供, 但显式路由到插件后仍可用
+    current = dict(DEFAULT_CURRENT, depth5_data_provider="depth_src")
+    cap = _by_id(build_capability_matrix(current, tickflow_tier="starter"))["depth5"]
     assert cap["tf_available"] is False
-    assert cap["candidates"] == []
-    assert cap["usable"] is False
+    assert [c["name"] for c in cap["candidates"]] == ["depth_src"]
+    assert cap["effective"] == "depth_src"
+    assert cap["usable"] is True
 
 
 def test_unknown_current_display_falls_back_to_name(monkeypatch):
