@@ -383,7 +383,7 @@ function impulseCandidate(bars: OHLC[], pivots: ElliottPivot[]): Candidate | nul
   const failed = rules.some(item => item.result === 'fail')
   const [origin, wave1, wave2, wave3, wave4, wave5] = pivots
   const count = countFromPivots(pivots, 'impulse', direction, '五浪端点已观察')
-  count.supportSummary = failed ? ['普通推动浪至少一项硬规则失败，已降级为待重计数'] : ['端点形态与普通五浪推动候选相容']
+  count.supportSummary = failed ? ['普通推动浪条件未全部满足，已降级为待重计数'] : ['端点形态与普通五浪推动候选相容']
   count.confirmation = ['等待末端反向分型确认当前推动段完成']
   count.invalidation = rules.filter(item => item.result === 'fail').map(item => item.evidence)
   count.recountConditions = ['若一浪与四浪持续重叠，应另行评估对角线候选']
@@ -415,7 +415,7 @@ function impulseCandidate(bars: OHLC[], pivots: ElliottPivot[]): Candidate | nul
   return {
     count,
     rules,
-    evidence: [{ family: 'structure', result: failed ? 'conflicts' : 'supports', observation: failed ? '普通推动浪硬规则存在冲突' : '六个交替端点组成普通推动候选', dependencyGroup: 'price-pivots' }],
+    evidence: [{ family: 'structure', result: failed ? 'conflicts' : 'supports', observation: failed ? '普通推动浪条件存在冲突' : '六个交替端点组成普通推动候选', dependencyGroup: 'price-pivots' }],
     fib,
     volume: volumeEvidence,
     rank: [failed ? 0 : 2, 6, failed ? 0 : 1, pivots[pivots.length - 1]?.index ?? 0],
@@ -510,13 +510,13 @@ export function analyzeElliott(input: OHLC[], period: ElliottPeriod, asOf?: stri
   const suspected = suspectedPivot(bars, pivots, period)
   const allPivots = suspected ? [...pivots, suspected] : pivots
   const primaryCount = primary?.count ?? null
-  // 即使普通推动候选因硬规则失败而没有成为主计数，也保留它的失败规则，
+  // 即使普通推动候选因条件失败而没有成为主计数，也保留它的失败规则，
   // 让面板能够明确展示“为什么被淘汰”，而不是被四拐点修正代理覆盖。
   const impulseCandidateForRules = candidates.find(candidate => candidate.count.family === 'impulse')
   const hardRuleChecks = primary?.count.family === 'impulse'
     ? primary.rules
     : impulseCandidateForRules?.rules ?? primary?.rules ?? []
-  const guidelineEvidence = primary?.evidence ?? [{ family: 'structure', result: 'unavailable', observation: '没有通过硬规则筛选的本地候选', dependencyGroup: 'price-pivots' }]
+  const guidelineEvidence = primary?.evidence ?? [{ family: 'structure', result: 'unavailable', observation: '没有通过推动浪条件检查的本地候选', dependencyGroup: 'price-pivots' }]
   const fibonacciRelationships = primary?.fib ?? []
   const momentumVolumeEvidence = primary?.volume ?? [{ family: 'volume', result: 'unavailable', observation: '没有可用的本地候选用于成交量比较', dependencyGroup: 'missing-candidate', weight: null }]
   const ambiguity: ElliottAnalysis['ambiguity'] = alternate ? 'multiple_viable' : primary ? 'none' : 'unresolved'
@@ -542,7 +542,7 @@ export function analyzeElliott(input: OHLC[], period: ElliottPeriod, asOf?: stri
     ambiguity,
     approximationLoss: APPROXIMATION_LOSS,
     confirmation: primaryCount?.confirmation ?? ['等待更多确认拐点'],
-    invalidation: primaryCount?.invalidation ?? ['当前没有通过硬规则的主计数'],
+    invalidation: primaryCount?.invalidation ?? ['当前没有通过推动浪条件检查的主计数'],
     recountConditions: primaryCount?.recountConditions ?? ['新增拐点改变交替结构时重新计数'],
     nextObservation: primaryCount?.nextObservation ?? ['等待新的确认拐点以区分推动和修正候选'],
     currentPrice: bars.at(-1)?.close ?? null,

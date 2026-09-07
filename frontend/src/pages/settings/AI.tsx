@@ -23,10 +23,13 @@ const toPositiveInt = (v: string) => {
 const CODEX_PROVIDER = 'codex_cli'
 const OPENAI_PROVIDER = 'openai'
 const OPENAI_COMPAT_PROVIDER = 'openai_compat'
+const OPENCODE_GO_PROVIDER = 'opencode_go'
 const CODEX_COMMAND = 'codex'
 const DEFAULT_CODEX_MODEL = 'gpt-5.6-sol'
 const DEFAULT_CODEX_REASONING_EFFORT = 'xhigh'
 const DEFAULT_OPENAI_MODEL = 'gpt-5.5'
+const OPENCODE_GO_BASE_URL = 'https://opencode.ai/zen/go/v1'
+const OPENCODE_GO_DEFAULT_MODEL = 'kimi-k2.7-code'
 const DEFAULT_REASONING_EFFORT = 'high'
 const SAVED_CODEX_OPTION_VALUE = '__saved_codex_config__'
 const CODEX_REASONING_LABELS: Record<string, string> = {
@@ -57,6 +60,7 @@ type AiPreset = { label: string; provider?: string; url: string; model: string; 
 const PRESETS: AiPreset[] = [
   { label: '自定义', url: '', model: '', website: '', websiteLabel: '', description: '不自动填充任何配置，完全手动填写 API 地址、模型和密钥。', custom: true },
   { label: 'OpenAI', provider: OPENAI_PROVIDER, url: 'https://api.openai.com/v1', model: DEFAULT_OPENAI_MODEL, website: 'https://platform.openai.com/', websiteLabel: 'platform.openai.com', description: 'OpenAI 官方接口，可单独配置模型支持的推理强度。' },
+  { label: 'OpenCode Go', provider: OPENCODE_GO_PROVIDER, url: OPENCODE_GO_BASE_URL, model: OPENCODE_GO_DEFAULT_MODEL, website: 'https://opencode.ai/docs/go/', websiteLabel: 'opencode.ai/docs/go', description: 'OpenCode Go Chat Completions 接口；后端会自动附带会话标识，模型使用裸模型 ID（如 kimi-k2.7-code）。' },
   { label: 'DeepSeek', url: 'https://api.deepseek.com', model: 'deepseek-v4-pro', website: 'https://www.deepseek.com/', websiteLabel: 'deepseek.com', description: 'DeepSeek 官方 OpenAI 兼容接口。' },
   { label: '通义千问', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-3.6plus', website: 'https://tongyi.aliyun.com/', websiteLabel: 'tongyi.aliyun.com', description: '阿里云 DashScope 兼容模式接口。' },
   { label: '智谱 GLM', url: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-5.2', website: 'https://open.bigmodel.cn/', websiteLabel: 'open.bigmodel.cn', description: '智谱 AI 官方 OpenAI 兼容接口。' },
@@ -410,10 +414,10 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
           ) : (
             <>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <Field label="API 地址">
+                <Field label="API 地址" hint={provider === OPENCODE_GO_PROVIDER ? OPENCODE_GO_BASE_URL : undefined}>
                   <input type="text" value={baseUrl} onChange={e => handleBaseUrlChange(e.target.value)} placeholder="https://api.zhaji.dev/v1" className={INPUT_CLS} />
                 </Field>
-                <Field label="模型">
+                <Field label="模型" hint={provider === OPENCODE_GO_PROVIDER ? '使用 Chat Completions 模型 ID，例如 kimi-k2.7-code；不要填写 opencode-go/ 前缀。' : undefined}>
                   <input type="text" value={model} onChange={e => handleModelChange(e.target.value)} placeholder="gpt-5.6-sol" className={INPUT_CLS} />
                 </Field>
               </div>

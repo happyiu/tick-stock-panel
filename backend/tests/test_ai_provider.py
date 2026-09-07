@@ -49,6 +49,68 @@ def test_normalize_openai_base_url_strips_trailing_slash():
     assert normalize_openai_base_url("https://open.bigmodel.cn/api/paas/v4/") == "https://open.bigmodel.cn/api/paas/v4"
 
 
+def test_opencode_go_client_headers_include_session_and_identifying_user_agent(monkeypatch):
+    values = {
+        "ai_provider": ai_provider.OPENCODE_GO_PROVIDER,
+        "ai_base_url": "https://opencode.ai/zen/go/v1",
+        "ai_user_agent": "",
+    }
+    monkeypatch.setattr(
+        ai_provider.secrets_store,
+        "get_ai_config",
+        lambda key, default="": values.get(key, default),
+    )
+
+    headers = ai_provider._openai_default_headers(session_id="session-1")
+
+    assert headers == {
+        "User-Agent": ai_provider.OPENCODE_GO_DEFAULT_USER_AGENT,
+        "x-opencode-session": "session-1",
+    }
+
+
+def test_openai_client_passes_opencode_go_headers(monkeypatch):
+    captured: dict = {}
+    values = {
+        "ai_provider": ai_provider.OPENCODE_GO_PROVIDER,
+        "ai_base_url": "https://opencode.ai/zen/go/v1",
+        "ai_user_agent": "",
+    }
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", FakeAsyncOpenAI)
+    monkeypatch.setattr(
+        ai_provider.secrets_store,
+        "get_ai_config",
+        lambda key, default="": values.get(key, default),
+    )
+
+    ai_provider._openai_client("sk-test", 15, session_id="session-1")
+
+    assert captured["base_url"] == "https://opencode.ai/zen/go/v1"
+    assert captured["default_headers"] == {
+        "User-Agent": ai_provider.OPENCODE_GO_DEFAULT_USER_AGENT,
+        "x-opencode-session": "session-1",
+    }
+
+
+def test_opencode_go_is_detected_from_manually_configured_endpoint(monkeypatch):
+    values = {
+        "ai_provider": ai_provider.OPENAI_COMPAT_PROVIDER,
+        "ai_base_url": "https://opencode.ai/zen/go/v1",
+    }
+    monkeypatch.setattr(
+        ai_provider.secrets_store,
+        "get_ai_config",
+        lambda key, default="": values.get(key, default),
+    )
+
+    assert ai_provider.is_opencode_go_provider() is True
+
+
 def test_openai_kwargs_prefers_final_answer_for_official_deepseek_v4():
     kwargs = ai_provider._openai_kwargs(
         temperature=0.5,

@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import tomllib
+import uuid
 from collections.abc import AsyncIterator, Callable, Sequence
 from pathlib import Path
 from types import TracebackType
@@ -21,10 +22,12 @@ from app.config import settings
 
 OPENAI_COMPAT_PROVIDER = "openai_compat"
 OPENAI_PROVIDER = "openai"
+OPENCODE_GO_PROVIDER = "opencode_go"
 CODEX_CLI_PROVIDER = "codex_cli"
 CODEX_DEFAULT_COMMAND = "codex"
 CODEX_SUPPORTED_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
 OPENAI_DEFAULT_REASONING_EFFORT = "high"
+OPENCODE_GO_DEFAULT_USER_AGENT = "tick-stock-panel/1.0"
 
 _CODEX_ENV_ALLOWLIST = (
     "PATH",
@@ -221,6 +224,18 @@ def is_codex_cli_provider(provider: str | None = None) -> bool:
     return (provider or current_ai_provider()) == CODEX_CLI_PROVIDER
 
 
+def is_opencode_go_provider(provider: str | None = None) -> bool:
+    """识别 OpenCode Go, 兼容已手动填入 Go 地址但尚未切换预设的旧配置。"""
+    configured_provider = provider or current_ai_provider()
+    if configured_provider == OPENCODE_GO_PROVIDER:
+        return True
+    if configured_provider != OPENAI_COMPAT_PROVIDER:
+        return False
+    base_url = secrets_store.get_ai_config("ai_base_url", settings.ai_base_url)
+    parsed = urlsplit(str(base_url or "").strip().lower())
+    return parsed.netloc == "opencode.ai" and parsed.path.startswith("/zen/go/")
+
+
 def normalize_codex_model(model: str) -> str:
     value = model.strip()
     aliases = {
@@ -363,7 +378,8 @@ async def _run_openai_once(
     if not ai_key:
         raise RuntimeError("AI API Key 未配置, 请在设置页配置")
 
-    client = _openai_client(ai_key, timeout)
+    session_id = str(uuid.uuid4()) if is_opencode_go_provider() else None
+    client = _openai_client(ai_key, timeout, session_id=session_id)
     model = current_ai_model()
     req_messages = list(messages)
     kwargs = _openai_kwargs(temperature=temperature, max_tokens=max_tokens)
@@ -400,7 +416,8 @@ async def _stream_openai(
     if not ai_key:
         raise RuntimeError("AI API Key 未配置, 请在设置页配置")
 
-    client = _openai_client(ai_key, timeout)
+    session_id = str(uuid.uuid4()) if is_opencode_go_provider() else None
+    client = _openai_client(ai_key, timeout, session_id=session_id)
     model = current_ai_model()
     base_url = secrets_store.get_ai_config("ai_base_url", settings.ai_base_url)
     req_messages = list(messages)
@@ -487,16 +504,26 @@ async def _iter_openai_text(stream) -> AsyncIterator[str]:
         raise RuntimeError("AI 服务未返回正文内容; 请检查模型配置或稍后重试")
 
 
-def _openai_client(api_key: str, timeout: float):
+def _openai_default_headers(*, session_id: str | None = None) -> dict[str, str]:
+    configured_user_agent = secrets_store.get_ai_config("ai_user_agent", "")
+    user_agent = configured_user_agent or (
+        OPENCODE_GO_DEFAULT_USER_AGENT if is_opencode_go_provider() else settings.ai_user_agent
+    )
+    headers = {"User-Agent": user_agent}
+    if is_opencode_go_provider():
+        headers["x-opencode-session"] = (session_id or str(uuid.uuid4())).strip()
+    return headers
+
+
+def _openai_client(api_key: str, timeout: float, *, session_id: str | None = None):
     from openai import AsyncOpenAI
 
-    user_agent = secrets_store.get_ai_config("ai_user_agent", "") or settings.ai_user_agent
     return AsyncOpenAI(
         api_key=api_key,
         base_url=normalize_openai_base_url(secrets_store.get_ai_config("ai_base_url", settings.ai_base_url)),
         timeout=timeout,
         max_retries=0,
-        default_headers={"User-Agent": user_agent},
+        default_headers=_openai_default_headers(session_id=session_id),
     )
 
 

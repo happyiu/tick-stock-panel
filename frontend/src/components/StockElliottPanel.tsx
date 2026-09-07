@@ -65,9 +65,24 @@ function ruleId(rule: { ruleId?: string; rule_id?: string }): string {
   return rule.ruleId ?? rule.rule_id ?? '结构规则'
 }
 
+const RULE_LABELS: Record<string, string> = {
+  'impulse.wave2_origin': '二浪不破一浪起点',
+  'impulse.wave3_not_shortest': '三浪不是最短浪',
+  'impulse.wave4_no_overlap': '四浪不进入一浪区间',
+  'impulse.internal_structure': '内部子浪结构',
+}
+
+function ruleLabel(rule: { ruleId?: string; rule_id?: string }): string {
+  return RULE_LABELS[ruleId(rule)] ?? '推动浪条件'
+}
+
 function ruleResult(rule: { result: string }): 'pass' | 'fail' | 'unknown' | 'not_applicable' {
   if (rule.result === 'pass' || rule.result === 'fail' || rule.result === 'unknown' || rule.result === 'not_applicable') return rule.result
   return 'unknown'
+}
+
+function ruleResultLabel(rule: { result: string }): string {
+  return ({ pass: '满足', fail: '不满足', unknown: '无法判断', not_applicable: '不适用' })[ruleResult(rule)]
 }
 
 function ruleSummary(rules: Array<{ ruleId?: string; rule_id?: string; result: string; evidence: string }>): { pass: number; fail: number; unknown: number } {
@@ -251,13 +266,14 @@ export function StockElliottPanel({
               <div className="mt-1.5 text-[13px] text-muted">本地代理不会将三段摆动强行命名为具体修正形态</div>
             </WaveCard>
 
-            <WaveCard title="硬规则" tone={ruleCounts.fail > 0 ? 'danger' : ruleCounts.unknown > 0 ? 'amber' : 'success'}>
+            <WaveCard title="推动浪条件检查" tone={ruleCounts.fail > 0 ? 'danger' : ruleCounts.unknown > 0 ? 'amber' : 'success'}>
               <div className="flex items-center gap-1.5 font-medium text-foreground">
                 {ruleCounts.fail > 0 ? <XCircle className="h-3.5 w-3.5 text-danger" /> : ruleCounts.unknown > 0 ? <AlertTriangle className="h-3.5 w-3.5 text-[#F59E0B]" /> : <CheckCircle2 className="h-3.5 w-3.5 text-[#22C55E]" />}
-                通过 {ruleCounts.pass} · 冲突 {ruleCounts.fail} · 未知 {ruleCounts.unknown}
+                满足 {ruleCounts.pass} · 不满足 {ruleCounts.fail} · 无法判断 {ruleCounts.unknown}
               </div>
+              <div className="mt-1 text-[12px] text-muted">仅检查已确认拐点，内部子浪结构暂无法判断。</div>
               <div className="mt-1.5 space-y-0.5 text-[13px] text-secondary">
-                {rules.slice(0, 3).map(rule => <div key={`${ruleId(rule)}-${rule.result}`} className="truncate" title={rule.evidence}>{ruleId(rule)}：{ruleResult(rule)}</div>)}
+                {rules.map(rule => <div key={`${ruleId(rule)}-${rule.result}`} className="truncate" title={rule.evidence}>{ruleLabel(rule)}：{ruleResultLabel(rule)} · {rule.evidence}</div>)}
                 {rules.length === 0 && <div>暂无可检查的推动浪规则</div>}
               </div>
             </WaveCard>
