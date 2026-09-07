@@ -85,6 +85,8 @@ export interface ActionSignalInput {
   rows: ActionBar[]
   technicalScores?: TechnicalScores
   dataStatus?: ChartDataStatus
+  /** enriched 是图表源不可用时仍可用的本地规范数据，不阻断行动信号回放。 */
+  dataSource?: string
   selectedDate?: string | null
 }
 
@@ -417,8 +419,9 @@ function selectStateAt(
  * 按闭合 K 线顺序回放行动信号。结构分析固定使用 stroke source，
  * 每个截面只读取该截面以前的数据，确认日期记录在事件本身而不是结构发生日期。
  */
-export function buildActionSignals({ symbol, assetType, period, rows, technicalScores, dataStatus, selectedDate }: ActionSignalInput): ActionSignalResult {
+export function buildActionSignals({ symbol, assetType, period, rows, technicalScores, dataStatus, dataSource, selectedDate }: ActionSignalInput): ActionSignalResult {
   const context = { symbol, assetType }
+  const stale = dataStatus?.stale === true && dataSource !== 'enriched'
   if (!rows.length) return emptyResult(period, 'blocked', '当前周期没有 K 线数据', undefined, context)
   const closedBars = rows.filter(row => row.isClosed === true)
   if (closedBars.length < ACTION_SIGNAL_WARMUP_BARS) {
@@ -487,7 +490,7 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
       && !!atr
       && bar.close < support.low - atr * 0.3
 
-    if (!dataStatus?.stale && coreInvalidation) {
+    if (!stale && coreInvalidation) {
       event = createEvent('retreat', 'core_invalidation', period, bar, score, state.defensePrice, state.defensePrice, null, [
         `收盘跌破核心防守位 ${state.defensePrice!.toFixed(3)}`,
         scoreText(score),
@@ -499,7 +502,7 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
       state.pendingPullback = null
       state.lastAddOrRetreatIndex = closedIndex
       state.lastEventId = event.id
-    } else if (!dataStatus?.stale && state.phase !== 'wait' && !state.reducedInRound && (state.weakScoreStreak >= 2 || supportBreak)) {
+    } else if (!stale && state.phase !== 'wait' && !state.reducedInRound && (state.weakScoreStreak >= 2 || supportBreak)) {
       const trigger: ActionSignalTrigger = state.weakScoreStreak >= 2 ? 'score_decay' : 'support_break'
       event = createEvent('reduce', trigger, period, bar, score, support?.low ?? null, state.defensePrice, null, [
         trigger === 'score_decay' ? '技术方向连续两根闭合 K 线不高于 40 分' : `收盘跌破最近支撑区 ${support?.low.toFixed(3)}`,
@@ -508,7 +511,7 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
       state.phase = 'defensive'
       state.reducedInRound = true
       state.lastEventId = event.id
-    } else if (!dataStatus?.stale && score.available && addCooldownReady && strongBull(score, 65) && state.phase !== 'wait'
+    } else if (!stale && score.available && addCooldownReady && strongBull(score, 65) && state.phase !== 'wait'
       && (breakoutTrigger || pullbackConfirmed || structureTrigger)) {
       const trigger: ActionSignalTrigger = pullbackConfirmed ? 'pullback' : structureTrigger ? 'structure' : 'breakout'
       const reference = pullbackConfirmed
@@ -525,7 +528,7 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
       state.lastEventId = event.id
       if (eventCandidate) state.usedStructureIds.add(eventCandidate.id)
       if (breakout) state.usedTriggerIds.add(breakout.id)
-    } else if (!dataStatus?.stale && score.available && addCooldownReady && strongBull(score, 60) && state.phase === 'wait'
+    } else if (!stale && score.available && addCooldownReady && strongBull(score, 60) && state.phase === 'wait'
       && (breakoutTrigger || structureTrigger)) {
       const trigger: ActionSignalTrigger = structureTrigger ? 'structure' : 'breakout'
       const reference = breakout?.reference ?? structureCandidateValue?.price ?? null
@@ -579,7 +582,6 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
   const latestScore = latestClosedDate ? scoreMap.get(normalizeKey(latestClosedDate, period)) ?? null : null
   const inputHasUnclosed = rows.at(-1)?.isClosed !== true
   const scoreUnavailable = !latestScore?.available
-  const stale = dataStatus?.stale === true
   const status: ActionSignalStatus = stale ? 'stale' : inputHasUnclosed || scoreUnavailable ? 'provisional' : 'ready'
   const reason = stale
     ? '当前为过期快照，不确认新的行动信号。'

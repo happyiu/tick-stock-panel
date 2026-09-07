@@ -55,16 +55,16 @@ function ZoneCard({
       aria-pressed={selected}
     >
       <div className="flex items-center justify-between gap-2">
-        <span className={`text-[10px] font-medium ${sideTone(zone.side)}`}>{label} · {sideLabel(zone.side)}</span>
-        <span className="font-mono text-[10px] tabular-nums text-foreground">
+        <span className={`text-[13px] font-medium ${sideTone(zone.side)}`}>{label} · {sideLabel(zone.side)}</span>
+        <span className="font-mono text-[13px] tabular-nums text-foreground">
           {fmtAssetPrice(zone.low, assetType)}{zone.low !== zone.high ? ` ~ ${fmtAssetPrice(zone.high, assetType)}` : ''}
         </span>
       </div>
-      <div className="mt-1 flex items-center justify-between gap-2 text-[8px] text-muted">
+      <div className="mt-1 flex items-center justify-between gap-2 text-[12px] text-muted">
         <span className="min-w-0 truncate" title={zoneSourcesSummary(zone)}>{zoneSourcesSummary(zone)}</span>
         <span className="shrink-0">{sourceCount}</span>
       </div>
-      <div className="mt-0.5 flex items-center justify-between gap-2 text-[8px] text-muted">
+      <div className="mt-0.5 flex items-center justify-between gap-2 text-[12px] text-muted">
         <span>距离 {zone.side === 'current' ? '当前价格' : fmtPct(zone.distancePct)}</span>
         <span>可知 {shortDate(zone.lastTouchTime)}</span>
       </div>
@@ -97,17 +97,17 @@ export function StockPriceZonesPanel({
           <span className="flex flex-wrap items-center gap-1.5">
             <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#F97316]" />
             <span className="text-xs font-medium text-foreground">关键价位</span>
-            <span className="rounded bg-[#F97316]/10 px-1.5 py-0.5 text-[9px] text-[#FB923C]">v1</span>
-            <span className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[9px] text-secondary">{PERIOD_LABELS[analysis.period]}</span>
+            <span className="rounded bg-[#F97316]/10 px-1.5 py-0.5 text-[12px] text-[#FB923C]">v1</span>
+            <span className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[12px] text-secondary">{PERIOD_LABELS[analysis.period]}</span>
           </span>
-          {!collapsed && <span className="mt-0.5 block truncate text-[9px] text-muted" title={atrNote}>{atrNote}</span>}
+          {!collapsed && <span className="mt-0.5 block truncate text-[12px] text-muted" title={atrNote}>{atrNote}</span>}
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {onToggleShowZones && (
           <button
             type="button"
             onClick={onToggleShowZones}
-            className={`flex shrink-0 items-center gap-1 rounded-btn px-1.5 py-1 text-[9px] ${showZones ? 'bg-accent/15 text-accent' : 'bg-elevated text-muted'}`}
+            className={`flex shrink-0 items-center gap-1 rounded-btn px-1.5 py-1 text-[12px] ${showZones ? 'bg-accent/15 text-accent' : 'bg-elevated text-muted'}`}
             aria-pressed={showZones}
             title={showZones ? '隐藏关键价位带' : '显示关键价位带'}
           >
@@ -121,22 +121,22 @@ export function StockPriceZonesPanel({
       {!collapsed && (
         <div className="grid gap-2 p-2">
           {analysis.status !== 'ready' && (
-            <div className="rounded-card border border-border bg-elevated/40 px-2 py-1.5 text-[9px] text-muted">
+            <div className="rounded-card border border-border bg-elevated/40 px-2 py-1.5 text-[12px] text-muted">
               {analysis.issues[0] ?? '结构数据不足，暂不生成可追溯价位。'}
             </div>
           )}
           {current && <ZoneCard zone={current} assetType={assetType} selected={selectedZoneId === current.id} onSelect={() => onSelectZone?.(current)} />}
           <div className="grid gap-2 sm:grid-cols-2">
             <div className="grid gap-1.5">
-              <div className="text-[9px] font-medium text-bull">支撑区 ↓</div>
-              {supports.length > 0 ? supports.map((zone, index) => <ZoneCard key={zone.id} zone={zone} rank={index + 1} assetType={assetType} selected={selectedZoneId === zone.id} onSelect={() => onSelectZone?.(zone)} />) : <div className="rounded-card border border-border/60 px-2 py-2 text-[9px] text-muted">当前价格下方暂无可用区间</div>}
+              <div className="text-[12px] font-medium text-bull">支撑区 ↓</div>
+              {supports.length > 0 ? supports.map((zone, index) => <ZoneCard key={zone.id} zone={zone} rank={index + 1} assetType={assetType} selected={selectedZoneId === zone.id} onSelect={() => onSelectZone?.(zone)} />) : <div className="rounded-card border border-border/60 px-2 py-2 text-[12px] text-muted">当前价格下方暂无可用区间</div>}
             </div>
             <div className="grid gap-1.5">
-              <div className="text-[9px] font-medium text-bear">压力区 ↑</div>
-              {resistances.length > 0 ? resistances.map((zone, index) => <ZoneCard key={zone.id} zone={zone} rank={index + 1} assetType={assetType} selected={selectedZoneId === zone.id} onSelect={() => onSelectZone?.(zone)} />) : <div className="rounded-card border border-border/60 px-2 py-2 text-[9px] text-muted">当前价格上方暂无可用区间</div>}
+              <div className="text-[12px] font-medium text-bear">压力区 ↑</div>
+              {resistances.length > 0 ? resistances.map((zone, index) => <ZoneCard key={zone.id} zone={zone} rank={index + 1} assetType={assetType} selected={selectedZoneId === zone.id} onSelect={() => onSelectZone?.(zone)} />) : <div className="rounded-card border border-border/60 px-2 py-2 text-[12px] text-muted">当前价格上方暂无可用区间</div>}
             </div>
           </div>
-          <div className="text-[8px] text-muted">来源只使用当前周期已确认分型、笔／线段端点、中枢边界和 MA20/MA60；结果按当前数据版本回看。</div>
+          <div className="text-[12px] text-muted">来源只使用当前周期已确认分型、笔／线段端点、中枢边界和 MA20/MA60；结果按当前数据版本回看。</div>
         </div>
       )}
     </section>

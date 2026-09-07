@@ -688,13 +688,13 @@ export function StockTechnicalPanel({
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
                 <span className="text-xs font-medium text-foreground">技术指标</span>
-                <span className={`rounded border px-1.5 py-0.5 text-[9px] font-semibold ${scoreBadgeClasses(score?.direction_score, 'direction')}`}>
+                <span className={`rounded border px-1.5 py-0.5 text-[12px] font-semibold ${scoreBadgeClasses(score?.direction_score, 'direction')}`}>
                   技术分 {scoreLabel(score?.direction_score)}
                 </span>
-                <span className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[9px] text-secondary">{PERIOD_LABELS[period]}</span>
+                <span className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[12px] text-secondary">{PERIOD_LABELS[period]}</span>
               </div>
               {!collapsed && (
-                <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[10px] text-muted">
+                <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[13px] text-muted">
                   <span>截至 {formatAsOf(score?.as_of ?? selectedDate, period)}</span>
                   <span>置信度 {score?.available ? `${Math.round(score.confidence)}%` : '—'}</span>
                   {score?.volatility_risk != null && <span className="text-warning">波动风险 {score.volatility_risk}</span>}
@@ -740,8 +740,8 @@ export function StockTechnicalPanel({
           ) : error && bars.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-2 px-4 py-6 text-center">
               <span className="text-xs text-secondary">技术指标暂时不可用</span>
-              <span className="text-[10px] text-muted">周期行情加载失败，请稍后重试。</span>
-              {onRetry && <button type="button" onClick={onRetry} className="rounded-btn bg-elevated px-2.5 py-1 text-[10px] text-secondary transition-colors hover:text-foreground">重试</button>}
+              <span className="text-[13px] text-muted">周期行情加载失败，请稍后重试。</span>
+              {onRetry && <button type="button" onClick={onRetry} className="rounded-btn bg-elevated px-2.5 py-1 text-[13px] text-secondary transition-colors hover:text-foreground">重试</button>}
             </div>
           ) : bars.length === 0 ? (
             <div className="flex items-center justify-center px-4 py-6 text-center text-xs text-muted">暂无技术指标数据</div>
@@ -794,10 +794,10 @@ function TechnicalGroup({
       >
         <span className="flex min-w-0 items-center gap-1.5">
           <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-muted transition-transform ${collapsed ? '-rotate-90' : ''}`} />
-          <span className="text-[11px] font-medium text-foreground">{group.label}</span>
-          <span className="truncate text-[9px] text-muted">{group.description}</span>
+          <span className="text-[12px] font-medium text-foreground">{group.label}</span>
+          <span className="truncate text-[12px] text-muted">{group.description}</span>
         </span>
-        <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-semibold ${scoreBadgeClasses(score, group.scoreKind)}`}>
+        <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[12px] font-semibold ${scoreBadgeClasses(score, group.scoreKind)}`}>
           {scoreLabel(score)}
         </span>
       </button>
@@ -807,7 +807,7 @@ function TechnicalGroup({
             {indicators.map(indicator => <TechnicalCard key={indicator.key} indicator={indicator} />)}
           </div>
         ) : (
-          <div className="px-4 pb-2 text-[10px] text-muted">该维度的指标卡已全部隐藏</div>
+          <div className="px-4 pb-2 text-[13px] text-muted">该维度的指标卡已全部隐藏</div>
         )
       )}
     </section>
@@ -820,10 +820,10 @@ function TechnicalCard({ indicator }: { indicator: TechnicalIndicatorModel }) {
     <div className="rounded-card border border-border bg-surface/70 p-2.5 shadow-sm">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="truncate text-[11px] font-medium text-foreground">{indicator.label}</div>
-          <div className="mt-0.5 truncate text-[9px] text-muted">{indicator.description}</div>
+          <div className="truncate text-[12px] font-medium text-foreground">{indicator.label}</div>
+          <div className="mt-0.5 truncate text-[12px] text-muted">{indicator.description}</div>
         </div>
-        <span className={`inline-flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[9px] ${tone.badge}`}>
+        <span className={`inline-flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[12px] ${tone.badge}`}>
           <span className={`h-1.5 w-1.5 rounded-full ${tone.dot}`} />
           {indicator.status}
         </span>
@@ -831,14 +831,14 @@ function TechnicalCard({ indicator }: { indicator: TechnicalIndicatorModel }) {
       <div className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1.5">
         {indicator.metrics.map(metric => (
           <div key={metric.label} className="min-w-0">
-            <div className="text-[9px] text-muted">{metric.label}</div>
-            <div className={`truncate font-mono text-[11px] tabular-nums ${metric.tone ? TONE_CLASSES[metric.tone].value : 'text-secondary'}`} title={metric.value}>
+            <div className="text-[12px] text-muted">{metric.label}</div>
+            <div className={`truncate font-mono text-[12px] tabular-nums ${metric.tone ? TONE_CLASSES[metric.tone].value : 'text-secondary'}`} title={metric.value}>
               {metric.value}
             </div>
           </div>
         ))}
       </div>
-      <div className="mt-2 truncate border-t border-border/50 pt-1.5 text-[9px] text-muted" title={indicator.detail}>{indicator.detail}</div>
+      <div className="mt-2 truncate border-t border-border/50 pt-1.5 text-[12px] text-muted" title={indicator.detail}>{indicator.detail}</div>
     </div>
   )
 }
@@ -857,20 +857,20 @@ function TechnicalSettings({
   return (
     <div>
       <div className="flex shrink-0 items-center justify-between border-b border-border/70 px-2.5 py-2">
-        <button type="button" onClick={onBack} className="inline-flex items-center gap-1 rounded-btn px-1.5 py-1 text-[11px] text-secondary transition-colors hover:bg-elevated hover:text-foreground">
+        <button type="button" onClick={onBack} className="inline-flex items-center gap-1 rounded-btn px-1.5 py-1 text-[12px] text-secondary transition-colors hover:bg-elevated hover:text-foreground">
           <ChevronLeft className="h-3.5 w-3.5" />
           技术指标
         </button>
-        <button type="button" onClick={onReset} className="rounded-btn px-1.5 py-1 text-[10px] text-secondary transition-colors hover:bg-elevated hover:text-foreground">恢复默认</button>
+        <button type="button" onClick={onReset} className="rounded-btn px-1.5 py-1 text-[13px] text-secondary transition-colors hover:bg-elevated hover:text-foreground">恢复默认</button>
       </div>
       <div className="p-2.5">
-        <p className="mb-2 text-[10px] leading-relaxed text-muted">分组和指标顺序固定，勾选控制指标卡显隐。评分由后端统一计算，不受这里的显隐设置影响。</p>
+        <p className="mb-2 text-[13px] leading-relaxed text-muted">分组和指标顺序固定，勾选控制指标卡显隐。评分由后端统一计算，不受这里的显隐设置影响。</p>
         <div className="space-y-2">
           {GROUP_DEFS.map(group => (
             <div key={group.key} className="rounded-card border border-border bg-base/30 p-2">
               <div className="mb-1.5 flex items-center justify-between">
-                <span className="text-[11px] font-medium text-foreground">{group.label}</span>
-                <span className="text-[9px] text-muted">{group.scoreKind === 'direction' ? '方向分' : group.scoreKind === 'risk' ? '风险分' : '活跃度分'}</span>
+                <span className="text-[12px] font-medium text-foreground">{group.label}</span>
+                <span className="text-[12px] text-muted">{group.scoreKind === 'direction' ? '方向分' : group.scoreKind === 'risk' ? '风险分' : '活跃度分'}</span>
               </div>
               <div className="space-y-1">
                 {group.indicatorKeys.map(key => {
@@ -890,8 +890,8 @@ function TechnicalSettings({
                         {visible && <Check className="h-3 w-3 text-white" strokeWidth={3} />}
                       </span>
                       <span className="min-w-0">
-                        <span className="block text-[11px] text-foreground">{def.label}</span>
-                        <span className="block truncate text-[9px] text-muted">{def.description}</span>
+                        <span className="block text-[12px] text-foreground">{def.label}</span>
+                        <span className="block truncate text-[12px] text-muted">{def.description}</span>
                       </span>
                     </button>
                   )

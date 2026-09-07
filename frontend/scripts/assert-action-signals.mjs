@@ -92,6 +92,13 @@ const stale = buildActionSignals({ period: '1d', rows: bars, technicalScores: sc
 assert.equal(stale.status, 'stale')
 assert.equal(stale.reason, '当前为过期快照，不确认新的行动信号。')
 
+const enrichedFallback = buildActionSignals({
+  period: '1d', rows: bars, technicalScores: scores,
+  dataStatus: { stale: true }, dataSource: 'enriched',
+})
+assert.equal(enrichedFallback.status, 'ready', '本地 enriched 回退数据可用于确认已闭合行动信号')
+assert.equal(enrichedFallback.events.length, result.events.length)
+
 const noVolume = makeBars(66, {
   60: { close: 106.5, high: 106.7, volume: 0 },
   61: { close: 107.5, high: 107.7, volume: 0 },

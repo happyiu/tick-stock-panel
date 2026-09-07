@@ -647,49 +647,70 @@ const StockCard = React.memo(function StockCard({
         </div>
       </div>
 
-      {/* 第二行: 技术指标；窄屏自动换行 */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-dashed border-border/60 px-4 py-2 text-[10px] leading-relaxed text-muted">
-        <span title="MA5" className="shrink-0"><span className="text-muted/70">MA5</span><span className="ml-1 font-mono text-secondary">{fmtAssetPrice(ma5, r.asset_type)}</span></span>
-        <span title="MA10" className="shrink-0"><span className="text-muted/70">MA10</span><span className="ml-1 font-mono text-secondary">{fmtAssetPrice(ma10, r.asset_type)}</span></span>
-        <span title="MA20" className="shrink-0"><span className="text-muted/70">MA20</span><span className="ml-1 font-mono text-secondary">{fmtAssetPrice(ma20, r.asset_type)}</span></span>
-        <span className="shrink-0">均线 <span className={`ml-1 ${maAlignment?.className ?? 'text-muted'}`}>{maAlignment?.label ?? '—'}</span></span>
-        <span className="shrink-0">MACD <span className={`ml-1 ${macdDirection?.className ?? 'text-muted'}`}>{macdDirection?.label ?? '—'}</span></span>
-        <span title="RSI14" className="shrink-0">RSI <span className="ml-1 font-mono text-secondary">{finiteNumber(r.rsi_14)?.toFixed(1) ?? '—'}</span></span>
-        <span title="5日动量" className="shrink-0">5日 <span className={`ml-1 font-mono ${priceColorClass(finiteNumber(r.momentum_5d))}`}>{fmtPct(finiteNumber(r.momentum_5d))}</span></span>
-        <span title="20日动量" className="shrink-0">20日 <span className={`ml-1 font-mono ${priceColorClass(finiteNumber(r.momentum_20d))}`}>{fmtPct(finiteNumber(r.momentum_20d))}</span></span>
-        <span title="当前价在最近20个交易日收盘区间的位置" className="shrink-0">20日区间 <span className="ml-1 font-mono text-secondary">{rangePosition != null ? `${rangePosition.toFixed(0)}%` : '—'}</span></span>
-        <span title="量比" className="shrink-0">量比 <span className="ml-1 font-mono text-secondary">{fmtPrice(finiteNumber(r.vol_ratio_5d))}</span></span>
-        {stockAsset && (
-          <span title="换手率" className="shrink-0">换手 <span className={`ml-1 font-mono ${turnoverColor(turnover)}`}>{turnover != null ? `${turnover.toFixed(2)}%` : '—'}</span></span>
-        )}
+      {/* 第二行: 技术指标；按既有列分组，组间用 | 分隔，窄屏自动换行 */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-dashed border-border/60 px-4 py-2 text-[10px] leading-relaxed text-muted">
+        <span className="inline-flex shrink-0 items-center gap-x-3">
+          <span title="MA5"><span className="text-muted/70">MA5</span><span className="ml-1 font-mono text-secondary">{fmtAssetPrice(ma5, r.asset_type)}</span></span>
+          <span title="MA10"><span className="text-muted/70">MA10</span><span className="ml-1 font-mono text-secondary">{fmtAssetPrice(ma10, r.asset_type)}</span></span>
+          <span title="MA20"><span className="text-muted/70">MA20</span><span className="ml-1 font-mono text-secondary">{fmtAssetPrice(ma20, r.asset_type)}</span></span>
+          <span>均线 <span className={`ml-1 ${maAlignment?.className ?? 'text-muted'}`}>{maAlignment?.label ?? '—'}</span></span>
+        </span>
+        <span aria-hidden="true" className="shrink-0 text-muted/40">|</span>
+        <span className="inline-flex shrink-0 items-center gap-x-3">
+          <span>MACD <span className={`ml-1 ${macdDirection?.className ?? 'text-muted'}`}>{macdDirection?.label ?? '—'}</span></span>
+          <span title="RSI14">RSI <span className="ml-1 font-mono text-secondary">{finiteNumber(r.rsi_14)?.toFixed(1) ?? '—'}</span></span>
+        </span>
+        <span aria-hidden="true" className="shrink-0 text-muted/40">|</span>
+        <span className="inline-flex shrink-0 items-center gap-x-3">
+          <span title="5日动量">5日 <span className={`ml-1 font-mono ${priceColorClass(finiteNumber(r.momentum_5d))}`}>{fmtPct(finiteNumber(r.momentum_5d))}</span></span>
+          <span title="20日动量">20日 <span className={`ml-1 font-mono ${priceColorClass(finiteNumber(r.momentum_20d))}`}>{fmtPct(finiteNumber(r.momentum_20d))}</span></span>
+        </span>
+        <span aria-hidden="true" className="shrink-0 text-muted/40">|</span>
+        <span className="inline-flex shrink-0 items-center">
+          <span title="当前价在最近20个交易日收盘区间的位置">20日区间 <span className="ml-1 font-mono text-secondary">{rangePosition != null ? `${rangePosition.toFixed(0)}%` : '—'}</span></span>
+        </span>
+        <span aria-hidden="true" className="shrink-0 text-muted/40">|</span>
+        <span className="inline-flex shrink-0 items-center gap-x-3">
+          <span title="量比">量比 <span className="ml-1 font-mono text-secondary">{fmtPrice(finiteNumber(r.vol_ratio_5d))}</span></span>
+          {stockAsset && (
+            <span title="换手率">换手 <span className={`ml-1 font-mono ${turnoverColor(turnover)}`}>{turnover != null ? `${turnover.toFixed(2)}%` : '—'}</span></span>
+          )}
+        </span>
         {/* 扩展数据列展示在卡片中 */}
-        {extCols.map(col => {
-          if (col.source.type !== 'ext') return null
-          const { configId, fieldName } = col.source
-          const val = r[`${configId}__${fieldName}`]
-          if (val == null) return null
+        {extCols.some(col => col.source.type === 'ext' && r[`${col.source.configId}__${col.source.fieldName}`] != null) && (
+          <>
+            <span aria-hidden="true" className="shrink-0 text-muted/40">|</span>
+            <span className="inline-flex max-w-full flex-wrap items-center gap-x-3">
+              {extCols.map(col => {
+                if (col.source.type !== 'ext') return null
+                const { configId, fieldName } = col.source
+                const val = r[`${configId}__${fieldName}`]
+                if (val == null) return null
 
-          const cellKey = `${r.symbol}::${col.id}`
-          const expanded = expandedCells.has(cellKey)
-          const sourceField = `${configId}.${fieldName}`
-          const dimensionKind = dimensionKindForSourceField(sourceField)
+                const cellKey = `${r.symbol}::${col.id}`
+                const expanded = expandedCells.has(cellKey)
+                const sourceField = `${configId}.${fieldName}`
+                const dimensionKind = dimensionKindForSourceField(sourceField)
 
-          return (
-            <span key={col.id} title={col.label} className="shrink-0">
-              <span className="text-secondary">{col.label}</span>
-              <span className="ml-1 font-mono">
-                {renderExtValue(
-                  val,
-                  col,
-                  expanded,
-                  () => onToggleExpand(cellKey),
-                  true,
-                  dimensionKind ? value => onDimensionClick({ kind: dimensionKind, value, sourceField }) : undefined,
-                )}
-              </span>
+                return (
+                  <span key={col.id} title={col.label}>
+                    <span className="text-secondary">{col.label}</span>
+                    <span className="ml-1 font-mono">
+                      {renderExtValue(
+                        val,
+                        col,
+                        expanded,
+                        () => onToggleExpand(cellKey),
+                        true,
+                        dimensionKind ? value => onDimensionClick({ kind: dimensionKind, value, sourceField }) : undefined,
+                      )}
+                    </span>
+                  </span>
+                )
+              })}
             </span>
-          )
-        })}
+          </>
+        )}
       </div>
 
       {/* 信号标签区 */}

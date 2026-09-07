@@ -308,9 +308,10 @@ export function StockPanel({
       rows: periodRows,
       technicalScores: periodKline.data?.technical_scores,
       dataStatus: periodKline.data?.data_status,
+      dataSource: periodKline.data?.source,
       selectedDate: selectedBarKey,
     }
-  }, [assetType, period, periodKline.data?.data_status, periodKline.data?.technical_scores, periodRows, selectedBarKey, symbol])
+  }, [assetType, period, periodKline.data?.data_status, periodKline.data?.source, periodKline.data?.technical_scores, periodRows, selectedBarKey, symbol])
   const actionInputKey = `${symbol}|${period}|${chartDateRange.start}|${chartDateRange.end}|${selectedBarKey ?? ''}|${periodKline.dataUpdatedAt}|${periodRows.length}`
   const actionContextKey = `${symbol}|${period}|${chartDateRange.start}|${chartDateRange.end}`
   const actionSnapshotKey = `${symbol}|${period}|${chartDateRange.start}|${chartDateRange.end}|${selectedBarKey ?? ''}`
@@ -407,9 +408,10 @@ export function StockPanel({
       rows: comparisonRows,
       technicalScores: comparisonKline.data?.technical_scores,
       dataStatus: comparisonKline.data?.data_status,
+      dataSource: comparisonKline.data?.source,
       selectedDate: comparisonSelectedDate,
     })
-  }, [assetType, comparisonKline.data?.data_status, comparisonKline.data?.technical_scores, comparisonPeriod, comparisonRows, comparisonSelectedDate, symbol])
+  }, [assetType, comparisonKline.data?.data_status, comparisonKline.data?.source, comparisonKline.data?.technical_scores, comparisonPeriod, comparisonRows, comparisonSelectedDate, symbol])
   const actionComparison = useMemo(
     () => actionSignals ? compareActionSignals(actionSignals, comparisonActionSignals) : null,
     [actionSignals, comparisonActionSignals],

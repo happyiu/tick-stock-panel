@@ -162,11 +162,11 @@ export function StockElliottPanel({
       <span className="min-w-0">
         <span className="flex flex-wrap items-center gap-1.5">
           <span className="text-xs font-medium text-foreground">艾略特波浪理论</span>
-          <span className="rounded bg-[#F59E0B]/10 px-1.5 py-0.5 text-[9px] text-[#FBBF24]">{modeLabel}</span>
-          <span className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[9px] text-secondary">{elliottPeriodLabel(period)}</span>
+          <span className="rounded bg-[#F59E0B]/10 px-1.5 py-0.5 text-[12px] text-[#FBBF24]">{modeLabel}</span>
+          <span className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[12px] text-secondary">{elliottPeriodLabel(period)}</span>
         </span>
         {!collapsed && (
-          <span className="mt-0.5 block truncate text-[10px] text-muted">
+          <span className="mt-0.5 block truncate text-[13px] text-muted">
             {selectedAsOf ? `截至 ${selectedAsOf}` : '等待当前周期行情'} · 研究辅助，不构成买卖建议
           </span>
         )}
@@ -199,7 +199,7 @@ export function StockElliottPanel({
               type="button"
               onClick={() => runAi(false)}
               disabled={analysis.status !== 'ready' || aiMutation.isPending}
-              className="inline-flex items-center gap-1 rounded border border-[#F59E0B]/40 bg-[#F59E0B]/10 px-2 py-1 text-[10px] text-[#FBBF24] transition-colors hover:bg-[#F59E0B]/20 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex items-center gap-1 rounded border border-[#F59E0B]/40 bg-[#F59E0B]/10 px-2 py-1 text-[13px] text-[#FBBF24] transition-colors hover:bg-[#F59E0B]/20 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {aiMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
               {aiMutation.isPending ? '评估中…' : aiResult ? '查看 AI 评估' : 'AI 增强评估'}
@@ -208,7 +208,7 @@ export function StockElliottPanel({
               <button
                 type="button"
                 onClick={() => runAi(true)}
-                className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[10px] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[13px] text-muted transition-colors hover:bg-elevated hover:text-foreground"
                 title="重新生成本次历史截面的 AI 评估"
               >
                 <RefreshCw className="h-3 w-3" />
@@ -219,7 +219,7 @@ export function StockElliottPanel({
               href={REFERENCE_URL}
               target="_blank"
               rel="noreferrer"
-              className="ml-auto inline-flex items-center gap-1 rounded px-1.5 py-1 text-[10px] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+              className="ml-auto inline-flex items-center gap-1 rounded px-1.5 py-1 text-[13px] text-muted transition-colors hover:bg-elevated hover:text-foreground"
               title="查看参考工作流"
             >
               方法参考 <ExternalLink className="h-3 w-3" />
@@ -227,7 +227,7 @@ export function StockElliottPanel({
           </div>
 
           {aiMutation.error && (
-            <div className="mx-2 mb-2 rounded border border-danger/30 bg-danger/5 px-2.5 py-2 text-[10px] leading-relaxed text-danger">
+            <div className="mx-2 mb-2 rounded border border-danger/30 bg-danger/5 px-2.5 py-2 text-[13px] leading-relaxed text-danger">
               AI 评估暂时不可用：{aiMutation.error.message}。可在 <Link to="/settings?tab=ai" className="underline">AI 设置</Link> 中检查配置；本地波段近似仍可使用。
             </div>
           )}
@@ -236,7 +236,7 @@ export function StockElliottPanel({
             <WaveCard title="当前计数" tone="amber">
               <div className="font-medium text-foreground">{primary ? `${primary.label} · ${countFamily(primary)}` : '暂无可用主计数'}</div>
               <div className="mt-1 text-secondary">{primary ? `${countDirection(primary)} · ${currentStage}` : '等待新的确认拐点'}</div>
-              <div className="mt-1.5 truncate font-mono text-[10px] text-muted" title={countPivots(primary)}>{countPivots(primary)}</div>
+              <div className="mt-1.5 truncate font-mono text-[13px] text-muted" title={countPivots(primary)}>{countPivots(primary)}</div>
             </WaveCard>
 
             <WaveCard title="备选与歧义" tone={analysis.ambiguity === 'multiple_viable' || aiResult?.ambiguity === 'multiple_viable' ? 'amber' : 'neutral'}>
@@ -248,7 +248,7 @@ export function StockElliottPanel({
                   ? alternateCounts.map(count => `${count.label} · ${FAMILY_LABELS[count.family] ?? count.family}`).join('；')
                   : '当前没有保留实质不同的备选'}
               </div>
-              <div className="mt-1.5 text-[10px] text-muted">本地代理不会将三段摆动强行命名为具体修正形态</div>
+              <div className="mt-1.5 text-[13px] text-muted">本地代理不会将三段摆动强行命名为具体修正形态</div>
             </WaveCard>
 
             <WaveCard title="硬规则" tone={ruleCounts.fail > 0 ? 'danger' : ruleCounts.unknown > 0 ? 'amber' : 'success'}>
@@ -256,7 +256,7 @@ export function StockElliottPanel({
                 {ruleCounts.fail > 0 ? <XCircle className="h-3.5 w-3.5 text-danger" /> : ruleCounts.unknown > 0 ? <AlertTriangle className="h-3.5 w-3.5 text-[#F59E0B]" /> : <CheckCircle2 className="h-3.5 w-3.5 text-[#22C55E]" />}
                 通过 {ruleCounts.pass} · 冲突 {ruleCounts.fail} · 未知 {ruleCounts.unknown}
               </div>
-              <div className="mt-1.5 space-y-0.5 text-[10px] text-secondary">
+              <div className="mt-1.5 space-y-0.5 text-[13px] text-secondary">
                 {rules.slice(0, 3).map(rule => <div key={`${ruleId(rule)}-${rule.result}`} className="truncate" title={rule.evidence}>{ruleId(rule)}：{ruleResult(rule)}</div>)}
                 {rules.length === 0 && <div>暂无可检查的推动浪规则</div>}
               </div>
@@ -272,7 +272,7 @@ export function StockElliottPanel({
 
           {(showAi && aiResult) && <AiAssessmentDetails assessment={aiResult} />}
 
-          <div className="border-t border-border/50 px-2.5 py-2 text-[9px] leading-relaxed text-muted">
+          <div className="border-t border-border/50 px-2.5 py-2 text-[12px] leading-relaxed text-muted">
             本地结果只使用当前周期及截至时间以前的 K 线；投影点不参与主计数。艾略特波浪分析仅供研究，不构成投资建议或交易指令。
           </div>
         </>
@@ -291,8 +291,8 @@ function WaveCard({ title, tone, children }: { title: string; tone: 'amber' | 'n
         : 'border-border'
   return (
     <div className={`min-h-[108px] rounded-card border bg-surface/70 p-2.5 shadow-sm ${toneClass}`}>
-      <div className="mb-2 text-[11px] font-medium text-foreground">{title}</div>
-      <div className="text-[10px] leading-relaxed">{children}</div>
+      <div className="mb-2 text-[12px] font-medium text-foreground">{title}</div>
+      <div className="text-[13px] leading-relaxed">{children}</div>
     </div>
   )
 }
@@ -306,12 +306,12 @@ function AiAssessmentDetails({ assessment }: { assessment: ElliottAssessmentResp
   ]
   return (
     <div className="mx-2 mb-2 rounded-card border border-[#F59E0B]/30 bg-[#F59E0B]/5 p-2.5">
-      <div className="flex items-center gap-1.5 text-[11px] font-medium text-foreground">
+      <div className="flex items-center gap-1.5 text-[12px] font-medium text-foreground">
         <Sparkles className="h-3.5 w-3.5 text-[#FBBF24]" />
         AI 结构化评估 · {assessment.definition_mode}
-        <span className="ml-auto font-mono text-[9px] text-muted">{assessment.assessment_id}</span>
+        <span className="ml-auto font-mono text-[12px] text-muted">{assessment.assessment_id}</span>
       </div>
-      <div className="mt-2 grid gap-2 text-[10px] md:grid-cols-2">
+      <div className="mt-2 grid gap-2 text-[13px] md:grid-cols-2">
         <div>
           <div className="text-muted">支持证据</div>
           <div className="mt-1 space-y-1 text-secondary">
@@ -326,7 +326,7 @@ function AiAssessmentDetails({ assessment }: { assessment: ElliottAssessmentResp
           </div>
         </div>
       </div>
-      <div className="mt-2 border-t border-[#F59E0B]/20 pt-1.5 text-[9px] text-muted">
+      <div className="mt-2 border-t border-[#F59E0B]/20 pt-1.5 text-[12px] text-muted">
         数据质量：{assessment.data_quality.status}；多周期证据在首版中标记为不可用。该评估是草稿复核状态，只允许观察。
       </div>
     </div>
