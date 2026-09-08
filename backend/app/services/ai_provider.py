@@ -19,6 +19,9 @@ from urllib.parse import urlsplit, urlunsplit
 
 from app import secrets_store
 from app.config import settings
+from app.services.hermes_gateway import HERMES_AGENT_PROVIDER
+from app.services.hermes_gateway import complete_chat as hermes_complete_chat
+from app.services.hermes_gateway import stream_chat as hermes_stream_chat
 
 OPENAI_COMPAT_PROVIDER = "openai_compat"
 OPENAI_PROVIDER = "openai"
@@ -126,6 +129,18 @@ def current_ai_provider() -> str:
     return secrets_store.get_ai_config("ai_provider", settings.ai_provider) or OPENAI_COMPAT_PROVIDER
 
 
+def current_hermes_gateway_url() -> str:
+    return secrets_store.get_hermes_config("hermes_gateway_url")
+
+
+def current_hermes_model() -> str:
+    return secrets_store.get_hermes_config("hermes_model")
+
+
+def current_hermes_key() -> str:
+    return secrets_store.get_hermes_key()
+
+
 def current_openai_model() -> str:
     return secrets_store.get_ai_config("ai_model", settings.ai_model)
 
@@ -143,6 +158,8 @@ def current_codex_model() -> str:
 def current_ai_model() -> str:
     if current_ai_provider() == CODEX_CLI_PROVIDER:
         return current_codex_model()
+    if current_ai_provider() == HERMES_AGENT_PROVIDER:
+        return current_hermes_model()
     return current_openai_model()
 
 
@@ -222,6 +239,10 @@ def current_codex_reasoning_effort() -> str:
 
 def is_codex_cli_provider(provider: str | None = None) -> bool:
     return (provider or current_ai_provider()) == CODEX_CLI_PROVIDER
+
+
+def is_hermes_agent_provider(provider: str | None = None) -> bool:
+    return (provider or current_ai_provider()) == HERMES_AGENT_PROVIDER
 
 
 def is_opencode_go_provider(provider: str | None = None) -> bool:
@@ -306,6 +327,8 @@ def ai_configured(provider: str | None = None) -> bool:
     provider = provider or current_ai_provider()
     if is_codex_cli_provider(provider):
         return codex_cli_available()
+    if is_hermes_agent_provider(provider):
+        return bool(current_hermes_gateway_url() and current_hermes_key() and current_hermes_model())
     return bool(secrets_store.get_ai_key())
 
 
@@ -327,6 +350,13 @@ async def generate_ai_text(
     _check_input_budget(messages, max_tokens=max_tokens)
     if is_codex_cli_provider():
         return await _run_codex_cli(messages, max_tokens=max_tokens, timeout=max(timeout, 600.0))
+    if is_hermes_agent_provider():
+        return await _run_hermes_once(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+        )
     return await _run_openai_once(
         messages,
         temperature=temperature,
@@ -356,6 +386,15 @@ async def stream_ai_text(
     if is_codex_cli_provider():
         yield await _run_codex_cli(messages, max_tokens=max_tokens, timeout=max(timeout, 600.0))
         return
+    if is_hermes_agent_provider():
+        async for chunk in _stream_hermes(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+        ):
+            yield chunk
+        return
 
     async for chunk in _stream_openai(
         messages,
@@ -365,6 +404,73 @@ async def stream_ai_text(
         prefer_final_answer=prefer_final_answer,
     ):
         yield chunk
+
+
+async def _run_hermes_once(
+    messages: Sequence[Message],
+    *,
+    temperature: float | None,
+    max_tokens: int | None,
+    timeout: float,
+) -> str:
+    gateway_url = current_hermes_gateway_url()
+    api_key = current_hermes_key()
+    model = current_hermes_model()
+    if not gateway_url:
+        raise RuntimeError("Hermes Gateway 地址未配置, 请在设置页配置")
+    if not api_key:
+        raise RuntimeError("Hermes API Server Key 未配置, 请在设置页配置")
+    if not model:
+        raise RuntimeError("Hermes Agent 模型未配置, 请在设置页配置")
+
+    try:
+        return await hermes_complete_chat(
+            gateway_url,
+            api_key,
+            messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        if isinstance(exc, (ValueError, RuntimeError)):
+            raise
+        raise RuntimeError(str(exc)) from exc
+
+
+async def _stream_hermes(
+    messages: Sequence[Message],
+    *,
+    temperature: float | None,
+    max_tokens: int | None,
+    timeout: float,
+) -> AsyncIterator[str]:
+    gateway_url = current_hermes_gateway_url()
+    api_key = current_hermes_key()
+    model = current_hermes_model()
+    if not gateway_url:
+        raise RuntimeError("Hermes Gateway 地址未配置, 请在设置页配置")
+    if not api_key:
+        raise RuntimeError("Hermes API Server Key 未配置, 请在设置页配置")
+    if not model:
+        raise RuntimeError("Hermes Agent 模型未配置, 请在设置页配置")
+
+    try:
+        async for chunk in hermes_stream_chat(
+            gateway_url,
+            api_key,
+            messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+        ):
+            yield chunk
+    except Exception as exc:
+        if isinstance(exc, (ValueError, RuntimeError)):
+            raise
+        raise RuntimeError(str(exc)) from exc
 
 
 async def _run_openai_once(

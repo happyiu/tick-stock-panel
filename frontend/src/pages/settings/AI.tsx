@@ -6,7 +6,7 @@ import {
   Terminal,
 } from 'lucide-react'
 import { useSettings } from '@/lib/useSharedQueries'
-import { api, type SettingsState } from '@/lib/api'
+import { api, type HermesProbeResult, type HermesSettingsResult, type SettingsState } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { useCardFlash, cardFlashCls } from '@/lib/useCardFlash'
 
@@ -24,6 +24,7 @@ const CODEX_PROVIDER = 'codex_cli'
 const OPENAI_PROVIDER = 'openai'
 const OPENAI_COMPAT_PROVIDER = 'openai_compat'
 const OPENCODE_GO_PROVIDER = 'opencode_go'
+const HERMES_AGENT_PROVIDER = 'hermes_agent'
 const CODEX_COMMAND = 'codex'
 const DEFAULT_CODEX_MODEL = 'gpt-5.6-sol'
 const DEFAULT_CODEX_REASONING_EFFORT = 'xhigh'
@@ -61,6 +62,7 @@ const PRESETS: AiPreset[] = [
   { label: '自定义', url: '', model: '', website: '', websiteLabel: '', description: '不自动填充任何配置，完全手动填写 API 地址、模型和密钥。', custom: true },
   { label: 'OpenAI', provider: OPENAI_PROVIDER, url: 'https://api.openai.com/v1', model: DEFAULT_OPENAI_MODEL, website: 'https://platform.openai.com/', websiteLabel: 'platform.openai.com', description: 'OpenAI 官方接口，可单独配置模型支持的推理强度。' },
   { label: 'OpenCode Go', provider: OPENCODE_GO_PROVIDER, url: OPENCODE_GO_BASE_URL, model: OPENCODE_GO_DEFAULT_MODEL, website: 'https://opencode.ai/docs/go/', websiteLabel: 'opencode.ai/docs/go', description: 'OpenCode Go Chat Completions 接口；后端会自动附带会话标识，模型使用裸模型 ID（如 kimi-k2.7-code）。' },
+  { label: 'Hermes Agent', provider: HERMES_AGENT_PROVIDER, url: '', model: '', website: 'https://github.com/JPeetz/Hermes-Studio', websiteLabel: 'Hermes Studio / Gateway', description: '连接自托管 Hermes Agent Gateway；API Key 只由后端保存，Agent 工具权限由 Hermes Studio 侧配置。' },
   { label: 'DeepSeek', url: 'https://api.deepseek.com', model: 'deepseek-v4-pro', website: 'https://www.deepseek.com/', websiteLabel: 'deepseek.com', description: 'DeepSeek 官方 OpenAI 兼容接口。' },
   { label: '通义千问', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-3.6plus', website: 'https://tongyi.aliyun.com/', websiteLabel: 'tongyi.aliyun.com', description: '阿里云 DashScope 兼容模式接口。' },
   { label: '智谱 GLM', url: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-5.2', website: 'https://open.bigmodel.cn/', websiteLabel: 'open.bigmodel.cn', description: '智谱 AI 官方 OpenAI 兼容接口。' },
@@ -72,6 +74,7 @@ const PRESETS: AiPreset[] = [
 const findPreset = (provider: string, baseUrl: string, codexCommand: string) => PRESETS.find(p => {
   if (p.custom || (p.provider ?? OPENAI_COMPAT_PROVIDER) !== provider) return false
   if (provider === OPENAI_PROVIDER) return true
+  if (provider === HERMES_AGENT_PROVIDER) return true
   return provider === CODEX_PROVIDER ? p.codexCommand === codexCommand : p.url === baseUrl
 }) ?? PRESETS[0]
 
@@ -88,6 +91,12 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
   const [codexModel, setCodexModel] = useState('')
   const [codexReasoningEffort, setCodexReasoningEffort] = useState('')
   const [codexCommand, setCodexCommand] = useState(CODEX_COMMAND)
+  const [hermesGatewayUrl, setHermesGatewayUrl] = useState('')
+  const [hermesApiKey, setHermesApiKey] = useState('')
+  const [hermesModel, setHermesModel] = useState('')
+  const [showHermesKey, setShowHermesKey] = useState(false)
+  const [hermesProbe, setHermesProbe] = useState<HermesProbeResult | null>(null)
+  const [hermesAcknowledged, setHermesAcknowledged] = useState(false)
   const [customUa, setCustomUa] = useState(false)
   const [userAgent, setUserAgent] = useState('')
   const [maxOutputTokens, setMaxOutputTokens] = useState('')
@@ -102,14 +111,23 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
     custom: { baseUrl: '', model: '' },
     openai: { baseUrl: 'https://api.openai.com/v1', model: DEFAULT_OPENAI_MODEL },
   })
+  const hermesDraft = useRef({ gatewayUrl: '', apiKey: '', model: '' })
   const draftsInitialized = useRef(false)
 
   const isCodexProvider = provider === CODEX_PROVIDER
   const isOpenAIProvider = provider === OPENAI_PROVIDER
+  const isHermesProvider = provider === HERMES_AGENT_PROVIDER
   const savedCodexProvider = s?.ai_provider === CODEX_PROVIDER
-  const configured = s?.ai_configured ?? (savedCodexProvider ? !!(s?.ai_codex_command ?? CODEX_COMMAND) : s?.has_ai_key)
+  const hermesConfigured = s?.hermes_configured ?? (!!s?.hermes_gateway_url && !!s?.hermes_model && !!s?.has_hermes_key)
+  const configured = isHermesProvider
+    ? hermesConfigured
+    : s?.ai_configured ?? (savedCodexProvider ? !!(s?.ai_codex_command ?? CODEX_COMMAND) : s?.has_ai_key)
   const selectedPreset = PRESETS.find(p => p.label === selectedPresetLabel) ?? PRESETS[0]
-  const configTitle = isCodexProvider ? 'Codex CLI 配置' : isOpenAIProvider ? 'OpenAI 配置' : selectedPreset.custom ? '自定义配置' : `${selectedPreset.label} 配置`
+  const configTitle = isCodexProvider
+    ? 'Codex CLI 配置'
+    : isHermesProvider
+      ? 'Hermes Agent 配置'
+      : isOpenAIProvider ? 'OpenAI 配置' : selectedPreset.custom ? '自定义配置' : `${selectedPreset.label} 配置`
   const savedCodexModel = s?.ai_codex_model ?? (savedCodexProvider ? (s?.ai_model ?? '') : '')
   const savedCodexEffort = s?.ai_codex_reasoning_effort ?? ''
   const savedCodexOptionKnown = CODEX_MODEL_OPTIONS.some(option =>
@@ -132,13 +150,17 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
     option.model === codexModel && option.effort === codexReasoningEffort,
   ) ?? CODEX_MODEL_OPTIONS[0]
   const codexModelSelectValue = selectedCodexModelOption.value
-  const canSave = isCodexProvider ? true : !!baseUrl.trim() && !!model.trim()
+  const canSave = isCodexProvider
+    ? true
+    : isHermesProvider
+      ? !!hermesGatewayUrl.trim() && !!hermesModel.trim() && (!!hermesApiKey.trim() || !!s?.has_hermes_key) && hermesAcknowledged
+      : !!baseUrl.trim() && !!model.trim()
 
   useEffect(() => {
     if (!s) return
     // 未配置过 AI (无 api_key): 字段留空, 默认选中"自定义"预设, 不预填充后端默认值
-    const unconfigured = !s.has_ai_key && !s.ai_configured
     const savedProvider = s.ai_provider ?? OPENAI_COMPAT_PROVIDER
+    const unconfigured = savedProvider !== HERMES_AGENT_PROVIDER && !s.has_ai_key && !s.ai_configured
     const savedBaseUrl = unconfigured ? '' : (s.ai_base_url ?? '')
     const savedOpenAIModel = unconfigured ? '' : (s.ai_openai_model ?? (savedProvider !== CODEX_PROVIDER ? s.ai_model : '') ?? '')
     const savedPreset = unconfigured ? PRESETS[0] : findPreset(savedProvider, savedBaseUrl, s.ai_codex_command ?? CODEX_COMMAND)
@@ -148,6 +170,11 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
         directDrafts.current.openai = { baseUrl: savedBaseUrl, model: savedOpenAIModel }
       } else if (findPreset(OPENAI_COMPAT_PROVIDER, savedBaseUrl, CODEX_COMMAND).custom) {
         directDrafts.current.custom = { baseUrl: savedBaseUrl, model: savedOpenAIModel }
+      }
+      hermesDraft.current = {
+        gatewayUrl: s.hermes_gateway_url ?? '',
+        apiKey: '',
+        model: s.hermes_model ?? '',
       }
       draftsInitialized.current = true
     }
@@ -159,6 +186,11 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
     setCodexModel(s.ai_codex_model ?? (savedProvider === CODEX_PROVIDER ? s.ai_model : '') ?? '')
     setCodexReasoningEffort(s.ai_codex_reasoning_effort ?? '')
     setCodexCommand(s.ai_codex_command ?? CODEX_COMMAND)
+    setHermesGatewayUrl(s.hermes_gateway_url ?? '')
+    setHermesApiKey('')
+    setHermesModel(s.hermes_model ?? '')
+    setHermesProbe(null)
+    setHermesAcknowledged(savedProvider === HERMES_AGENT_PROVIDER && !!s.hermes_configured)
     const ua = s.ai_user_agent ?? ''
     setCustomUa(!!ua)
     setUserAgent(ua)
@@ -179,71 +211,134 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
     context_window: toPositiveInt(contextWindow),
   })
 
+  const hermesPayload = () => ({
+    gateway_url: hermesGatewayUrl.trim(),
+    api_key: hermesApiKey.trim() || undefined,
+    model: hermesModel.trim(),
+    max_output_tokens: toPositiveInt(maxOutputTokens),
+    context_window: toPositiveInt(contextWindow),
+  })
+
   const save = useMutation({
-    mutationFn: () => api.saveAiSettings(payload()),
+    mutationFn: async () => {
+      const result = isHermesProvider
+        ? await api.saveHermesSettings(hermesPayload())
+        : await api.saveAiSettings(payload())
+      if (!result.ok) throw new Error(result.error ?? '保存失败')
+      return result
+    },
     onSuccess: (result) => {
       setSaved(true)
-      setApiKey('')
-      qc.setQueryData<SettingsState>(QK.settings, prev => prev ? {
-        ...prev,
-        ai_provider: result.ai_provider ?? provider,
-        ai_base_url: baseUrl,
-        ai_model: result.ai_model ?? (isCodexProvider ? codexModel : model),
-        ai_openai_model: result.ai_openai_model ?? model,
-        ai_reasoning_effort: result.ai_reasoning_effort ?? reasoningEffort,
-        ai_codex_model: result.ai_codex_model ?? codexModel,
-        ai_codex_command: result.ai_codex_command ?? (isCodexProvider ? CODEX_COMMAND : codexCommand),
-        ai_codex_reasoning_effort: result.ai_codex_reasoning_effort ?? (isCodexProvider ? codexReasoningEffort : ''),
-        ai_configured: result.ai_configured ?? (isCodexProvider ? true : (apiKey ? true : prev.ai_configured)),
-        ai_max_output_tokens: result.ai_max_output_tokens ?? toPositiveInt(maxOutputTokens),
-        ai_context_window: result.ai_context_window ?? toPositiveInt(contextWindow),
-        ...(apiKey ? {
-          has_ai_key: true,
-          ai_api_key_masked: `${apiKey.slice(0, 4)}......${apiKey.slice(-4)}`,
-        } : {}),
-      } : prev)
+      if (isHermesProvider) {
+        const hermesResult = result as HermesSettingsResult
+        setHermesApiKey('')
+        setHermesProbe(hermesResult)
+        qc.setQueryData<SettingsState>(QK.settings, prev => prev ? {
+          ...prev,
+          ai_provider: hermesResult.ai_provider ?? HERMES_AGENT_PROVIDER,
+          ai_model: hermesResult.ai_model ?? hermesModel,
+          ai_configured: hermesResult.ai_configured ?? true,
+          ai_max_output_tokens: hermesResult.ai_max_output_tokens ?? toPositiveInt(maxOutputTokens),
+          ai_context_window: hermesResult.ai_context_window ?? toPositiveInt(contextWindow),
+          hermes_gateway_url: hermesResult.hermes_gateway_url ?? hermesGatewayUrl,
+          hermes_model: hermesResult.hermes_model ?? hermesModel,
+          hermes_configured: hermesResult.hermes_configured ?? true,
+          has_hermes_key: hermesResult.has_hermes_key ?? true,
+          hermes_api_key_masked: hermesResult.hermes_api_key_masked ?? (hermesApiKey
+            ? `${hermesApiKey.slice(0, 4)}......${hermesApiKey.slice(-4)}`
+            : prev.hermes_api_key_masked),
+        } : prev)
+      } else {
+        setApiKey('')
+        qc.setQueryData<SettingsState>(QK.settings, prev => prev ? {
+          ...prev,
+          ai_provider: result.ai_provider ?? provider,
+          ai_base_url: baseUrl,
+          ai_model: result.ai_model ?? (isCodexProvider ? codexModel : model),
+          ai_openai_model: result.ai_openai_model ?? model,
+          ai_reasoning_effort: result.ai_reasoning_effort ?? reasoningEffort,
+          ai_codex_model: result.ai_codex_model ?? codexModel,
+          ai_codex_command: result.ai_codex_command ?? (isCodexProvider ? CODEX_COMMAND : codexCommand),
+          ai_codex_reasoning_effort: result.ai_codex_reasoning_effort ?? (isCodexProvider ? codexReasoningEffort : ''),
+          ai_configured: result.ai_configured ?? (isCodexProvider ? true : (apiKey ? true : prev.ai_configured)),
+          ai_max_output_tokens: result.ai_max_output_tokens ?? toPositiveInt(maxOutputTokens),
+          ai_context_window: result.ai_context_window ?? toPositiveInt(contextWindow),
+          ...(apiKey ? {
+            has_ai_key: true,
+            ai_api_key_masked: `${apiKey.slice(0, 4)}......${apiKey.slice(-4)}`,
+          } : {}),
+        } : prev)
+      }
       qc.invalidateQueries({ queryKey: QK.settings })
       setTimeout(() => setSaved(false), 2000)
+    },
+    onError: (error) => {
+      setTestResult({ ok: false, msg: error instanceof Error ? error.message : '保存失败' })
     },
   })
 
   const clear = useMutation({
-    mutationFn: () => api.clearAiSettings(),
+    mutationFn: () => isHermesProvider ? api.clearHermesSettings() : api.clearAiSettings(),
     onSuccess: () => {
       setConfirmClear(false)
-      setProvider(OPENAI_COMPAT_PROVIDER)
-      setSelectedPresetLabel(PRESETS[0].label)
-      setBaseUrl('')
-      setApiKey('')
-      setModel('')
-      setReasoningEffort(DEFAULT_REASONING_EFFORT)
-      setCodexModel('')
-      setCodexReasoningEffort('')
-      setCodexCommand(CODEX_COMMAND)
-      directDrafts.current = {
-        custom: { baseUrl: '', model: '' },
-        openai: { baseUrl: 'https://api.openai.com/v1', model: DEFAULT_OPENAI_MODEL },
+      if (isHermesProvider) {
+        setHermesGatewayUrl('')
+        setHermesApiKey('')
+        setHermesModel('')
+        setHermesProbe(null)
+        setHermesAcknowledged(false)
+        hermesDraft.current = { gatewayUrl: '', apiKey: '', model: '' }
+        setProvider(OPENAI_COMPAT_PROVIDER)
+        setSelectedPresetLabel(PRESETS[0].label)
+      } else {
+        setProvider(OPENAI_COMPAT_PROVIDER)
+        setSelectedPresetLabel(PRESETS[0].label)
+        setBaseUrl('')
+        setApiKey('')
+        setModel('')
+        setReasoningEffort(DEFAULT_REASONING_EFFORT)
+        setCodexModel('')
+        setCodexReasoningEffort('')
+        setCodexCommand(CODEX_COMMAND)
+        directDrafts.current = {
+          custom: { baseUrl: '', model: '' },
+          openai: { baseUrl: 'https://api.openai.com/v1', model: DEFAULT_OPENAI_MODEL },
+        }
+        setMaxOutputTokens('8192')
+        setContextWindow('64000')
       }
-      setMaxOutputTokens('8192')
-      setContextWindow('64000')
       setTestResult(null)
       qc.setQueryData<SettingsState>(QK.settings, prev => prev ? {
         ...prev,
-        ai_provider: OPENAI_COMPAT_PROVIDER,
-        ai_base_url: '',
-        ai_model: '',
-        ai_openai_model: '',
-        ai_reasoning_effort: DEFAULT_REASONING_EFFORT,
-        ai_codex_model: '',
-        ai_codex_command: CODEX_COMMAND,
-        ai_codex_reasoning_effort: '',
-        ai_max_output_tokens: 8192,
-        ai_context_window: 64000,
-        has_ai_key: false,
-        ai_configured: false,
-        ai_api_key_masked: '',
+        ...(isHermesProvider ? {
+          ai_provider: OPENAI_COMPAT_PROVIDER,
+          ai_model: prev.ai_openai_model ?? prev.ai_model,
+          ai_configured: !!prev.has_ai_key,
+          hermes_gateway_url: '',
+          hermes_model: '',
+          hermes_configured: false,
+          has_hermes_key: false,
+          hermes_api_key_masked: '',
+        } : {
+          ai_provider: OPENAI_COMPAT_PROVIDER,
+          ai_base_url: '',
+          ai_model: '',
+          ai_openai_model: '',
+          ai_reasoning_effort: DEFAULT_REASONING_EFFORT,
+          ai_codex_model: '',
+          ai_codex_command: CODEX_COMMAND,
+          ai_codex_reasoning_effort: '',
+          ai_max_output_tokens: 8192,
+          ai_context_window: 64000,
+          has_ai_key: false,
+          ai_configured: false,
+          ai_api_key_masked: '',
+        }),
       } : prev)
       qc.invalidateQueries({ queryKey: QK.settings })
+    },
+    onError: (error) => {
+      setTestResult({ ok: false, msg: error instanceof Error ? error.message : '清空失败' })
     },
   })
 
@@ -273,6 +368,15 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
       setCodexCommand(CODEX_COMMAND)
       return
     }
+    if (p.provider === HERMES_AGENT_PROVIDER) {
+      setProvider(HERMES_AGENT_PROVIDER)
+      setHermesGatewayUrl(hermesDraft.current.gatewayUrl || s?.hermes_gateway_url || '')
+      setHermesApiKey(hermesDraft.current.apiKey)
+      setHermesModel(hermesDraft.current.model || s?.hermes_model || '')
+      setHermesProbe(null)
+      setHermesAcknowledged(!!s?.hermes_configured)
+      return
+    }
     const nextProvider = p.provider ?? OPENAI_COMPAT_PROVIDER
     setProvider(nextProvider)
     if (nextProvider === OPENAI_PROVIDER) {
@@ -296,10 +400,63 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
     if (isOpenAIProvider) directDrafts.current.openai.model = value
   }
 
+  const handleHermesGatewayChange = (value: string) => {
+    setHermesGatewayUrl(value)
+    hermesDraft.current.gatewayUrl = value
+    setHermesProbe(null)
+  }
+
+  const handleHermesKeyChange = (value: string) => {
+    setHermesApiKey(value)
+    hermesDraft.current.apiKey = value
+    setHermesProbe(null)
+  }
+
+  const handleHermesModelChange = (value: string) => {
+    setHermesModel(value)
+    hermesDraft.current.model = value
+    setHermesProbe(null)
+  }
+
+  const hermesDraftPayload = () => ({
+    gateway_url: hermesGatewayUrl.trim(),
+    api_key: hermesApiKey.trim() || undefined,
+    model: hermesModel.trim() || undefined,
+  })
+
+  const handleHermesProbe = async () => {
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const result = await api.probeHermes(hermesDraftPayload())
+      setHermesProbe(result)
+      if (result.model && !hermesModel.trim()) {
+        setHermesModel(result.model)
+        hermesDraft.current.model = result.model
+      }
+      setTestResult({
+        ok: result.ok,
+        msg: result.ok
+          ? `Gateway 可用 · ${result.mode === 'enhanced' ? '增强模式' : '兼容模式'}`
+          : (result.error ?? 'Gateway 探测失败'),
+      })
+    } catch (e: any) {
+      setHermesProbe(null)
+      setTestResult({ ok: false, msg: String(e?.message ?? 'Hermes 探测失败') })
+    } finally {
+      setTesting(false)
+    }
+  }
+
   const handleTest = async () => {
     setTesting(true)
     setTestResult(null)
     try {
+      if (isHermesProvider) {
+        const r = await api.testHermes(hermesDraftPayload())
+        setTestResult({ ok: r.ok, msg: r.ok ? `连通成功 · ${r.model ?? hermesModel}` : (r.error ?? '未知错误') })
+        return
+      }
       if (canSave) await api.saveAiSettings(payload())
       const r = await api.strategyAiTest()
       setTestResult({ ok: r.ok, msg: r.ok ? `连通成功 · ${r.model ?? provider}` : (r.error ?? '未知错误') })
@@ -327,13 +484,19 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
             {configured ? <Wifi className="h-4.5 w-4.5" /> : <WifiOff className="h-4.5 w-4.5" />}
           </div>
           <div className="min-w-0">
-            <div className="text-sm font-medium text-foreground">{configured ? 'AI 已连接' : 'AI 未配置'}</div>
+            <div className="text-sm font-medium text-foreground">
+              {configured ? (isHermesProvider ? 'Hermes Agent 已配置' : 'AI 已连接') : (isHermesProvider ? 'Hermes Agent 未配置' : 'AI 未配置')}
+            </div>
             <div className="text-xs text-muted mt-0.5 truncate">
               {configured
-                ? (savedCodexProvider
+                ? (isHermesProvider
+                  ? `${s?.hermes_model ?? hermesModel} · ${hermesProbe?.mode === 'enhanced' ? '增强模式' : 'Gateway'}`
+                  : savedCodexProvider
                   ? `${s?.ai_codex_command ?? CODEX_COMMAND} · ${codexModelLabel(s?.ai_model, s?.ai_codex_reasoning_effort)}`
                   : `${s?.ai_model} · ${s?.ai_api_key_masked}`)
-                : (isCodexProvider ? '使用本机 codex exec, 此处无需填写 API Key。' : '配置 API Key 后即可使用 AI 功能。')}
+                : (isHermesProvider
+                  ? '填写 Gateway 地址、API Server Key 和 Agent 模型后启用。'
+                  : isCodexProvider ? '使用本机 codex exec, 此处无需填写 API Key。' : '配置 API Key 后即可使用 AI 功能.')}
             </div>
           </div>
         </div>
@@ -377,9 +540,9 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
         icon={Settings2}
         title={configTitle}
         right={
-          <span className="inline-flex items-center gap-1.5 text-[10px] text-muted/60" title={isCodexProvider ? 'Use local Codex CLI via codex exec' : 'Use OpenAI-compatible Chat Completions API'}>
-            <span className="rounded-full border border-border/40 bg-base/50 px-1.5 py-px font-mono">{isCodexProvider ? 'codex exec' : 'Chat Completions'}</span>
-            {isCodexProvider ? 'CLI' : '接口'}
+          <span className="inline-flex items-center gap-1.5 text-[10px] text-muted/60" title={isCodexProvider ? 'Use local Codex CLI via codex exec' : isHermesProvider ? 'Use Hermes Agent Gateway from the backend' : 'Use OpenAI-compatible Chat Completions API'}>
+            <span className="rounded-full border border-border/40 bg-base/50 px-1.5 py-px font-mono">{isCodexProvider ? 'codex exec' : isHermesProvider ? 'Hermes Gateway' : 'Chat Completions'}</span>
+            {isCodexProvider ? 'CLI' : isHermesProvider ? 'Agent' : '接口'}
           </span>
         }
       >
@@ -410,6 +573,106 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
                   ))}
                 </select>
               </Field>
+            </div>
+          ) : isHermesProvider ? (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <Field label="Gateway API 地址" hint="填写 Gateway 根地址；多 profile 时可填到 /p/<profile>。不要填 Studio 网页地址或完整 chat/completions 路径。">
+                  <input
+                    type="text"
+                    value={hermesGatewayUrl}
+                    onChange={e => handleHermesGatewayChange(e.target.value)}
+                    placeholder="http://127.0.0.1:8642"
+                    className={INPUT_CLS}
+                  />
+                </Field>
+                <Field label="Agent / Model" hint="优先使用探测到的模型 ID；Gateway 未提供模型列表时可手动填写。">
+                  <input
+                    type="text"
+                    list="hermes-model-options"
+                    value={hermesModel}
+                    onChange={e => handleHermesModelChange(e.target.value)}
+                    placeholder="hermes-agent"
+                    className={INPUT_CLS}
+                  />
+                  <datalist id="hermes-model-options">
+                    {(hermesProbe?.model_ids ?? []).map(item => <option key={item} value={item} />)}
+                  </datalist>
+                </Field>
+              </div>
+
+              <Field label="API Server Key" hint="对应 Hermes 的 API_SERVER_KEY；留空表示沿用已保存的 Key。">
+                <div className="flex gap-2">
+                  <div className="flex-1 relative">
+                    <input
+                      type={showHermesKey ? 'text' : 'password'}
+                      value={hermesApiKey}
+                      onChange={e => handleHermesKeyChange(e.target.value)}
+                      placeholder={s?.has_hermes_key ? `${s.hermes_api_key_masked} · 留空不修改` : '输入 API_SERVER_KEY'}
+                      className={`${INPUT_CLS} pr-9`}
+                    />
+                    <button onClick={() => setShowHermesKey(v => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted/40 hover:text-muted" tabIndex={-1} aria-label={showHermesKey ? '隐藏' : '显示'}>
+                      {showHermesKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                    </button>
+                  </div>
+                </div>
+              </Field>
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={handleHermesProbe}
+                  disabled={testing || !hermesGatewayUrl.trim() || (!hermesApiKey.trim() && !s?.has_hermes_key)}
+                  className="h-9 px-3 rounded-lg border border-border/50 text-xs text-secondary hover:text-accent hover:border-accent/30 disabled:opacity-40 transition-all flex items-center gap-1.5"
+                >
+                  {testing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wifi className="h-3 w-3" />}
+                  {testing ? '探测中' : '探测 Gateway'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleTest}
+                  disabled={testing || !hermesGatewayUrl.trim() || !hermesModel.trim() || (!hermesApiKey.trim() && !s?.has_hermes_key)}
+                  className="h-9 px-3 rounded-lg border border-border/50 text-xs text-secondary hover:text-accent hover:border-accent/30 disabled:opacity-40 transition-all flex items-center gap-1.5"
+                >
+                  {testing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+                  测试推理
+                </button>
+              </div>
+
+              {hermesProbe && (
+                <div className="rounded-lg border border-border/30 bg-base/30 p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-medium text-foreground">Gateway 能力</span>
+                    <span className={`text-[10px] ${hermesProbe.ok ? 'text-emerald-400' : 'text-danger'}`}>
+                      {hermesProbe.mode === 'enhanced' ? '增强模式' : hermesProbe.mode === 'compatible' ? '兼容模式' : '不可用'}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-[10px] sm:grid-cols-5">
+                    {[
+                      ['健康检查', hermesProbe.health],
+                      ['Chat', hermesProbe.chat_completions],
+                      ['模型', hermesProbe.models],
+                      ['Runs', hermesProbe.runs],
+                      ['Sessions', hermesProbe.sessions],
+                    ].map(([label, value]) => (
+                      <div key={String(label)} className="flex items-center gap-1.5 text-muted">
+                        <span className={`h-1.5 w-1.5 rounded-full ${value ? 'bg-emerald-400' : 'bg-muted/30'}`} />
+                        {label}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <label className="flex items-start gap-2 rounded-lg border border-amber-400/20 bg-amber-400/[0.04] p-3 text-[11px] leading-relaxed text-amber-400/80">
+                <input
+                  type="checkbox"
+                  checked={hermesAcknowledged}
+                  onChange={e => setHermesAcknowledged(e.target.checked)}
+                  className="mt-0.5 accent-amber-400"
+                />
+                <span>我确认此连接会复用 Hermes Agent 的完整工具权限；它可能按 Hermes 配置访问终端、文件、网络或其他工具。</span>
+              </label>
             </div>
           ) : (
             <>
@@ -486,7 +749,9 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
       <div className="rounded-card border border-amber-400/20 bg-amber-400/[0.04] px-4 py-3 flex items-start gap-3">
         <Shield className="h-4 w-4 text-amber-400/70 mt-0.5 shrink-0" />
         <div className="text-[11px] text-amber-400/70 leading-relaxed">
-          {isCodexProvider
+          {isHermesProvider
+            ? 'Hermes API Server Key 仅保存在本机项目文件中, 不会发送到浏览器。当前会复用 Agent 在 Hermes 侧配置的完整工具权限，请仅在本机或可信内网使用。'
+            : isCodexProvider
             ? 'Codex CLI 模式会复用本机已登录的 Codex 账户, 个股、财务、复盘等分析上下文会发送给 OpenAI/Codex。保存即表示确认仅在本机或可信内网使用。'
             : 'API Key 仅保存在本机项目文件中, 不会上传到任何服务器。请妥善保管。'}
         </div>
@@ -495,7 +760,7 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
       <div className="flex gap-2">
         <button onClick={() => save.mutate()} disabled={save.isPending || !canSave} className="flex-1 h-10 rounded-xl bg-accent text-white text-sm font-semibold flex items-center justify-center gap-2 hover:bg-accent/90 disabled:opacity-40 transition-all">
           {save.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : saved ? <Check className="h-4 w-4" /> : <Save className="h-4 w-4" />}
-          {save.isPending ? '保存中...' : saved ? '已保存' : '保存配置'}
+          {save.isPending ? (isHermesProvider ? '连接中...' : '保存中...') : saved ? '已保存' : isHermesProvider ? '保存并启用' : '保存配置'}
         </button>
         {configured && (
           <button onClick={() => setConfirmClear(true)} disabled={clear.isPending} className="h-10 px-4 rounded-xl bg-elevated text-secondary hover:text-danger text-sm flex items-center justify-center gap-1.5 hover:bg-elevated/80 disabled:opacity-50 transition-all shrink-0" title="Clear AI provider configuration">
@@ -511,7 +776,9 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
           <div className="relative w-[90vw] max-w-[380px] rounded-card border border-border bg-base shadow-2xl p-6">
             <h3 className="text-sm font-medium text-foreground mb-2">清空 AI 配置</h3>
             <p className="text-xs text-secondary mb-5 leading-relaxed">
-              这会清空已保存的 provider、API Key、API 地址、模型和 Codex CLI 命令。之后可以重新配置。
+              {isHermesProvider
+                ? '这会清空 Hermes Gateway 地址、API Server Key 和模型，但不会影响其他 AI Provider 的配置。'
+                : '这会清空已保存的 provider、API Key、API 地址、模型和 Codex CLI 命令。之后可以重新配置。'}
             </p>
             <div className="flex items-center justify-end gap-2">
               <button onClick={() => setConfirmClear(false)} className="px-3 py-1.5 rounded-btn bg-elevated text-secondary hover:bg-elevated/80 text-sm transition-colors">

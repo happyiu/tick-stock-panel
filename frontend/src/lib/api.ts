@@ -1650,6 +1650,52 @@ export interface SettingsState {
   ai_user_agent: string
   ai_max_output_tokens?: number
   ai_context_window?: number
+  // Hermes Agent 独立配置(密钥只返回脱敏值)
+  hermes_gateway_url?: string
+  hermes_api_key_masked?: string
+  has_hermes_key?: boolean
+  hermes_configured?: boolean
+  hermes_model?: string
+}
+
+export interface HermesProbeResult {
+  ok: boolean
+  gateway_url?: string
+  mode?: 'enhanced' | 'compatible' | 'unavailable'
+  health?: boolean
+  capabilities?: boolean
+  models?: boolean
+  chat_completions?: boolean
+  runs?: boolean
+  sessions?: boolean
+  model_ids?: string[]
+  model?: string
+  error?: string | null
+}
+
+export interface HermesTestResult {
+  ok: boolean
+  model?: string
+  error?: string
+}
+
+export interface HermesSettingsResult extends HermesProbeResult {
+  error?: string
+  ai_provider?: string
+  ai_model?: string
+  ai_openai_model?: string
+  ai_reasoning_effort?: string
+  ai_codex_model?: string
+  ai_codex_command?: string
+  ai_codex_reasoning_effort?: string
+  ai_configured?: boolean
+  ai_max_output_tokens?: number
+  ai_context_window?: number
+  hermes_gateway_url?: string
+  hermes_api_key_masked?: string
+  has_hermes_key?: boolean
+  hermes_configured?: boolean
+  hermes_model?: string
 }
 
 /** 保存 TickFlow Key 的响应(先探后存) */
@@ -1942,7 +1988,7 @@ export const api = {
 
   /** 保存 AI 配置 */
   saveAiSettings: (ai: { provider?: string; base_url?: string; api_key?: string; model?: string; reasoning_effort?: string; codex_command?: string; codex_reasoning_effort?: string; user_agent?: string; max_output_tokens?: number; context_window?: number }) =>
-    request<{ ok: boolean; ai_provider?: string; ai_model?: string; ai_openai_model?: string; ai_reasoning_effort?: string; ai_codex_model?: string; ai_codex_command?: string; ai_codex_reasoning_effort?: string; ai_configured?: boolean; ai_max_output_tokens?: number; ai_context_window?: number }>('/api/settings/ai', {
+    request<{ ok: boolean; error?: string; ai_provider?: string; ai_model?: string; ai_openai_model?: string; ai_reasoning_effort?: string; ai_codex_model?: string; ai_codex_command?: string; ai_codex_reasoning_effort?: string; ai_configured?: boolean; ai_max_output_tokens?: number; ai_context_window?: number }>('/api/settings/ai', {
       method: 'POST',
       body: JSON.stringify(ai),
     }),
@@ -1950,6 +1996,27 @@ export const api = {
   /** 一键清空 AI 配置(保留自定义 UA) */
   clearAiSettings: () =>
     request<{ ok: boolean }>('/api/settings/ai', { method: 'DELETE' }),
+
+  /** 探测 Hermes Gateway,不保存草稿或 API Server Key */
+  probeHermes: (config: { gateway_url: string; api_key?: string; model?: string }) =>
+    request<HermesProbeResult>('/api/settings/hermes/probe', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    }),
+  /** 使用草稿配置发起最小文本请求,不保存配置 */
+  testHermes: (config: { gateway_url: string; api_key?: string; model?: string }) =>
+    request<HermesTestResult>('/api/settings/hermes/test', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    }),
+  /** 探测成功后保存 Hermes 并启用 */
+  saveHermesSettings: (config: { gateway_url: string; api_key?: string; model?: string; max_output_tokens?: number; context_window?: number }) =>
+    request<HermesSettingsResult>('/api/settings/hermes', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    }),
+  clearHermesSettings: () =>
+    request<HermesSettingsResult>('/api/settings/hermes', { method: 'DELETE' }),
 
   preferences: () => request<Preferences>('/api/settings/preferences'),
   dataSources: () => request<DataSourcesResponse>('/api/settings/data-sources'),

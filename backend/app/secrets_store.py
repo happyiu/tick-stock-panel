@@ -78,6 +78,23 @@ def get_ai_key() -> str:
     return settings.ai_api_key or ""
 
 
+def get_hermes_key() -> str:
+    """取 Hermes Gateway Key。
+
+    Hermes 凭据与通用 OpenAI-compatible 凭据隔离,避免切换 Provider 时
+    覆盖或误用另一套 API Key。Hermes Key 只来自本地 secrets.json。
+    """
+    return str(load().get("hermes_api_key") or "").strip()
+
+
+def get_hermes_config(key: str, default: str = "") -> str:
+    """读取 Hermes 配置,保留空值语义且不回退到通用 AI 配置。"""
+    value = load().get(key)
+    if value is None:
+        return default
+    return str(value).strip()
+
+
 def get_ai_config(key: str, default: str = "") -> str:
     """取 AI 配置项:secrets.json 优先,否则 config。"""
     val = load().get(key)

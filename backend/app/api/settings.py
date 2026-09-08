@@ -56,15 +56,19 @@ def get_settings() -> dict:
     from app.config import settings
     from app.services import preferences
     from app.services.ai_provider import (
+        HERMES_AGENT_PROVIDER,
         ai_configured,
+        current_ai_context_window,
+        current_ai_max_output_tokens,
         current_ai_model,
         current_codex_command,
         current_codex_model,
         current_codex_reasoning_effort,
+        current_hermes_gateway_url,
+        current_hermes_key,
+        current_hermes_model,
         current_openai_model,
         current_openai_reasoning_effort,
-        current_ai_context_window,
-        current_ai_max_output_tokens,
     )
 
     key = secrets_store.get_tickflow_key()
@@ -95,6 +99,12 @@ def get_settings() -> dict:
         "ai_user_agent": secrets_store.get_ai_config("ai_user_agent", settings.ai_user_agent),
         "ai_max_output_tokens": current_ai_max_output_tokens(),
         "ai_context_window": current_ai_context_window(),
+        # Hermes 配置独立于通用 OpenAI-compatible 配置, Key 只返回脱敏值
+        "hermes_gateway_url": current_hermes_gateway_url(),
+        "hermes_api_key_masked": secrets_store.mask(current_hermes_key()),
+        "has_hermes_key": bool(current_hermes_key()),
+        "hermes_configured": ai_configured(HERMES_AGENT_PROVIDER),
+        "hermes_model": current_hermes_model(),
     }
 
 
@@ -246,6 +256,167 @@ def complete_onboarding() -> dict:
     return {"ok": True, "onboarding_completed": done}
 
 
+class HermesSettingsIn(BaseModel):
+    gateway_url: str = Field(min_length=1, max_length=2048)
+    # None = 沿用已保存 Key; 空字符串 = 明确清空(但保存接口会拒绝未配置状态)
+    api_key: str | None = Field(default=None, max_length=4096)
+    model: str = Field(default="", max_length=256)
+    max_output_tokens: int | None = None
+    context_window: int | None = None
+
+
+def _hermes_request_values(req: HermesSettingsIn) -> tuple[str, str, str]:
+    """Resolve draft values without ever falling back to generic AI fields."""
+    api_key = secrets_store.get_hermes_key() if req.api_key is None else req.api_key.strip()
+    model = req.model.strip() or secrets_store.get_hermes_config("hermes_model")
+    return req.gateway_url.strip(), api_key, model
+
+
+def _hermes_result(result: dict | None = None) -> dict:
+    from app.services.ai_provider import (
+        HERMES_AGENT_PROVIDER,
+        ai_configured,
+        current_ai_model,
+        current_ai_provider,
+        current_hermes_gateway_url,
+        current_hermes_key,
+        current_hermes_model,
+    )
+
+    payload = dict(result or {})
+    payload.update(
+        {
+            "ai_provider": current_ai_provider(),
+            "ai_model": current_ai_model(),
+            "hermes_gateway_url": current_hermes_gateway_url(),
+            "hermes_api_key_masked": secrets_store.mask(current_hermes_key()),
+            "has_hermes_key": bool(current_hermes_key()),
+            "hermes_configured": ai_configured(HERMES_AGENT_PROVIDER),
+            "hermes_model": current_hermes_model(),
+        }
+    )
+    return payload
+
+
+@router.post("/hermes/probe")
+async def probe_hermes_settings(req: HermesSettingsIn) -> dict:
+    """探测 Hermes Gateway,不持久化地址、模型或 API Server Key。"""
+    from app.services.hermes_gateway import probe_gateway
+
+    gateway_url, api_key, model = _hermes_request_values(req)
+    result = await probe_gateway(gateway_url, api_key, model=model)
+    return result.as_dict()
+
+
+@router.post("/hermes/test")
+async def test_hermes_settings(req: HermesSettingsIn) -> dict:
+    """使用草稿配置发起最小文本请求,不保存配置。"""
+    from app.services.hermes_gateway import HermesGatewayError, complete_chat
+
+    gateway_url, api_key, model = _hermes_request_values(req)
+    if not api_key:
+        return {"ok": False, "error": "Hermes API Server Key 未配置"}
+    if not model:
+        return {"ok": False, "error": "Hermes Agent 模型未配置"}
+
+    try:
+        await complete_chat(
+            gateway_url,
+            api_key,
+            [{"role": "user", "content": "Reply exactly with OK. Do not call tools."}],
+            model=model,
+            temperature=0,
+            max_tokens=8,
+            timeout=30.0,
+        )
+    except (HermesGatewayError, ValueError) as exc:
+        return {"ok": False, "model": model, "error": str(exc)}
+    return {"ok": True, "model": model}
+
+
+@router.post("/hermes")
+async def save_hermes_settings(req: HermesSettingsIn) -> dict:
+    """探测成功后保存 Hermes 配置并切换为当前 AI Provider。"""
+    from app.config import settings
+    from app.services.ai_provider import (
+        HERMES_AGENT_PROVIDER,
+        ai_configured,
+        current_ai_model,
+        current_ai_provider,
+    )
+    from app.services.hermes_gateway import normalize_hermes_gateway_url, probe_gateway
+
+    gateway_url, api_key, model = _hermes_request_values(req)
+    if not api_key:
+        return {"ok": False, "error": "Hermes API Server Key 未配置"}
+    if not model:
+        return {"ok": False, "error": "Hermes Agent 模型未配置"}
+
+    try:
+        normalized_url = normalize_hermes_gateway_url(gateway_url)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+
+    probe = await probe_gateway(normalized_url, api_key, model=model)
+    if not probe.ok:
+        return probe.as_dict()
+
+    updates: dict[str, str | int] = {
+        "hermes_gateway_url": normalized_url,
+        "hermes_model": model,
+        "ai_provider": HERMES_AGENT_PROVIDER,
+    }
+    if req.api_key is not None:
+        updates["hermes_api_key"] = api_key
+    if req.max_output_tokens is not None:
+        if req.max_output_tokens <= 0:
+            raise HTTPException(status_code=400, detail="输出上限必须为正整数")
+        updates["ai_max_output_tokens"] = req.max_output_tokens
+        settings.ai_max_output_tokens = req.max_output_tokens
+    if req.context_window is not None:
+        if req.context_window <= 0:
+            raise HTTPException(status_code=400, detail="上下文窗口必须为正整数")
+        updates["ai_context_window"] = req.context_window
+        settings.ai_context_window = req.context_window
+
+    secrets_store.save(updates)
+    settings.ai_provider = HERMES_AGENT_PROVIDER
+    return _hermes_result(
+        {
+            "ok": True,
+            "mode": probe.mode,
+            "health": probe.health,
+            "capabilities": probe.capabilities,
+            "models": probe.models,
+            "chat_completions": probe.chat_completions,
+            "runs": probe.runs,
+            "sessions": probe.sessions,
+            "model_ids": list(probe.model_ids),
+            "ai_provider": current_ai_provider(),
+            "ai_model": current_ai_model(),
+            "ai_configured": ai_configured(HERMES_AGENT_PROVIDER),
+        }
+    )
+
+
+@router.delete("/hermes")
+def clear_hermes_settings() -> dict:
+    """只清除 Hermes 配置,保留其他 AI Provider 的配置。"""
+    from app.config import settings
+    from app.services.ai_provider import (
+        HERMES_AGENT_PROVIDER,
+        OPENAI_COMPAT_PROVIDER,
+        current_ai_provider,
+    )
+
+    was_active = current_ai_provider() == HERMES_AGENT_PROVIDER
+    secrets_store.clear("hermes_gateway_url", "hermes_api_key", "hermes_model")
+    if was_active:
+        secrets_store.save({"ai_provider": OPENAI_COMPAT_PROVIDER})
+        settings.ai_provider = OPENAI_COMPAT_PROVIDER
+    return _hermes_result({"ok": True})
+
+
 class AiSettingsIn(BaseModel):
     provider: str = "openai_compat"
     base_url: str = ""
@@ -264,8 +435,11 @@ def save_ai_settings(req: AiSettingsIn) -> dict:
     """保存 AI 配置（全部持久化到 secrets.json）"""
     from app.config import settings
     from app.services.ai_provider import (
+        HERMES_AGENT_PROVIDER,
         OPENAI_PROVIDER,
         ai_configured,
+        current_ai_context_window,
+        current_ai_max_output_tokens,
         current_ai_model,
         current_ai_provider,
         current_codex_command,
@@ -273,12 +447,13 @@ def save_ai_settings(req: AiSettingsIn) -> dict:
         current_codex_reasoning_effort,
         current_openai_model,
         current_openai_reasoning_effort,
-        current_ai_context_window,
-        current_ai_max_output_tokens,
         normalize_codex_command,
         normalize_codex_model,
         normalize_codex_reasoning_effort,
     )
+
+    if req.provider == HERMES_AGENT_PROVIDER:
+        raise HTTPException(status_code=400, detail="Hermes 请使用独立的 Hermes 连接接口")
 
     updates: dict = {}
     if req.provider:
