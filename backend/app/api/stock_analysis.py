@@ -5,6 +5,7 @@
 端点:
   GET  /levels?symbol=         11 类关键价位(图表 markLine 数据源)
   POST /analyze                AI 流式四维分析(NDJSON)
+  POST /elliott/explain        详情页本地波浪结果的 AI 只读解释
   GET  /reports                历史报告列表
   POST /reports                保存一条报告
   DELETE /reports/{report_id}  删除一条报告
@@ -27,7 +28,9 @@ from app.services.elliott_wave_analyzer import (
     ElliottAnalyzeRequest,
     ElliottAssessment,
     ElliottAssessmentError,
+    ElliottExplanation,
     analyze_elliott,
+    explain_elliott,
 )
 from app.services.stock_analyzer import analyze_stock_stream
 
@@ -201,6 +204,20 @@ async def analyze_elliott_wave(req: ElliottAnalyzeRequest):
     except Exception as exc:
         logger.exception("AI Elliott assessment failed for %s: %s", req.symbol, exc)
         raise HTTPException(status_code=502, detail=f"艾略特波浪 AI 评估失败: {exc}") from exc
+
+
+@router.post("/elliott/explain", response_model=ElliottExplanation)
+async def explain_elliott_wave(req: ElliottAnalyzeRequest):
+    """艾略特波浪 AI 解释, 计数、规则和价格事实必须来自详情页本地结果。"""
+    if not ai_configured():
+        raise HTTPException(status_code=503, detail="AI 未配置; 请在设置页配置 API Key 与接口地址")
+    try:
+        return await explain_elliott(req)
+    except ElliottAssessmentError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("AI Elliott explanation failed for %s: %s", req.symbol, exc)
+        raise HTTPException(status_code=502, detail=f"艾略特波浪 AI 解释失败: {exc}") from exc
 
 
 # ================================================================

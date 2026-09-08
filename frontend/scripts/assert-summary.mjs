@@ -168,6 +168,22 @@ assert.equal(buy.decision.state, 'buy', '全部确认门满足时应生成买侧
 assert.equal(buy.decision.flatAction, '买入')
 assert.equal(buy.decision.holdingAction, '持有')
 
+const waveOnlyConflict = buildStockSummary({
+  ...scoreInput(input, { direction_score: 72, trend: 70, momentum: 68, volume_price: 66 }),
+  chanlun: bullishChanlun,
+  elliott: {
+    ...elliott,
+    definitionMode: 'strict_elliott',
+    ambiguity: 'none',
+    primaryCount: { id: 'wave-down', family: 'impulse', direction: 'down', currentWave: '4' },
+  },
+  signalRiskContexts: [buyContext],
+  preferredSignal: buyContext,
+})
+assert.ok(waveOnlyConflict.conflicts.some(item => item.id === 'wave-structure-direction'))
+assert.equal(waveOnlyConflict.decision.state, buy.decision.state, '波浪分歧只能进入摘要证据，不得改变行动门槛')
+assert.ok(waveOnlyConflict.opposingEvidence.some(item => item.source === 'wave'))
+
 const sellSignal = { ...bearishSellSignal, id: 'sell-3-confirmed', conditions: signalConditions('met') }
 const sellContext = { ...bearishSellContext, signal: sellSignal }
 const sell = buildStockSummary({

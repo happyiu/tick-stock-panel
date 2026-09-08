@@ -382,10 +382,13 @@ function buildConflicts(
   const waveDirection = elliott.primaryCount?.direction
   const waveTone: 'bull' | 'bear' | 'neutral' = waveDirection === 'up' ? 'bull' : waveDirection === 'down' ? 'bear' : 'neutral'
   if (waveTone !== 'neutral' && structureDirection !== 'neutral' && waveTone !== structureDirection) {
+    const waveMode = elliott.definitionMode === 'strict_elliott'
+      ? '严格端点计数'
+      : elliott.definitionMode === 'structure_proxy' ? '结构代理计数' : '未解决计数'
     conflicts.push({
       id: 'wave-structure-direction',
       label: '波浪与结构分歧',
-      text: `本地波浪代理偏${waveTone === 'bull' ? '多' : '空'}，缠论结构偏${structureDirection === 'bull' ? '多' : '空'}；波浪计数${elliott.ambiguity === 'multiple_viable' ? '存在多个可行候选' : '仍属代理分析'}。`,
+      text: `本地${waveMode}偏${waveTone === 'bull' ? '多' : '空'}，缠论结构偏${structureDirection === 'bull' ? '多' : '空'}；波浪计数${elliott.ambiguity === 'multiple_viable' ? '存在多个可行候选' : '作为研究证据'}。`,
       directions: [waveTone, structureDirection],
     })
   }
@@ -464,6 +467,22 @@ function buildEvidence(
     })
   } else if (input.chanlun.status === 'ready') {
     opposing.push({ id: 'structure-candidate', source: 'structure', label: '结构候选', text: '当前周期暂无有效的一、二、三类候选。', tone: 'neutral' })
+  }
+  const wave = input.elliott.primaryCount
+  if (wave && (wave.direction === 'up' || wave.direction === 'down')) {
+    const waveTone: StockSummaryTone = wave.direction === 'up' ? 'bull' : 'bear'
+    const waveMode = input.elliott.definitionMode === 'strict_elliott' ? '严格端点计数' : '结构代理计数'
+    const item = {
+      id: `wave-${wave.id ?? wave.family}`,
+      source: 'wave' as const,
+      label: '波浪',
+      text: `本地${waveMode}偏${wave.direction === 'up' ? '多' : '空'}，当前浪${wave.currentWave ?? '未定'}；仅作为方向分歧和证据参考。`,
+      tone: waveTone,
+    }
+    if (waveTone === 'bull') supporting.push(item)
+    else opposing.push(item)
+  } else if (input.elliott.ambiguity === 'unresolved' || input.elliott.definitionMode === 'untradable_unclear') {
+    opposing.push({ id: 'wave-unresolved', source: 'wave', label: '波浪', text: '当前周期没有可复核的主计数，三角形/组合结构保留为 unresolved。', tone: 'warning' })
   }
   if (support) {
     supporting.push({ id: `support-${support.id}`, source: 'level', label: '支撑', text: `当前下方最近支撑区间 ${support.low.toFixed(3)} ~ ${support.high.toFixed(3)}。`, tone: 'bull', targetId: support.id })
@@ -701,11 +720,12 @@ function buildDecision(
     && technical.trend <= 40
     && technical.momentum <= 40
     && technical.volumePrice <= 40
-  const noConflict = conflicts.length === 0
+  // 波浪只进入摘要分歧，不参与买入、减仓、卖出门槛。
+  const noActionConflict = !conflicts.some(item => item.id !== 'wave-structure-direction')
   const riskReady = risk.status === 'calculable' && risk.riskReward1 != null && risk.riskReward1 >= 2
 
   let state: StockDecisionState = 'wait'
-  if (inputState === 'ready' && noConflict) {
+  if (inputState === 'ready' && noActionConflict) {
     if (isSellCandidate && allReady && lowerConfirmed && strongBear && structure.direction === 'bear') {
       state = 'sell'
     } else if (isSellCandidate && structureReady && lowerMissingAllowed
@@ -733,8 +753,10 @@ function buildDecision(
     reason = `${PERIOD_LABELS[input.period]} ${shortSignalLabel(signal)}、技术维度和结构空间均达到确认门，当前可进入买侧确认状态。`
   } else if (state === 'probe' && signal) {
     reason = `${PERIOD_LABELS[input.period]} ${shortSignalLabel(signal)}成立，技术维度和结构空间较好；低级别确认缺失，暂按试仓观察。`
-  } else if (conflicts.length > 0) {
+  } else if (conflicts.some(item => item.id !== 'wave-structure-direction')) {
     reason = '技术、结构或波浪方向存在分歧，暂不升级行动状态。'
+  } else if (conflicts.length > 0) {
+    reason = '波浪仅作为研究分歧；其他行动门槛尚未全部满足，继续观察。'
   } else if (signal?.status === 'waiting_pullback') {
     reason = `${PERIOD_LABELS[input.period]} ${shortSignalLabel(signal)}仍在等待回抽确认，当前不追随未完成结构。`
   } else if (latest && (latest.signal.status === 'invalidated' || latest.signal.status === 'rejected')) {

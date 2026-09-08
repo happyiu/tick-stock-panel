@@ -1,6 +1,7 @@
-"""艾略特波浪 AI 增强接口的边界、安全和修复测试。"""
+"""艾略特波浪 AI 接口的边界、安全和解释测试。"""
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import date, timedelta
 
@@ -15,7 +16,9 @@ from app.services.elliott_wave_analyzer import (
     ElliottAnalyzeRequest,
     ElliottAssessment,
     ElliottAssessmentError,
+    ElliottExplanation,
     analyze_elliott,
+    explain_elliott,
 )
 
 AS_OF = "2026-01-24"
@@ -104,6 +107,26 @@ def _assessment_payload() -> dict:
         "ic_pass": True,
         "allowed_action": "buy",
         "suggested_shares": 1000,
+    }
+
+
+def _explanation_payload() -> dict:
+    return {
+        "schema": "elliott.explanation.public.v1",
+        "explanation_id": "explanation-test",
+        "instrument": "wrong-symbol",
+        "timeframe": "1w",
+        "as_of": "2099-01-01",
+        "summary": "本地候选存在结构支持，但仍需等待确认。",
+        "evidence_refs": ["local-candidate:structure", "not-local"],
+        "disagreements": ["动量证据不可用"],
+        "limitations": ["当前仅分析一个周期"],
+        "confirmation": ["等待反向拐点"],
+        "invalidation": ["硬规则失败"],
+        "recount_conditions": ["新增拐点改变拓扑"],
+        "next_observation": ["观察下一根已闭合 K 线"],
+        "source_refs": ["local:elliott/rules/v2", "not-local-source"],
+        "research_only": False,
     }
 
 
@@ -257,3 +280,101 @@ def test_api_maps_provider_failure_to_502(monkeypatch):
 
     assert response.status_code == 502
     assert "评估失败" in response.json()["detail"]
+
+
+def test_explanation_only_keeps_local_evidence_refs(monkeypatch):
+    calls = []
+
+    async def fake_generate(messages, **kwargs):
+        calls.append(messages)
+        return json.dumps(_explanation_payload(), ensure_ascii=False)
+
+    local_analysis = {
+        "status": "ready",
+        "sourceRefs": ["local:elliott/rules/v2"],
+        "guidelineEvidence": [{"id": "local-candidate:structure"}],
+    }
+    monkeypatch.setattr(elliott_service, "generate_ai_text", fake_generate)
+    result = asyncio.run(explain_elliott(_request(local_analysis=local_analysis)))
+
+    assert len(calls) == 1
+    assert result.schema == "elliott.explanation.public.v1"
+    assert result.instrument == "600000.SH"
+    assert result.timeframe == "1d"
+    assert result.as_of == AS_OF
+    assert result.evidence_refs == ["local-candidate:structure"]
+    assert result.source_refs == ["local:elliott/rules/v2"]
+    assert result.research_only is True
+    assert "primary_count" not in result.model_dump()
+
+
+def test_explanation_repairs_invalid_json_once(monkeypatch):
+    responses = iter(["not json", json.dumps(_explanation_payload(), ensure_ascii=False)])
+    calls = 0
+
+    async def fake_generate(messages, **kwargs):
+        nonlocal calls
+        calls += 1
+        return next(responses)
+
+    monkeypatch.setattr(elliott_service, "generate_ai_text", fake_generate)
+    result = asyncio.run(explain_elliott(_request()))
+
+    assert calls == 2
+    assert result.research_only is True
+
+
+def test_explanation_drops_trade_action_text(monkeypatch):
+    payload = _explanation_payload()
+    payload["summary"] = "建议买入"
+    payload["disagreements"] = ["卖出后再观察", "动量证据不可用"]
+
+    async def fake_generate(messages, **kwargs):
+        return json.dumps(payload, ensure_ascii=False)
+
+    monkeypatch.setattr(elliott_service, "generate_ai_text", fake_generate)
+    result = asyncio.run(explain_elliott(_request()))
+
+    assert "买入" not in result.summary
+    assert result.disagreements == ["动量证据不可用"]
+
+
+def test_explanation_drops_probability_and_price_boundary_text(monkeypatch):
+    payload = _explanation_payload()
+    payload["summary"] = "成功概率 80%，目标价 12.3"
+
+    async def fake_generate(messages, **kwargs):
+        return json.dumps(payload, ensure_ascii=False)
+
+    monkeypatch.setattr(elliott_service, "generate_ai_text", fake_generate)
+    result = asyncio.run(explain_elliott(_request()))
+
+    assert "概率" not in result.summary
+    assert "目标价" not in result.summary
+
+
+def test_api_returns_explanation_without_count_fields(monkeypatch):
+    monkeypatch.setattr(stock_analysis_api, "ai_configured", lambda: True)
+
+    async def fake_explain(req):
+        return ElliottExplanation.model_validate({
+            "schema": "elliott.explanation.public.v1",
+            "explanation_id": "explanation-api-test",
+            "instrument": req.symbol,
+            "timeframe": req.period,
+            "as_of": req.as_of,
+            "summary": "只读解释",
+            "evidence_refs": [],
+            "source_refs": [],
+            "research_only": True,
+        })
+
+    monkeypatch.setattr(stock_analysis_api, "explain_elliott", fake_explain)
+    response = _api_client().post("/api/stock-analysis/elliott/explain", json=_request_json())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["schema"] == "elliott.explanation.public.v1"
+    assert body["instrument"] == "600000.SH"
+    assert body["research_only"] is True
+    assert "primary_count" not in body

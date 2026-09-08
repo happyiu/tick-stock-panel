@@ -16,6 +16,8 @@ function makeBars(turns) {
         high: value + 0.08,
         low: value - 0.08,
         close: value,
+        periodEnd: date,
+        isClosed: true,
         volume: 100 + segment * 20,
       })
       day += 1
@@ -27,11 +29,21 @@ function makeBars(turns) {
 const bullish = makeBars([12, 10, 15, 12, 25, 20, 28, 27])
 const bullishAnalysis = analyzeElliott(bullish, '1d')
 assert.equal(bullishAnalysis.status, 'ready')
-assert.equal(bullishAnalysis.definitionMode, 'swing_proxy')
+assert.equal(bullishAnalysis.definitionMode, 'strict_elliott')
 assert.equal(bullishAnalysis.primaryCount?.family, 'impulse')
 assert.equal(bullishAnalysis.primaryCount?.direction, 'up')
+assert.ok(bullishAnalysis.primaryCount?.id)
+assert.deepEqual(bullishAnalysis.primaryCount?.pivots.map(pivot => pivot.label), ['0', '1', '2', '3', '4', '5'])
+assert.ok(bullishAnalysis.hardRuleChecks.every(rule => rule.candidateId))
+assert.ok(bullishAnalysis.guidelineEvidence.every(item => item.id))
+assert.ok(bullishAnalysis.hardRuleChecks.some(rule => rule.candidateId === 'unresolved:triangle' && rule.result === 'unknown'))
+assert.ok(bullishAnalysis.hardRuleChecks.some(rule => rule.candidateId === 'unresolved:combination' && rule.result === 'unknown'))
+assert.ok(bullishAnalysis.primaryCount?.pivots.every(pivot => pivot.eventTime <= bullishAnalysis.asOf && pivot.confirmedAt <= bullishAnalysis.asOf && pivot.availableAt <= bullishAnalysis.asOf))
 assert.equal(bullishAnalysis.hardRuleChecks.filter(rule => rule.result === 'fail').length, 0)
 assert.ok(bullishAnalysis.pivots.every(pivot => pivot.state !== 'projected'))
+assert.deepEqual(analyzeElliott(bullish, '1d').primaryCount?.id, bullishAnalysis.primaryCount?.id)
+assert.deepEqual(analyzeElliott(bullish, '1d').alternateCounts.map(count => count.id), bullishAnalysis.alternateCounts.map(count => count.id))
+assert.equal(bullishAnalysis.alternateCounts.some(count => count.family === 'triangle' || count.family === 'combination'), false)
 assert.deepEqual(describeElliottCount(bullishAnalysis.primaryCount), {
   pattern: 'five_wave',
   title: '五浪推动候选',
@@ -55,12 +67,54 @@ const correction = analyzeElliott(makeBars([12, 20, 15, 24, 16, 22]), '1d')
 assert.equal(correction.status, 'ready')
 assert.equal(correction.primaryCount?.family, 'unknown')
 assert.match(correction.primaryCount?.stage ?? '', /修正/)
+assert.equal(correction.definitionMode, 'structure_proxy')
+assert.ok(correction.hardRuleChecks.some(rule => rule.result === 'unknown'))
+assert.equal(correction.hardRuleChecks.some(rule => rule.result === 'pass'), false, 'unknown 不能被提升为 pass')
 assert.deepEqual(describeElliottCount(correction.primaryCount), {
   pattern: 'abc',
   title: 'ABC修正候选（具体类型未确定）',
   stage: 'C浪端点已出现，等待后续反向结构确认',
   sequence: ['起点', 'A', 'B', 'C?'],
 })
+
+const zigzag = analyzeElliott(makeBars([30, 12, 20, 15, 24, 10]), '1d')
+assert.equal(zigzag.primaryCount?.family, 'zigzag')
+assert.equal(zigzag.primaryCount?.currentWave, 'C')
+assert.ok(zigzag.hardRuleChecks.some(rule => rule.ruleId === 'zigzag.c_extends_a' && rule.result === 'pass'))
+assert.equal(describeElliottCount(zigzag.primaryCount).title, '锯齿修正候选')
+
+const flat = analyzeElliott(makeBars([30, 12, 20, 10, 24, 18]), '1d')
+assert.equal(flat.primaryCount?.family, 'flat')
+assert.ok(flat.hardRuleChecks.some(rule => rule.ruleId === 'flat.b_retrace' && rule.result === 'pass'))
+assert.equal(describeElliottCount(flat.primaryCount).title, '平台修正候选')
+
+const leadingDiagonal = analyzeElliott(makeBars([12, 10, 15, 12, 25, 14, 28, 27]), '1d')
+assert.equal(leadingDiagonal.primaryCount?.family, 'leading_diagonal')
+assert.ok(leadingDiagonal.hardRuleChecks.some(rule => rule.ruleId === 'diagonal.wave4_overlap' && rule.result === 'pass'))
+
+const endingDiagonal = analyzeElliott(makeBars([12, 10, 15, 12, 25, 14, 23, 20]), '1d')
+assert.equal(endingDiagonal.primaryCount?.family, 'ending_diagonal')
+assert.ok(endingDiagonal.hardRuleChecks.some(rule => rule.ruleId === 'diagonal.wave4_overlap' && rule.result === 'pass'))
+
+const repeatedDirection = analyzeElliott(makeBars([20, 10, 18, 12, 24, 16, 30, 20, 34, 26, 40, 32]), '1d')
+assert.ok(repeatedDirection.alternateCounts.some(count => count.family === repeatedDirection.primaryCount?.family
+  && count.direction === repeatedDirection.primaryCount?.direction
+  && count.id !== repeatedDirection.primaryCount?.id), '同家族同方向的不同拐点候选应保留')
+
+const forming = bullish.map((bar, index) => index === bullish.length - 1
+  ? { ...bar, open: 19.9, high: 20, low: 19.8, close: 19.9, isClosed: false }
+  : bar)
+const formingAnalysis = analyzeElliott(forming, '1d')
+assert.ok(formingAnalysis.pivots.some(pivot => pivot.state === 'suspected'))
+assert.ok(formingAnalysis.primaryCount?.pivots.every(pivot => pivot.state === 'observed'))
+assert.equal(formingAnalysis.primaryCount?.pivots.some(pivot => pivot.state === 'suspected'), false)
+assert.ok(formingAnalysis.availableAt <= formingAnalysis.asOf, '未闭合尾部的可用时间不能落到快照之后')
+assert.equal(bullishAnalysis.pivots.some(pivot => pivot.state === 'suspected'), false, '全量闭合快照不应产生疑似拐点')
+
+assert.deepEqual(
+  formingAnalysis.momentumVolumeEvidence.filter(item => item.family === 'multi_timeframe').map(item => item.result),
+  ['unavailable'],
+)
 
 const insufficient = analyzeElliott(bullish.slice(0, 15), '1d')
 assert.equal(insufficient.status, 'insufficient')

@@ -901,6 +901,7 @@ export function StockPanel({
                         symbol={symbol}
                         rows={periodRows}
                         period={period}
+                        assetType={assetType}
                         analysis={elliottAnalysis}
                         collapsed={analysisSections.elliottCollapsed}
                         onToggleCollapsed={() => toggleAnalysisSection('elliottCollapsed')}

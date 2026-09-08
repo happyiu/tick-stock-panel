@@ -177,6 +177,49 @@ class ElliottAssessmentError(ValueError):
     """AI 返回无法修复的评估结构。"""
 
 
+class ElliottExplanation(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    schema: Literal["elliott.explanation.public.v1"] = "elliott.explanation.public.v1"
+    explanation_id: str = Field(min_length=1)
+    instrument: str = Field(min_length=1)
+    timeframe: ElliottPeriod
+    as_of: str = Field(min_length=1)
+    summary: str = ""
+    evidence_refs: list[str] = Field(default_factory=list, max_length=12)
+    disagreements: list[str] = Field(default_factory=list, max_length=8)
+    limitations: list[str] = Field(default_factory=list, max_length=8)
+    confirmation: list[str] = Field(default_factory=list, max_length=8)
+    invalidation: list[str] = Field(default_factory=list, max_length=8)
+    recount_conditions: list[str] = Field(default_factory=list, max_length=8)
+    next_observation: list[str] = Field(default_factory=list, max_length=8)
+    source_refs: list[str] = Field(default_factory=list, max_length=12)
+    research_only: Literal[True] = True
+
+
+_EXPLANATION_BLOCKED_TERMS = (
+    "买入", "卖出", "减仓", "加仓", "仓位", "下单", "订单", "交易动作",
+    "概率", "胜率", "目标价", "支撑位", "阻力位", "止损", "止盈", "价格边界",
+)
+
+
+_EXPLANATION_SYSTEM_PROMPT = """你是一个只做研究记录的艾略特波浪解释器。输入中的 local_analysis 是确定性引擎已经生成的事实。
+只返回 JSON，不要输出 Markdown、代码围栏或交易建议。
+
+规则：
+1. 不得生成、修改、排序或否定 primary_count、alternate_counts、hard_rule_checks、价格边界或形态家族。
+2. 只能引用 local_analysis 中已有的 evidence id 和 source_refs；不得编造引用。
+3. 只能解释主计数、备选、硬规则结果、独立证据、歧义和限制。
+4. 不得输出概率、胜率、买入、减仓、卖出、仓位或订单动作。
+5. 不得使用 as_of 之后的数据；多周期证据保持不可用。
+6. 输出键必须为：
+schema, explanation_id, instrument, timeframe, as_of, summary, evidence_refs,
+disagreements, limitations, confirmation, invalidation, recount_conditions,
+next_observation, source_refs, research_only。
+7. research_only 必须为 true。
+"""
+
+
 _SYSTEM_PROMPT = """你是一个只做研究记录的艾略特波浪结构分析器。请基于给定的点时 OHLCV 和本地摆动代理，生成一个 JSON 对象，不要输出 Markdown、代码围栏或交易建议。
 
 要求：
@@ -340,3 +383,109 @@ async def analyze_elliott(req: ElliottAnalyzeRequest) -> ElliottAssessment:
             return _enforce_safety(_json_object(repaired), req)
         except (ElliottAssessmentError, ValueError) as second_error:
             raise ElliottAssessmentError(f"AI 输出连续两次不符合评估契约: {second_error}") from second_error
+
+
+def _string_list(value: Any, limit: int = 8) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item.strip() for item in value if isinstance(item, str) and item.strip()][:limit]
+
+
+def _safe_explanation_text(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    return "" if any(term in text for term in _EXPLANATION_BLOCKED_TERMS) else text
+
+
+def _safe_explanation_list(value: Any, limit: int = 8) -> list[str]:
+    return [text for item in _string_list(value, limit) if (text := _safe_explanation_text(item))]
+
+
+def _local_evidence_ids(local_analysis: dict[str, Any]) -> set[str]:
+    result: set[str] = set()
+    for key in (
+        "guidelineEvidence",
+        "fibonacciRelationships",
+        "channelChecks",
+        "momentumVolumeEvidence",
+        "guideline_evidence",
+        "fibonacci_relationships",
+        "channel_checks",
+        "momentum_volume_evidence",
+    ):
+        values = local_analysis.get(key)
+        if not isinstance(values, list):
+            continue
+        for item in values:
+            if isinstance(item, dict) and isinstance(item.get("id"), str):
+                result.add(item["id"])
+    return result
+
+
+def _local_source_refs(local_analysis: dict[str, Any]) -> set[str]:
+    refs = local_analysis.get("sourceRefs", local_analysis.get("source_refs"))
+    return {item for item in refs if isinstance(item, str)} if isinstance(refs, list) else set()
+
+
+def _explanation_prompt(req: ElliottAnalyzeRequest, *, repair: str | None = None) -> list[dict[str, str]]:
+    user: dict[str, Any] = {
+        "symbol": req.symbol,
+        "period": req.period,
+        "as_of": req.as_of,
+        "price_basis": req.price_basis,
+        "local_analysis": req.local_analysis,
+    }
+    if repair:
+        user = {
+            "original_invalid_output": repair,
+            "repair_instruction": "只返回符合要求的完整 JSON；不得输出计数、规则、价格边界或交易动作。",
+            **user,
+        }
+    return [
+        {"role": "system", "content": _EXPLANATION_SYSTEM_PROMPT},
+        {"role": "user", "content": json.dumps(user, ensure_ascii=False, separators=(",", ":"))},
+    ]
+
+
+def _enforce_explanation_safety(payload: dict[str, Any], req: ElliottAnalyzeRequest) -> ElliottExplanation:
+    local_evidence = _local_evidence_ids(req.local_analysis)
+    local_sources = _local_source_refs(req.local_analysis)
+    normalized = {
+        "schema": "elliott.explanation.public.v1",
+        "explanation_id": str(payload.get("explanation_id") or f"explanation-{uuid.uuid4().hex[:12]}"),
+        "instrument": req.symbol,
+        "timeframe": req.period,
+        "as_of": req.as_of,
+        "summary": _safe_explanation_text(payload.get("summary")),
+        "evidence_refs": [item for item in _string_list(payload.get("evidence_refs"), 12) if item in local_evidence],
+        "disagreements": _safe_explanation_list(payload.get("disagreements")),
+        "limitations": _safe_explanation_list(payload.get("limitations")),
+        "confirmation": _safe_explanation_list(payload.get("confirmation")),
+        "invalidation": _safe_explanation_list(payload.get("invalidation")),
+        "recount_conditions": _safe_explanation_list(payload.get("recount_conditions")),
+        "next_observation": _safe_explanation_list(payload.get("next_observation")),
+        "source_refs": [item for item in _string_list(payload.get("source_refs"), 12) if item in local_sources],
+        "research_only": True,
+    }
+    if not normalized["summary"]:
+        normalized["summary"] = "AI 未提供可用解释；请以本地确定性计数和证据为准。"
+    return ElliottExplanation.model_validate(normalized)
+
+
+async def explain_elliott(req: ElliottAnalyzeRequest) -> ElliottExplanation:
+    """只解释本地确定性评估，不允许 AI 生成新的计数事实。"""
+    raw = await generate_ai_text(_explanation_prompt(req), temperature=0.2, max_tokens=None)
+    try:
+        return _enforce_explanation_safety(_json_object(raw), req)
+    except (ElliottAssessmentError, ValueError) as first_error:
+        repair_prompt = f"首次输出校验失败：{first_error}\n首次输出如下：\n{raw[:12000]}"
+        repaired = await generate_ai_text(
+            _explanation_prompt(req, repair=repair_prompt),
+            temperature=0.0,
+            max_tokens=None,
+        )
+        try:
+            return _enforce_explanation_safety(_json_object(repaired), req)
+        except (ElliottAssessmentError, ValueError) as second_error:
+            raise ElliottAssessmentError(f"AI 解释连续两次不符合解释契约: {second_error}") from second_error

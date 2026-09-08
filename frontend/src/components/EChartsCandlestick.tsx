@@ -544,6 +544,108 @@ function appendElliottMarkPoints(
   }
 }
 
+function appendPriceMarkLines(
+  target: any[],
+  priceLines: ChartPriceLine[] | undefined,
+  dateIndexMap: Map<string, number>,
+  linkedPrice: number | null | undefined,
+  assetType?: string,
+) {
+  for (const line of priceLines ?? []) {
+    if (!Number.isFinite(line.value)) continue
+    const lineStyle = {
+      color: line.color ?? CT().text,
+      type: 'dashed' as const,
+      width: 1,
+      opacity: 0.92,
+    }
+    const label = {
+      show: !!line.label,
+      formatter: line.label ?? '',
+      position: 'insideEndTop' as const,
+      color: line.color ?? CT().text,
+      backgroundColor: CT().tooltipBg,
+      borderRadius: 4,
+      padding: [2, 6],
+      fontSize: 10,
+      fontFamily: 'JetBrains Mono, monospace',
+    }
+    if (line.start && line.end && dateIndexMap.has(line.start) && dateIndexMap.has(line.end)) {
+      target.push([
+        { xAxis: line.start, yAxis: line.value },
+        { xAxis: line.end, yAxis: line.value, lineStyle, label, symbol: 'none' },
+      ])
+    } else {
+      target.push({ yAxis: line.value, lineStyle, label, symbol: 'none' })
+    }
+  }
+
+  if (linkedPrice != null) {
+    target.push({
+      yAxis: linkedPrice,
+      lineStyle: { color: '#3B82F6', type: 'dashed', width: 1, opacity: 0.7 },
+      label: {
+        show: true,
+        formatter: fmtAssetPrice(linkedPrice, assetType),
+        position: 'insideEndTop',
+        color: '#3B82F6',
+        fontSize: 10,
+        fontFamily: 'JetBrains Mono, monospace',
+        backgroundColor: CT().tooltipBg,
+        borderColor: '#3B82F6',
+        borderWidth: 1,
+        padding: [1, 4],
+        borderRadius: 2,
+      },
+      symbol: 'none',
+    })
+  }
+}
+
+function appendChanlunMarkLines(
+  target: any[],
+  dateIndexMap: Map<string, number>,
+  analysis: ChanlunAnalysis | undefined,
+  config: StockPreviewChanlunOverlayConfig | undefined,
+) {
+  if (!analysis || !config?.enabled) return
+  if (config.strokes) {
+    for (const stroke of analysis.strokes) {
+      if (!dateIndexMap.has(stroke.startDate) || !dateIndexMap.has(stroke.endDate)) continue
+      const color = stroke.direction === 'up' ? THEME.bull : THEME.bear
+      target.push([
+        { coord: [stroke.startDate, stroke.startPrice], symbol: 'none' },
+        {
+          coord: [stroke.endDate, stroke.endPrice],
+          symbol: 'none',
+          lineStyle: {
+            color,
+            type: stroke.confirmed ? 'solid' : 'dashed',
+            width: stroke.confirmed ? 1.4 : 1.2,
+            opacity: stroke.confirmed ? 0.82 : 0.6,
+          },
+          label: { show: false },
+        },
+      ])
+    }
+  }
+  if (config.segments) {
+    for (const segment of analysis.segments) {
+      if (!dateIndexMap.has(segment.startDate) || !dateIndexMap.has(segment.endDate)) continue
+      const color = segment.direction === 'up' ? THEME.bull : THEME.bear
+      target.push([
+        { coord: [segment.startDate, segment.startPrice], symbol: 'none' },
+        {
+          coord: [segment.endDate, segment.endPrice],
+          symbol: 'none',
+          lineStyle: { color, type: segment.confirmed ? 'solid' : 'dashed', width: 2.4, opacity: segment.confirmed ? 0.95 : 0.55 },
+          label: { show: false },
+        },
+      ])
+    }
+  }
+}
+
 function buildSubInfoGraphics(
   data: OHLC[],
   infoIdx: number,
@@ -862,92 +964,10 @@ function buildOption(
     }
   }
 
-  const markLineData: any[] = [...elliottLineData, ...(priceLines ?? [])
-    .filter(line => Number.isFinite(line.value))
-    .map(line => {
-      const lineStyle = {
-        color: line.color ?? CT().text,
-        type: 'dashed' as const,
-        width: 1,
-        opacity: 0.92,
-      }
-      const label = {
-        show: !!line.label,
-        formatter: line.label ?? '',
-        position: 'insideEndTop' as const,
-        color: line.color ?? CT().text,
-        backgroundColor: CT().tooltipBg,
-        borderRadius: 4,
-        padding: [2, 6],
-        fontSize: 10,
-        fontFamily: 'JetBrains Mono, monospace',
-      }
-      if (line.start && line.end && dateIndexMap.has(line.start) && dateIndexMap.has(line.end)) {
-        return [
-          { xAxis: line.start, yAxis: line.value },
-          { xAxis: line.end, yAxis: line.value, lineStyle, label, symbol: 'none' },
-        ]
-      }
-      return { yAxis: line.value, lineStyle, label, symbol: 'none' }
-    })]
+  const markLineData: any[] = [...elliottLineData]
+  appendPriceMarkLines(markLineData, priceLines, dateIndexMap, linkedPrice, assetType)
 
-  if (linkedPrice != null) {
-    markLineData.push({
-      yAxis: linkedPrice,
-      lineStyle: { color: '#3B82F6', type: 'dashed', width: 1, opacity: 0.7 },
-      label: {
-        show: true,
-        formatter: fmtAssetPrice(linkedPrice, assetType),
-        position: 'insideEndTop',
-        color: '#3B82F6',
-        fontSize: 10,
-        fontFamily: 'JetBrains Mono, monospace',
-        backgroundColor: CT().tooltipBg,
-        borderColor: '#3B82F6',
-        borderWidth: 1,
-        padding: [1, 4],
-        borderRadius: 2,
-      },
-      symbol: 'none',
-    })
-  }
-
-  if (chanlunAnalysis && chanlunOverlay?.enabled && chanlunOverlay.strokes) {
-    for (const stroke of chanlunAnalysis.strokes) {
-      if (!dateIndexMap.has(stroke.startDate) || !dateIndexMap.has(stroke.endDate)) continue
-      const color = stroke.direction === 'up' ? THEME.bull : THEME.bear
-      markLineData.push([
-        { coord: [stroke.startDate, stroke.startPrice], symbol: 'none' },
-        {
-          coord: [stroke.endDate, stroke.endPrice],
-          symbol: 'none',
-          lineStyle: {
-            color,
-            type: stroke.confirmed ? 'solid' : 'dashed',
-            width: stroke.confirmed ? 1.4 : 1.2,
-            opacity: stroke.confirmed ? 0.82 : 0.6,
-          },
-          label: { show: false },
-        },
-      ])
-    }
-  }
-
-  if (chanlunAnalysis && chanlunOverlay?.enabled && chanlunOverlay.segments) {
-    for (const segment of chanlunAnalysis.segments) {
-      if (!dateIndexMap.has(segment.startDate) || !dateIndexMap.has(segment.endDate)) continue
-      const color = segment.direction === 'up' ? THEME.bull : THEME.bear
-      markLineData.push([
-        { coord: [segment.startDate, segment.startPrice], symbol: 'none' },
-        {
-          coord: [segment.endDate, segment.endPrice],
-          symbol: 'none',
-          lineStyle: { color, type: segment.confirmed ? 'solid' : 'dashed', width: 2.4, opacity: segment.confirmed ? 0.95 : 0.55 },
-          label: { show: false },
-        },
-      ])
-    }
-  }
+  appendChanlunMarkLines(markLineData, dateIndexMap, chanlunAnalysis, chanlunOverlay)
 
   series.push({
     name: 'K', type: 'candlestick', data: candleData,
@@ -1454,18 +1474,23 @@ export function EChartsCandlestick({
       chanlunOverlayRef.current,
       compact,
     )
+    const elliottLineData: any[] = []
     appendElliottMarkPoints(
       markPointData,
-      [],
+      elliottLineData,
       currentDateIndexMap,
       elliottAnalysisRef.current,
       elliottOverlayRef.current,
       compact,
     )
     if (mkrs?.length || (chanlunAnalysisRef.current && chanlunOverlayRef.current?.enabled) || (elliottAnalysisRef.current && elliottOverlayRef.current?.enabled)) {
+      const markLineData: any[] = [...elliottLineData]
+      appendPriceMarkLines(markLineData, priceLines, currentDateIndexMap, linkedPrice, assetType)
+      appendChanlunMarkLines(markLineData, currentDateIndexMap, chanlunAnalysisRef.current, chanlunOverlayRef.current)
       seriesUpdates.push({
         name: 'K',
         markPoint: markPointData.length > 0 ? { data: markPointData, animation: false } : undefined,
+        markLine: markLineData.length > 0 ? { silent: true, symbol: 'none', data: markLineData, animation: false } : undefined,
       })
     }
     if (activeIndicatorsRef.current.includes('vol')) {
