@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import {
+  describeElliottCount,
   elliottPeriodLabel,
   elliottSnapshotFingerprint,
   type ElliottAnalysis,
@@ -17,17 +18,6 @@ import type { OHLC } from '@/components/EChartsCandlestick'
 
 const REFERENCE_URL = 'https://github.com/noahnan-max/elliott-wave-trading-system'
 
-const FAMILY_LABELS: Record<string, string> = {
-  impulse: '普通推动浪',
-  leading_diagonal: '引导楔形',
-  ending_diagonal: '终结楔形',
-  zigzag: '锯齿修正',
-  flat: '平台修正',
-  triangle: '三角形',
-  combination: '组合修正',
-  unknown: '未定形态',
-}
-
 const DIRECTION_LABELS: Record<string, string> = {
   up: '向上',
   down: '向下',
@@ -39,17 +29,13 @@ function countValue(count: ElliottCount | ElliottAssessmentCount | null): Elliot
   return count
 }
 
-function countFamily(count: ElliottCount | ElliottAssessmentCount | null): string {
-  return count ? (FAMILY_LABELS[count.family] ?? count.family) : '暂无主计数'
-}
-
 function countDirection(count: ElliottCount | ElliottAssessmentCount | null): string {
   return count ? (DIRECTION_LABELS[count.direction] ?? count.direction) : '等待更多结构'
 }
 
-function countPivots(count: ElliottCount | ElliottAssessmentCount | null): string {
+function countPivots(count: ElliottCount | ElliottAssessmentCount | null, sequence: string[] = []): string {
   if (!count || count.pivots.length === 0) return '—'
-  return count.pivots.map(pivot => `${pivot.label}${pivot.price != null ? ` ${Number(pivot.price).toFixed(2)}` : ''}`).join(' · ')
+  return count.pivots.map((pivot, index) => `${sequence[index] ?? pivot.label}${pivot.price != null ? ` ${Number(pivot.price).toFixed(2)}` : ''}`).join(' · ')
 }
 
 function listText(values: string[] | undefined, fallback: string): string {
@@ -163,11 +149,11 @@ export function StockElliottPanel({
 
   const localPrimary = countValue(analysis.primaryCount)
   const primary = (aiResult?.primary_count ?? localPrimary) as ElliottCount | ElliottAssessmentCount | null
+  const countDisplay = describeElliottCount(primary)
   const alternateCounts = aiResult?.alternate_counts ?? analysis.alternateCounts
   const rules = aiResult?.hard_rule_checks ?? analysis.hardRuleChecks
   const ruleCounts = ruleSummary(rules)
   const modeLabel = aiResult ? 'AI增强 · 草稿复核' : analysis.definitionMode === 'swing_proxy' ? '波段近似' : '数据不足'
-  const currentStage = primary?.stage ?? '等待更多确认拐点'
   const selectedAsOf = aiResult?.as_of ?? analysis.asOf
   const headerContent = (
     <span className="flex min-w-0 items-start gap-1.5">
@@ -247,11 +233,29 @@ export function StockElliottPanel({
             </div>
           )}
 
-          <div className="grid gap-2 p-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+          <div className="grid grid-cols-1 gap-2 p-2 md:grid-cols-2">
             <WaveCard title="当前计数" tone="amber">
-              <div className="font-medium text-foreground">{primary ? `${primary.label} · ${countFamily(primary)}` : '暂无可用主计数'}</div>
-              <div className="mt-1 text-secondary">{primary ? `${countDirection(primary)} · ${currentStage}` : '等待新的确认拐点'}</div>
-              <div className="mt-1.5 truncate font-mono text-[13px] text-muted" title={countPivots(primary)}>{countPivots(primary)}</div>
+              <div className="font-medium text-foreground">
+                {primary
+                  ? `${countDirection(primary)} · ${countDisplay.title}`
+                  : countDisplay.title}
+              </div>
+              <div className="mt-1 text-secondary">{countDisplay.stage}</div>
+              {countDisplay.sequence.length > 0 && (
+                <div className="mt-2 flex flex-wrap items-center text-[12px]" aria-label={`波浪路径：${countDisplay.sequence.join(' ')}`}>
+                  {countDisplay.sequence.map((item, index) => (
+                    <span key={`${item}-${index}`} className="inline-flex items-center">
+                      {index > 0 && <span className="mx-1 text-muted/60">→</span>}
+                      <span className={`rounded px-1.5 py-0.5 ${index === countDisplay.sequence.length - 1 ? 'bg-[#F59E0B]/20 text-[#FBBF24]' : 'bg-elevated text-secondary'}`}>
+                        {item}
+                      </span>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div className="mt-1.5 truncate font-mono text-[13px] text-muted" title={countPivots(primary, countDisplay.sequence)}>
+                拐点价格：{countPivots(primary, countDisplay.sequence)}
+              </div>
             </WaveCard>
 
             <WaveCard title="备选与歧义" tone={analysis.ambiguity === 'multiple_viable' || aiResult?.ambiguity === 'multiple_viable' ? 'amber' : 'neutral'}>
@@ -260,10 +264,13 @@ export function StockElliottPanel({
               </div>
               <div className="mt-1 text-secondary">
                 {alternateCounts.length > 0
-                  ? alternateCounts.map(count => `${count.label} · ${FAMILY_LABELS[count.family] ?? count.family}`).join('；')
+                  ? alternateCounts.map(count => {
+                    const display = describeElliottCount(count)
+                    return `${display.title} · ${display.stage}`
+                  }).join('；')
                   : '当前没有保留实质不同的备选'}
               </div>
-              <div className="mt-1.5 text-[13px] text-muted">本地代理不会将三段摆动强行命名为具体修正形态</div>
+              <div className="mt-1.5 text-[13px] text-muted">三段摆动只说明 ABC 结构候选，暂不能区分锯齿、平台或三角形等具体修正类型</div>
             </WaveCard>
 
             <WaveCard title="推动浪条件检查" tone={ruleCounts.fail > 0 ? 'danger' : ruleCounts.unknown > 0 ? 'amber' : 'success'}>

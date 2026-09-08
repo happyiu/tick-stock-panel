@@ -159,6 +159,66 @@ export interface ElliottAssessmentRequest {
   local_analysis: ElliottAnalysis
 }
 
+export interface ElliottCountDisplay {
+  pattern: 'five_wave' | 'abc' | 'other' | 'none'
+  title: string
+  stage: string
+  sequence: string[]
+}
+
+const FAMILY_LABELS: Record<ElliottCountFamily, string> = {
+  impulse: '普通推动浪',
+  leading_diagonal: '引导楔形',
+  ending_diagonal: '终结楔形',
+  zigzag: '锯齿修正',
+  flat: '平台修正',
+  triangle: '三角形修正',
+  combination: '组合修正',
+  unknown: '未定形态',
+}
+
+export function elliottFamilyLabel(family: ElliottCountFamily): string {
+  return FAMILY_LABELS[family]
+}
+
+/** 把已有计数翻译成面板文案；不新增计数结论，也不把候选说成已确认。 */
+export function describeElliottCount(count: ElliottCount | ElliottAssessmentCount | null): ElliottCountDisplay {
+  if (!count) return { pattern: 'none', title: '暂无可用主计数', stage: '等待更多确认拐点', sequence: [] }
+
+  const stage = count.stage?.trim()
+  const hasABC = count.pivots.some(pivot => pivot.label === 'A')
+    && count.pivots.some(pivot => pivot.label === 'B')
+    && count.pivots.some(pivot => pivot.label === 'C')
+  const fiveWave = count.family === 'impulse'
+    || count.family === 'leading_diagonal'
+    || count.family === 'ending_diagonal'
+  if (fiveWave) {
+    return {
+      pattern: 'five_wave',
+      title: count.family === 'impulse' ? '五浪推动候选' : `${elliottFamilyLabel(count.family)}五浪候选`,
+      stage: stage && stage !== '五浪端点已观察' ? stage : '第5浪端点已出现，等待反向拐点确认',
+      sequence: ['起点', '1', '2', '3', '4', '5?'],
+    }
+  }
+
+  const abc = count.family === 'zigzag' || count.family === 'flat' || (count.family === 'unknown' && hasABC)
+  if (abc) {
+    return {
+      pattern: 'abc',
+      title: count.family === 'unknown' ? 'ABC修正候选（具体类型未确定）' : `${elliottFamilyLabel(count.family)}候选`,
+      stage: stage && stage !== '三段修正端点候选' ? stage : 'C浪端点已出现，等待后续反向结构确认',
+      sequence: ['起点', 'A', 'B', 'C?'],
+    }
+  }
+
+  return {
+    pattern: 'other',
+    title: `${elliottFamilyLabel(count.family)}候选`,
+    stage: stage || '结构候选，等待更多确认',
+    sequence: count.pivots.map(pivot => pivot.label),
+  }
+}
+
 interface Candidate {
   count: ElliottCount
   rules: ElliottRuleCheck[]

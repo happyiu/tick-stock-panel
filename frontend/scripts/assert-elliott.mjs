@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { analyzeElliott } from '../src/lib/elliott.ts'
+import { analyzeElliott, describeElliottCount } from '../src/lib/elliott.ts'
 
 function makeBars(turns) {
   const bars = []
@@ -32,6 +32,12 @@ assert.equal(bullishAnalysis.primaryCount?.family, 'impulse')
 assert.equal(bullishAnalysis.primaryCount?.direction, 'up')
 assert.equal(bullishAnalysis.hardRuleChecks.filter(rule => rule.result === 'fail').length, 0)
 assert.ok(bullishAnalysis.pivots.every(pivot => pivot.state !== 'projected'))
+assert.deepEqual(describeElliottCount(bullishAnalysis.primaryCount), {
+  pattern: 'five_wave',
+  title: '五浪推动候选',
+  stage: '第5浪端点已出现，等待反向拐点确认',
+  sequence: ['起点', '1', '2', '3', '4', '5?'],
+})
 
 const wave2OriginFailure = analyzeElliott(makeBars([12, 10, 15, 9, 25, 20, 28, 27]), '1d')
 assert.notEqual(wave2OriginFailure.primaryCount?.family, 'impulse')
@@ -49,9 +55,16 @@ const correction = analyzeElliott(makeBars([12, 20, 15, 24, 16, 22]), '1d')
 assert.equal(correction.status, 'ready')
 assert.equal(correction.primaryCount?.family, 'unknown')
 assert.match(correction.primaryCount?.stage ?? '', /修正/)
+assert.deepEqual(describeElliottCount(correction.primaryCount), {
+  pattern: 'abc',
+  title: 'ABC修正候选（具体类型未确定）',
+  stage: 'C浪端点已出现，等待后续反向结构确认',
+  sequence: ['起点', 'A', 'B', 'C?'],
+})
 
 const insufficient = analyzeElliott(bullish.slice(0, 15), '1d')
 assert.equal(insufficient.status, 'insufficient')
+assert.equal(describeElliottCount(insufficient.primaryCount).pattern, 'none')
 
 const cutoff = bullish[28].date
 const prefix = bullish.filter(bar => bar.date <= cutoff)
