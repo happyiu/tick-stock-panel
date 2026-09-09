@@ -308,6 +308,19 @@ def test_explanation_only_keeps_local_evidence_refs(monkeypatch):
     assert "primary_count" not in result.model_dump()
 
 
+def test_explanation_prompt_requires_candidate_type_judgement():
+    local_analysis = {
+        "primaryCount": {"id": "candidate:impulse", "family": "impulse"},
+        "alternateCounts": [{"id": "candidate:zigzag", "family": "zigzag"}],
+    }
+    messages = elliott_service._explanation_prompt(_request(local_analysis=local_analysis))
+    user = json.loads(messages[1]["content"])
+
+    assert "判断当前更支持的类型" in messages[0]["content"]
+    assert "AI判断类型" in messages[0]["content"]
+    assert user["local_analysis"]["primaryCount"]["family"] == "impulse"
+
+
 def test_explanation_repairs_invalid_json_once(monkeypatch):
     responses = iter(["not json", json.dumps(_explanation_payload(), ensure_ascii=False)])
     calls = 0

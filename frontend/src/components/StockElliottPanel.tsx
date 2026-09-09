@@ -237,7 +237,7 @@ export function StockElliottPanel({
               className="inline-flex items-center gap-1 rounded border border-[#F59E0B]/40 bg-[#F59E0B]/10 px-2 py-1 text-[13px] text-[#FBBF24] transition-colors hover:bg-[#F59E0B]/20 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {aiMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
-              {aiMutation.isPending ? '解释中…' : aiResult ? '查看 AI 解释' : 'AI 解释候选'}
+              {aiMutation.isPending ? '判断中…' : aiResult ? '查看 AI 判断' : 'AI 判断类型'}
             </button>
             {aiResult && !aiMutation.isPending && (
               <button
@@ -432,7 +432,7 @@ function AiExplanationDetails({ explanation, analysis }: { explanation: ElliottE
     <div className="mx-2 mb-2 rounded-card border border-[#F59E0B]/30 bg-[#F59E0B]/5 p-2.5">
       <div className="flex items-center gap-1.5 text-[12px] font-medium text-foreground">
         <Sparkles className="h-3.5 w-3.5 text-[#FBBF24]" />
-        AI 候选解释 · 只引用本地事实
+        AI 类型判断与佐证 · 只引用本地事实
         <span className="ml-auto font-mono text-[12px] text-muted">{explanation.explanation_id}</span>
       </div>
       <div className="mt-2 text-[13px] leading-relaxed text-secondary">{explanation.summary || '暂无解释摘要'}</div>
@@ -453,7 +453,7 @@ function AiExplanationDetails({ explanation, analysis }: { explanation: ElliottE
         </div>
       </div>
       <div className="mt-2 border-t border-[#F59E0B]/20 pt-1.5 text-[12px] text-muted">
-        AI 不生成计数、硬规则、价格边界或交易动作；本说明仅供研究。
+        AI 不生成新的计数或硬规则，只在本地候选中判断类型并解释证据；本说明仅供研究。
       </div>
     </div>
   )

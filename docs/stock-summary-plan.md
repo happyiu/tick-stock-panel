@@ -39,7 +39,7 @@
 - 先按 `asOf/selectedBarKey` 截断，再复用已闭合 Chanlun 分型；未闭合尾部最多显示 `suspected`，不进入计数。
 - 候选覆盖普通推动浪、引导/终结楔形、锯齿、平台、三角形和组合结构；三角形与组合结构在端点不足时明确为 `unresolved`。
 - 主计数最多一个、备选最多两个；硬规则失败淘汰候选，`unknown` 不升级为 `pass`；候选 ID、规则 ID、证据 ID 在同一快照内稳定。
-- `POST /api/stock-analysis/elliott/explain` 只解释本地计数与证据引用，不能生成计数、规则、价格边界、概率或交易动作；旧 `/analyze` 接口保留兼容。
+- `POST /api/stock-analysis/elliott/explain` 允许 AI 在本地已有主/备选计数中判断更支持的类型并引用证据佐证，但不能生成新计数、改写规则、生成价格边界、概率或交易动作；旧 `/analyze` 接口保留兼容。
 - 波浪结果只进入 summary 的方向分歧、支持/反对证据和限制说明，不参与买入、减仓、卖出门槛；多周期证据当前为 `unavailable`。
 
 ## 3. 第一阶段：确定性摘要与面板
