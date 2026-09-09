@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, PanelRightOpen, X } from 'lucide-react'
-import { type KlinePeriod, type KlineRow, type FinancialMetricRecord } from '@/lib/api'
+import { ChevronDown, PanelRightOpen, RefreshCw, X } from 'lucide-react'
+import { type KlinePeriod, type KlineResponse, type KlineRow, type FinancialMetricRecord } from '@/lib/api'
 import {
+  canAutoRefreshAnalysis,
   DEFAULT_30M_DAYS,
   DEFAULT_INTRADAY_DAYS,
   defaultKlineRange,
@@ -10,6 +11,7 @@ import {
   klineMinuteQueryOptions,
   klineMinuteRangeQueryOptions,
   klinePeriodQueryOptions,
+  nextThirtyMinuteBoundaryAt,
 } from '@/lib/kline'
 import { StockInfoBar } from '@/components/StockInfoBar'
 import { StockDailyKChart, getDefaultRange, toOHLC } from '@/components/StockDailyKChart'
@@ -20,7 +22,7 @@ import { StockElliottPanel } from '@/components/StockElliottPanel'
 import { StockPriceZonesPanel } from '@/components/StockPriceZonesPanel'
 import { StockSignalRiskPanel } from '@/components/StockSignalRiskPanel'
 import { financialMetricsQueryOptions, useFinancialMetrics } from '@/lib/useFinancials'
-import { useCapabilities } from '@/lib/useSharedQueries'
+import { useCapabilities, useQuoteStatus } from '@/lib/useSharedQueries'
 import type { ChartMarker, ChartPriceBand, ChartPriceLine, ChartRange } from '@/components/EChartsCandlestick'
 import {
   loadInfoFields,
@@ -54,6 +56,22 @@ function previousCalendarDate(value: string): string {
 function clampSplitRatioValue(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_SPLIT_RATIO
   return Math.max(MIN_SPLIT_RATIO, Math.min(MAX_SPLIT_RATIO, value))
+}
+
+function formatAnalysisAsOf(value: string | null, period: KlinePeriod): string {
+  if (!value) return '最新'
+  const normalized = value.replace('T', ' ')
+  return period === '30m' ? normalized.slice(5, 16) : normalized.slice(0, 10)
+}
+
+function formatAnalysisCalculatedAt(value: number | null | undefined): string {
+  if (value == null) return ''
+  return new Intl.DateTimeFormat('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(new Date(value))
 }
 
 function normalizeAnalysisSections(
@@ -130,6 +148,14 @@ interface Props {
   visibleBars?: number | 'all'
 }
 
+interface AnalysisSnapshot {
+  contextKey: string
+  comparisonKey: string
+  response: KlineResponse
+  comparisonResponse?: KlineResponse
+  calculatedAt: number
+}
+
 export { getDefaultRange }
 
 export function StockPanel({
@@ -169,6 +195,8 @@ export function StockPanel({
   const includeTechnicalScores = resolvedRightPaneMode === 'technical'
   const [linkedPrice, setLinkedPrice] = useState<number | null>(null)
   const [selectedBarKey, setSelectedBarKey] = useState<string | null>(null)
+  const [followsLatest, setFollowsLatest] = useState(true)
+  const followsLatestRef = useRef(true)
   const [rightPaneDismissed, setRightPaneDismissed] = useState(false)
   const [chanlunSource, setChanlunSource] = useState<ChanlunStructureSource>('stroke')
   const [multiPeriodExpanded, setMultiPeriodExpanded] = useState(false)
@@ -185,6 +213,10 @@ export function StockPanel({
   const [selectedSignalId, setSelectedSignalId] = useState<string | null>(null)
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null)
   const [splitDragging, setSplitDragging] = useState(false)
+  const setFollowingLatest = useCallback((value: boolean) => {
+    followsLatestRef.current = value
+    setFollowsLatest(value)
+  }, [])
   const splitContainerRef = useRef<HTMLDivElement>(null)
   const dailyPaneRef = useRef<HTMLDivElement>(null)
   const splitDraggingRef = useRef(false)
@@ -218,6 +250,9 @@ export function StockPanel({
   // 财务指标：仅当信息条配置含可见的财务字段且用户具备财务数据能力 (financial) 时才请求
   // 无能力时跳过请求, 避免后端抛 CapabilityDenied (403) 导致 free/starter 档弹错误提示
   const { data: caps } = useCapabilities()
+  const { data: quoteStatus } = useQuoteStatus({
+    enabled: !!symbol && resolvedRightPaneMode === 'technical',
+  })
   const hasFinancialCap = !!caps?.capabilities?.['financial']
   const hasFinanceField = useMemo(
     () => fields.some(f => f.visible && f.source.type === 'builtin'
@@ -275,13 +310,63 @@ export function StockPanel({
     enabled: !!symbol && resolvedRightPaneMode === 'technical' && comparisonPeriod != null,
     staleTime: 30_000,
   })
+  const refetchPeriod = periodKline.refetch
+  const refetchComparison = comparisonKline.refetch
+  const analysisContextKey = `${symbol}|${resolvedRightPaneMode}|${period}|${chartDateRange.start}|${chartDateRange.end}|${periodDays}|${extColumns ?? ''}|${includeTechnicalScores}`
+  const comparisonSnapshotKey = `${comparisonPeriod ?? 'none'}|${comparisonRange.start}|${comparisonRange.end}|${selectedBarKey ?? ''}`
+  const [analysisSnapshot, setAnalysisSnapshot] = useState<AnalysisSnapshot | null>(null)
+  const [analysisRefreshing, setAnalysisRefreshing] = useState(false)
+  const [analysisRefreshError, setAnalysisRefreshError] = useState<Error | null>(null)
+  const analysisRefreshRequestRef = useRef(0)
+  const previousAnalysisContextRef = useRef(analysisContextKey)
+
+  useEffect(() => {
+    if (previousAnalysisContextRef.current === analysisContextKey) return
+    previousAnalysisContextRef.current = analysisContextKey
+    analysisRefreshRequestRef.current += 1
+    setAnalysisSnapshot(null)
+    setAnalysisRefreshing(false)
+    setAnalysisRefreshError(null)
+    setFollowingLatest(true)
+  }, [analysisContextKey, setFollowingLatest])
+
+  // 只在当前周期的真实响应首次到达时建立快照；实时查询后续更新继续留给左图。
+  useEffect(() => {
+    const liveResponse = periodKline.data
+    if (resolvedRightPaneMode !== 'technical' || !liveResponse || periodKline.isPlaceholderData) return
+    setAnalysisSnapshot(previous => {
+      if (previous?.contextKey === analysisContextKey) return previous
+      return {
+        contextKey: analysisContextKey,
+        comparisonKey: comparisonSnapshotKey,
+        response: liveResponse,
+        calculatedAt: Date.now(),
+      }
+    })
+  }, [analysisContextKey, comparisonSnapshotKey, periodKline.data, periodKline.isPlaceholderData, resolvedRightPaneMode])
+
+  const analysisResponse = analysisSnapshot?.contextKey === analysisContextKey
+    ? analysisSnapshot.response
+    : undefined
+  const analysisComparisonResponse = analysisSnapshot?.contextKey === analysisContextKey
+    && analysisSnapshot.comparisonKey === comparisonSnapshotKey
+    ? analysisSnapshot.comparisonResponse
+    : undefined
+  const analysisRows = useMemo(
+    () => toOHLC(analysisResponse?.rows ?? [], period),
+    [analysisResponse?.rows, period],
+  )
+  const analysisAssetType = analysisResponse?.asset_type ?? assetType
+  const analysisLoading = !analysisResponse && (periodKline.isLoading || periodKline.isFetching)
+  const analysisError = analysisRefreshError ?? periodKline.error
+
   const chanlunAnalysis = useMemo(
-    () => analyzeChanlun(periodRows, selectedBarKey, { period, source: chanlunSource }),
-    [chanlunSource, period, periodRows, selectedBarKey],
+    () => analyzeChanlun(analysisRows, selectedBarKey, { period, source: chanlunSource }),
+    [analysisRows, chanlunSource, period, selectedBarKey],
   )
   const elliottAnalysis = useMemo(
-    () => analyzeElliott(periodRows, period, selectedBarKey),
-    [period, periodRows, selectedBarKey],
+    () => analyzeElliott(analysisRows, period, selectedBarKey),
+    [analysisRows, period, selectedBarKey],
   )
   const priceZones: PriceZone[] = useMemo(
     () => buildPriceZones(chanlunAnalysis),
@@ -303,18 +388,18 @@ export function StockPanel({
     if (period !== '1d' && period !== '30m') return null
     return {
       symbol,
-      assetType,
+      assetType: analysisAssetType,
       period,
-      rows: periodRows,
-      technicalScores: periodKline.data?.technical_scores,
-      dataStatus: periodKline.data?.data_status,
-      dataSource: periodKline.data?.source,
+      rows: analysisRows,
+      technicalScores: analysisResponse?.technical_scores,
+      dataStatus: analysisResponse?.data_status,
+      dataSource: analysisResponse?.source,
       selectedDate: selectedBarKey,
     }
-  }, [assetType, period, periodKline.data?.data_status, periodKline.data?.source, periodKline.data?.technical_scores, periodRows, selectedBarKey, symbol])
-  const actionInputKey = `${symbol}|${period}|${chartDateRange.start}|${chartDateRange.end}|${selectedBarKey ?? ''}|${periodKline.dataUpdatedAt}|${periodRows.length}`
-  const actionContextKey = `${symbol}|${period}|${chartDateRange.start}|${chartDateRange.end}`
-  const actionSnapshotKey = `${symbol}|${period}|${chartDateRange.start}|${chartDateRange.end}|${selectedBarKey ?? ''}`
+  }, [analysisAssetType, analysisResponse, analysisRows, period, selectedBarKey, symbol])
+  const actionInputKey = `${symbol}|${period}|${chartDateRange.start}|${chartDateRange.end}|${selectedBarKey ?? ''}|${analysisSnapshot?.calculatedAt ?? 0}|${analysisRows.length}`
+  const actionContextKey = analysisContextKey
+  const actionSnapshotKey = `${analysisContextKey}|${selectedBarKey ?? ''}`
   const actionWorkerRef = useRef<Worker | null>(null)
   const actionWorkerRequestRef = useRef(0)
   const actionResultCacheRef = useRef(new Map<string, ActionSignalResult>())
@@ -380,7 +465,7 @@ export function StockPanel({
   const actionSignals = useMemo(
     () => {
       if (!actionInput || !workerAction) return null
-      // 行情轮询或历史 K 线点选会触发下一次 Worker 计算。保留同一标的、周期和窗口
+      // 快照或历史 K 线点选会触发下一次 Worker 计算。保留同一标的、周期和窗口
       // 的上一份结果，避免计算空窗让行动卡在新旧两套摘要之间闪烁。
       if (workerAction.key === actionInputKey || workerAction.contextKey === actionContextKey) return workerAction.result
       return null
@@ -388,8 +473,8 @@ export function StockPanel({
     [actionContextKey, actionInput, actionInputKey, workerAction],
   )
   const comparisonRows = useMemo(
-    () => comparisonPeriod ? toOHLC(comparisonKline.data?.rows ?? [], comparisonPeriod) : [],
-    [comparisonKline.data?.rows, comparisonPeriod],
+    () => comparisonPeriod ? toOHLC(analysisComparisonResponse?.rows ?? [], comparisonPeriod) : [],
+    [analysisComparisonResponse?.rows, comparisonPeriod],
   )
   const comparisonSelectedDate = useMemo(() => {
     if (!selectedBarKey || !comparisonPeriod) return null
@@ -403,15 +488,15 @@ export function StockPanel({
     if (!comparisonPeriod) return null
     return buildActionSignals({
       symbol,
-      assetType,
+      assetType: analysisAssetType,
       period: comparisonPeriod,
       rows: comparisonRows,
-      technicalScores: comparisonKline.data?.technical_scores,
-      dataStatus: comparisonKline.data?.data_status,
-      dataSource: comparisonKline.data?.source,
+      technicalScores: analysisComparisonResponse?.technical_scores,
+      dataStatus: analysisComparisonResponse?.data_status,
+      dataSource: analysisComparisonResponse?.source,
       selectedDate: comparisonSelectedDate,
     })
-  }, [assetType, comparisonKline.data?.data_status, comparisonKline.data?.source, comparisonKline.data?.technical_scores, comparisonPeriod, comparisonRows, comparisonSelectedDate, symbol])
+  }, [analysisAssetType, analysisComparisonResponse, comparisonPeriod, comparisonRows, comparisonSelectedDate, symbol])
   const actionComparison = useMemo(
     () => actionSignals ? compareActionSignals(actionSignals, comparisonActionSignals) : null,
     [actionSignals, comparisonActionSignals],
@@ -420,17 +505,94 @@ export function StockPanel({
     () => actionSignals ? actionSignalMarkers(actionSignals) : [],
     [actionSignals],
   )
-  const summaryRows = periodKline.data?.rows ?? []
+  const recalculateAnalysis = useCallback(async () => {
+    const requestId = analysisRefreshRequestRef.current + 1
+    analysisRefreshRequestRef.current = requestId
+    setAnalysisRefreshing(true)
+    setAnalysisRefreshError(null)
+    try {
+      const [primaryResult, comparisonResult] = await Promise.all([
+        refetchPeriod(),
+        comparisonPeriod ? refetchComparison() : Promise.resolve(null),
+      ])
+      if (analysisRefreshRequestRef.current !== requestId) return
+      if (primaryResult.error || !primaryResult.data) {
+        throw primaryResult.error ?? new Error('当前周期行情加载失败，无法计算分析。')
+      }
+
+      const comparisonError = comparisonResult?.error ?? null
+      const comparisonResponse = comparisonError ? undefined : comparisonResult?.data
+      const calculatedAt = Date.now()
+      setAnalysisSnapshot(previous => {
+        const previousComparison = previous?.contextKey === analysisContextKey
+          && previous.comparisonKey === comparisonSnapshotKey
+          ? previous.comparisonResponse
+          : undefined
+        return {
+          contextKey: analysisContextKey,
+          comparisonKey: comparisonSnapshotKey,
+          response: primaryResult.data!,
+          comparisonResponse: comparisonResponse ?? previousComparison,
+          calculatedAt,
+        }
+      })
+      if (followsLatestRef.current) {
+        const latestKey = primaryResult.data.rows.at(-1)?.date
+        if (latestKey) setSelectedBarKey(latestKey)
+      }
+      setAnalysisRefreshError(comparisonError)
+    } catch (error) {
+      if (analysisRefreshRequestRef.current === requestId) {
+        setAnalysisRefreshError(error instanceof Error ? error : new Error('分析计算失败，请稍后重试。'))
+      }
+    } finally {
+      if (analysisRefreshRequestRef.current === requestId) setAnalysisRefreshing(false)
+    }
+  }, [analysisContextKey, comparisonPeriod, comparisonSnapshotKey, refetchComparison, refetchPeriod])
+
+  useEffect(() => {
+    const comparisonResponse = comparisonKline.data
+    if (!analysisResponse || !comparisonResponse || comparisonKline.isPlaceholderData) return
+    setAnalysisSnapshot(previous => {
+      if (!previous || previous.contextKey !== analysisContextKey) return previous
+      if (previous.comparisonKey === comparisonSnapshotKey && previous.comparisonResponse === comparisonResponse) return previous
+      return { ...previous, comparisonKey: comparisonSnapshotKey, comparisonResponse }
+    })
+  }, [analysisContextKey, analysisResponse, comparisonKline.data, comparisonKline.isPlaceholderData, comparisonSnapshotKey])
+
+  const autoAnalysisEnabled = canAutoRefreshAnalysis(
+    quoteStatus?.is_trading_hours === true,
+    followsLatest,
+  )
+  useEffect(() => {
+    if (
+      resolvedRightPaneMode !== 'technical'
+      || !symbol
+      || refetchIntervalMs == null
+      || !autoAnalysisEnabled
+      || analysisRefreshing
+    ) return
+    const nextBoundary = nextThirtyMinuteBoundaryAt()
+    if (nextBoundary == null) return
+    const timer = window.setTimeout(() => {
+      if (canAutoRefreshAnalysis(quoteStatus?.is_trading_hours === true, followsLatestRef.current)) {
+        void recalculateAnalysis()
+      }
+    }, Math.max(0, nextBoundary - Date.now()))
+    return () => window.clearTimeout(timer)
+  }, [analysisRefreshing, autoAnalysisEnabled, quoteStatus?.is_trading_hours, recalculateAnalysis, refetchIntervalMs, resolvedRightPaneMode, symbol])
+
+  const summaryRows = analysisResponse?.rows ?? []
   const stockSummary = useMemo(
     () => buildStockSummary({
       symbol,
-      name: kline.data?.name,
-      assetType: kline.data?.asset_type,
+      name: analysisResponse?.name ?? kline.data?.name,
+      assetType: analysisAssetType,
       period,
       rows: summaryRows,
-      technicalScores: periodKline.data?.technical_scores,
-      dataStatus: periodKline.data?.data_status,
-      dataSource: periodKline.data?.source,
+      technicalScores: analysisResponse?.technical_scores,
+      dataStatus: analysisResponse?.data_status,
+      dataSource: analysisResponse?.source,
       selectedBarKey,
       chanlun: chanlunAnalysis,
       elliott: elliottAnalysis,
@@ -442,13 +604,14 @@ export function StockPanel({
     }),
     [
       symbol,
+      analysisResponse?.name,
       kline.data?.name,
-      kline.data?.asset_type,
+      analysisAssetType,
       period,
       summaryRows,
-      periodKline.data?.technical_scores,
-      periodKline.data?.data_status,
-      periodKline.data?.source,
+      analysisResponse?.technical_scores,
+      analysisResponse?.data_status,
+      analysisResponse?.source,
       selectedBarKey,
       chanlunAnalysis,
       elliottAnalysis,
@@ -537,10 +700,18 @@ export function StockPanel({
       ? date.replace('T', ' ').slice(0, 16)
       : date.slice(0, 10)
     setSelectedBarKey(selected)
+    setFollowingLatest(selected === selectableRows.at(-1)?.date)
     setRightPaneDismissed(false)
     // 兼容外部已有的分时自动打开回调，仍只传交易日。
     if (resolvedRightPaneMode === 'intraday') onSelectDate?.(selected.slice(0, 10))
-  }, [onSelectDate, period, resolvedRightPaneMode])
+  }, [onSelectDate, period, resolvedRightPaneMode, selectableRows, setFollowingLatest])
+
+  const handleLatest = useCallback(() => {
+    const latestKey = selectableRows.at(-1)?.date ?? null
+    if (!latestKey) return
+    setFollowingLatest(true)
+    setSelectedBarKey(latestKey)
+  }, [selectableRows, setFollowingLatest])
 
   const clampSplitRatio = useCallback((value: number) => (
     clampSplitRatioValue(value)
@@ -684,22 +855,24 @@ export function StockPanel({
     if (prevSymbol.current === symbol) return
     prevSymbol.current = symbol
     setSelectedBarKey(null)
+    setFollowingLatest(true)
     setLinkedPrice(null)
     setRightPaneDismissed(false)
     setSelectedSignalId(null)
     setSelectedZoneId(null)
-  }, [symbol])
+  }, [setFollowingLatest, symbol])
 
   const prevPeriod = useRef<KlinePeriod>(period)
   useEffect(() => {
     if (prevPeriod.current === period) return
     prevPeriod.current = period
     setSelectedBarKey(null)
+    setFollowingLatest(true)
     setLinkedPrice(null)
     setRightPaneDismissed(false)
     setSelectedSignalId(null)
     setSelectedZoneId(null)
-  }, [period])
+  }, [period, setFollowingLatest])
 
   useEffect(() => {
     setSelectedSignalId(null)
@@ -709,8 +882,11 @@ export function StockPanel({
   // 目标周期数据到达后，如果此前只是用日线占位选中了日期，则回到该周期最新一根。
   useEffect(() => {
     if (resolvedRightPaneMode !== 'technical' || period === '1d' || !periodRows.length || !selectedBarKey) return
-    if (!periodRows.some(row => row.date === selectedBarKey)) setSelectedBarKey(null)
-  }, [period, periodRows, resolvedRightPaneMode, selectedBarKey])
+    if (!periodRows.some(row => row.date === selectedBarKey)) {
+      setSelectedBarKey(null)
+      setFollowingLatest(true)
+    }
+  }, [period, periodRows, resolvedRightPaneMode, selectedBarKey, setFollowingLatest])
 
   // 右侧开启且无选中 K 线时，自动选中最新一根；点击历史 K 线后则保持历史截面。
   useEffect(() => {
@@ -841,26 +1017,43 @@ export function StockPanel({
             )}
             {resolvedRightPaneMode === 'technical' && (
               <div className="h-full min-h-0 overflow-y-auto">
+                <div className="flex items-center justify-between gap-2 border-b border-border/70 px-2.5 py-1.5 text-[13px] text-muted">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <span>截至 {formatAnalysisAsOf(stockSummary.context.asOf, period)}</span>
+                    {analysisRefreshing ? <span>计算中…</span> : analysisSnapshot?.calculatedAt != null && <span>计算于 {formatAnalysisCalculatedAt(analysisSnapshot.calculatedAt)}</span>}
+                    {analysisRefreshError && <span className="text-bear" title={analysisRefreshError.message}>计算失败，保留上次结果</span>}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { void recalculateAnalysis() }}
+                    disabled={analysisRefreshing}
+                    className="shrink-0 rounded-btn p-1 text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-wait disabled:opacity-60"
+                    title="立即计算右侧分析"
+                    aria-label="立即计算右侧分析"
+                  >
+                    <RefreshCw className={`h-3.5 w-3.5 ${analysisRefreshing ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
                 <StockSummaryPanel
                   snapshot={stockSummary}
                   onSelectZone={zone => setSelectedZoneId(current => current === zone.id ? null : zone.id)}
                   onSelectSignal={setSelectedSignalId}
                   onFocusSection={handleSummaryFocus}
-                  onLatest={() => setSelectedBarKey(selectableRows.at(-1)?.date ?? null)}
-                  isLoading={periodKline.isLoading || periodKline.isFetching && !periodKline.data}
-                  error={periodKline.error}
-                  onRetry={() => { void periodKline.refetch() }}
+                  onLatest={handleLatest}
+                  isLoading={analysisLoading}
+                  error={analysisError}
+                  onRetry={() => { void recalculateAnalysis() }}
                 />
                 <StockTechnicalPanel
-                  rows={periodKline.data?.rows ?? []}
-                  technicalScores={periodKline.data?.technical_scores}
+                  rows={analysisResponse?.rows ?? []}
+                  technicalScores={analysisResponse?.technical_scores}
                   period={period}
                   selectedDate={selectedBarKey}
-                  assetType={assetType}
-                  isLoading={periodKline.isLoading || periodKline.isFetching && !periodKline.data}
-                  error={periodKline.error}
-                  onRetry={() => { void periodKline.refetch() }}
-                  onLatest={() => setSelectedBarKey(selectableRows.at(-1)?.date ?? null)}
+                  assetType={analysisAssetType}
+                  isLoading={analysisLoading}
+                  error={analysisError}
+                  onRetry={() => { void recalculateAnalysis() }}
+                  onLatest={handleLatest}
                   collapsed={analysisSections.technicalCollapsed}
                   onToggleCollapsed={() => toggleAnalysisSection('technicalCollapsed')}
                 />
@@ -886,11 +1079,11 @@ export function StockPanel({
                       <StockChanlunPanel
                         analysis={chanlunAnalysis}
                         period={period}
-                        assetType={assetType}
+                        assetType={analysisAssetType}
                         collapsed={analysisSections.chanlunCollapsed}
                         onToggleCollapsed={() => toggleAnalysisSection('chanlunCollapsed')}
-                        isLoading={periodKline.isLoading || periodKline.isFetching && !periodKline.data}
-                        error={periodKline.error}
+                        isLoading={analysisLoading}
+                        error={analysisError}
                         source={chanlunSource}
                         onSourceChange={setChanlunSource}
                         multiPeriodExpanded={multiPeriodExpanded}
@@ -899,9 +1092,9 @@ export function StockPanel({
                       />
                       <StockElliottPanel
                         symbol={symbol}
-                        rows={periodRows}
+                        rows={analysisRows}
                         period={period}
-                        assetType={assetType}
+                        assetType={analysisAssetType}
                         analysis={elliottAnalysis}
                         collapsed={analysisSections.elliottCollapsed}
                         onToggleCollapsed={() => toggleAnalysisSection('elliottCollapsed')}
@@ -912,7 +1105,7 @@ export function StockPanel({
                 <StockPriceZonesPanel
                   analysis={chanlunAnalysis}
                   zones={priceZones}
-                  assetType={assetType}
+                  assetType={analysisAssetType}
                   collapsed={decisionSections.priceZonesCollapsed}
                   onToggleCollapsed={() => toggleDecisionSection('priceZonesCollapsed')}
                   showZones={decisionSections.showPriceZones}
@@ -923,7 +1116,7 @@ export function StockPanel({
                 <StockSignalRiskPanel
                   contexts={signalRiskContexts}
                   period={period}
-                  assetType={assetType}
+                  assetType={analysisAssetType}
                   collapsed={decisionSections.signalRiskCollapsed}
                   onToggleCollapsed={() => toggleDecisionSection('signalRiskCollapsed')}
                   showInvalidationLine={decisionSections.showInvalidationLine}

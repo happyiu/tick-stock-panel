@@ -17,6 +17,8 @@ import {
 } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 
+export { canAutoRefreshAnalysis, nextThirtyMinuteBoundaryAt } from './analysisRefresh'
+
 /** 分时 tab 多日分时默认周期 (StockPanel 预取与弹窗存储回退共用, 避免魔数两处漂移) */
 export const DEFAULT_INTRADAY_DAYS = 10
 export const DEFAULT_30M_DAYS = 20

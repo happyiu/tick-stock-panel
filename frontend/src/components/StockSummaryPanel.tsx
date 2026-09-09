@@ -204,7 +204,6 @@ export function StockSummaryPanel({ snapshot, onSelectZone, onSelectSignal, onFo
             <span className={`rounded border px-1.5 py-0.5 text-[12px] font-semibold ${tone.badge}`}>{snapshot.observation.label}</span>
             <span className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[12px] text-secondary">{PERIOD_LABELS[period]}</span>
           </span>
-          {!collapsed && <span className="mt-0.5 block truncate text-[12px] text-muted">{snapshot.context.historical ? '历史观察 · ' : ''}截至 {shortDate(snapshot.context.asOf, period)} · {snapshot.quality.label}{snapshot.quality.stale ? ' · 过期快照' : ''}</span>}
         </span>
       </div>
       <div className="flex shrink-0 items-center gap-1">

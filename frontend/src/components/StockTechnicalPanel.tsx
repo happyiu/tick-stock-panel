@@ -573,12 +573,6 @@ function persistLayoutConfig(config: StockPreviewTechnicalLayoutConfig) {
   window.dispatchEvent(new CustomEvent('stock-preview-technical-layout-change'))
 }
 
-function formatAsOf(value: string | null, period: KlinePeriod): string {
-  if (!value) return '最新'
-  const normalized = normalizeBarKey(value, period)
-  return period === '30m' ? normalized.slice(5) : normalized
-}
-
 function scoreForDate(scores: TechnicalScores | undefined, selectedDate: string | null, period: KlinePeriod): TechnicalScoreRow | null {
   const rows = scores?.rows ?? []
   if (!rows.length) return null
@@ -695,7 +689,6 @@ export function StockTechnicalPanel({
               </div>
               {!collapsed && (
                 <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[13px] text-muted">
-                  <span>截至 {formatAsOf(score?.as_of ?? selectedDate, period)}</span>
                   <span>置信度 {score?.available ? `${Math.round(score.confidence)}%` : '—'}</span>
                   {score?.volatility_risk != null && <span className="text-warning">波动风险 {score.volatility_risk}</span>}
                   {!isLatest && bars.length > 0 && (
