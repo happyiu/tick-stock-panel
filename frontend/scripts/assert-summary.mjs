@@ -37,7 +37,7 @@ const candidate = {
 }
 const input = {
   symbol: '000001.SZ', name: '测试标的', assetType: 'stock', period: '1d', rows,
-  technicalScores: { version: 'technical-score-v1', rows: [{ as_of: '2026-01-02', direction_score: 72, confidence: 80, coverage: 100, trend: 30, momentum: 70, volume_price: 35, volatility_risk: 40, activity: 60, available: true }] },
+  technicalScores: { version: 'technical-score-v2', rows: [{ as_of: '2026-01-02', direction_score: 72, confidence: 80, coverage: 100, trend: 30, momentum: 70, volume_price: 35, state_confirmation: 50, volatility_risk: 40, activity: 60, available: true }] },
   selectedBarKey: null, chanlun, elliott, priceZones: [candidate.target1], signalRiskContexts: [candidate], preferredSignal: candidate,
 }
 

@@ -54,6 +54,12 @@ export interface ElliottEvidence {
   weight?: string | number | null
 }
 
+export interface ElliottRankingBasis {
+  strict: boolean
+  pivotCount: number
+  supportingEvidence: number
+}
+
 export interface ElliottCount {
   id?: string
   label: string
@@ -61,6 +67,9 @@ export interface ElliottCount {
   family: ElliottCountFamily
   direction: ElliottDirection
   currentWave?: string | null
+  wavePath?: string[]
+  rank?: number
+  rankingBasis?: ElliottRankingBasis
   stage: string
   pivots: ElliottPivot[]
   supportSummary: string[]
@@ -182,13 +191,43 @@ export interface ElliottAssessmentRequest {
   local_analysis: ElliottAnalysis
 }
 
+export interface ElliottExplanationVerdict {
+  candidate_id: string
+  label: string
+  structure_family: string
+  direction: string
+  current_wave: string
+  phase: string
+  plain_text: string
+}
+
+export interface ElliottPrimaryScenario {
+  candidate_id: string
+  current_structure: string
+  current_wave: string
+  interpretation: string
+  next_expected: string
+  supporting_reasons: string[]
+}
+
+export interface ElliottAlternateScenario {
+  candidate_id: string
+  scenario: string
+  interpretation: string
+  difference_from_primary: string
+  becomes_more_likely_if: string
+}
+
 export interface ElliottExplanationResponse {
-  schema: 'elliott.explanation.public.v1' | string
+  schema: 'elliott.explanation.public.v2' | string
   explanation_id: string
   instrument: string
   timeframe: ElliottPeriod
   as_of: string
+  verdict: ElliottExplanationVerdict
   summary: string
+  primary_scenario: ElliottPrimaryScenario | null
+  alternate_scenarios: ElliottAlternateScenario[]
   evidence_refs: string[]
   disagreements: string[]
   limitations: string[]
@@ -511,6 +550,7 @@ function countFromPivots(
     family,
     direction,
     currentWave: labeled.at(-1)?.label ?? null,
+    wavePath: labeled.map(pivot => pivot.label),
     stage,
     pivots: labeled,
     supportSummary: [],
@@ -976,6 +1016,14 @@ export function analyzeElliott(input: OHLC[], period: ElliottPeriod, asOf?: stri
   const viable = uniqueCandidates
     .filter(candidate => !candidate.rules.some(ruleItem => ruleItem.result === 'fail'))
     .sort(compareCandidates)
+  viable.forEach((candidate, index) => {
+    candidate.count.rank = index + 1
+    candidate.count.rankingBasis = {
+      strict: candidate.strict,
+      pivotCount: candidate.count.pivots.length,
+      supportingEvidence: evidenceSupportCount(candidate),
+    }
+  })
   const primary = viable[0] ?? null
   const primaryId = primary?.count.id
   const alternates = viable

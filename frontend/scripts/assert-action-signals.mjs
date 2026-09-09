@@ -25,7 +25,7 @@ function makeBars(count, overrides = {}) {
 
 function scoreRows(bars, overrides = {}) {
   return {
-    version: 'technical-score-v1',
+    version: 'technical-score-v2',
     rows: bars.map((bar, index) => ({
       as_of: bar.date,
       direction_score: overrides[index]?.direction_score ?? 70,

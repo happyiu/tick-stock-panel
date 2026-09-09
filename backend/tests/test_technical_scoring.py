@@ -63,7 +63,7 @@ def _manual_row(day: date, direction: str, *, previous: bool = False) -> dict:
         "momentum_60d": momentum[2],
         "boll_upper": 102.0,
         "boll_lower": 98.0,
-        "vol_ma5": 1000.0,
+        "vol_ma5": 2000.0 if direction != "neutral" else 1000.0,
         "vol_ma10": 1000.0,
         "vol_ratio_5d": 2.0,
         "atr_14": 1.0,
@@ -86,6 +86,7 @@ def test_direction_score_has_clear_bull_bear_neutral_boundaries(direction: str, 
     assert latest["technical_trend_score"] == expected
     assert latest["technical_momentum_score"] == expected
     assert latest["technical_volume_price_score"] == expected
+    assert latest["technical_state_confirmation_score"] == expected
     assert latest["technical_score_available"] is True
     assert 0 <= latest["technical_confidence"] <= 100
     assert 0 <= latest["technical_coverage"] <= 100
@@ -132,7 +133,7 @@ def test_missing_and_invalid_base_data_is_not_reported_as_zero_score():
     assert invalid_row["technical_score_available"] is False
 
 
-def test_missing_direction_dimension_is_renormalized_when_coverage_is_sufficient():
+def test_missing_current_volume_does_not_create_volume_price_direction():
     first_day = date(2026, 1, 1)
     rows = [_manual_row(first_day, "bull", previous=True),
             _manual_row(first_day + timedelta(days=1), "bull")]
@@ -141,7 +142,7 @@ def test_missing_direction_dimension_is_renormalized_when_coverage_is_sufficient
 
     assert result["technical_volume_price_score"] is None
     assert result["technical_direction_score"] == 100
-    assert result["technical_coverage"] == 75
+    assert result["technical_coverage"] == 72
     assert result["technical_score_available"] is True
 
 
@@ -155,7 +156,7 @@ def test_prefix_and_full_history_produce_same_historical_score():
         assert prefix_row[column] == full_row[column], column
 
 
-def test_high_volatility_and_shrinking_volume_reduce_confidence():
+def test_high_volatility_is_independent_from_direction_confidence():
     base_frame = _raw_frame(40, slope=0.1)
     base = score_technical_frame(base_frame).row(-1, named=True)
 
@@ -169,7 +170,7 @@ def test_high_volatility_and_shrinking_volume_reduce_confidence():
     shrinking_volume = score_technical_frame(pl.DataFrame(shrinking_volume_rows)).row(-1, named=True)
 
     assert high_volatility["technical_volatility_risk"] > base["technical_volatility_risk"]
-    assert high_volatility["technical_confidence"] < base["technical_confidence"]
+    assert high_volatility["technical_confidence"] >= base["technical_confidence"]
     assert shrinking_volume["technical_activity_score"] < base["technical_activity_score"]
     assert shrinking_volume["technical_confidence"] < base["technical_confidence"]
 
@@ -183,7 +184,7 @@ def test_payload_is_versioned_and_date_aligned():
     assert payload["rows"][0]["as_of"] == "2026-01-01"
     assert set(payload["rows"][0]) == {
         "as_of", "direction_score", "confidence", "coverage", "trend",
-        "momentum", "volume_price", "volatility_risk", "activity", "available",
+        "momentum", "volume_price", "state_confirmation", "volatility_risk", "activity", "available",
     }
 
 

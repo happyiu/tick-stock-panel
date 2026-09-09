@@ -177,15 +177,51 @@ class ElliottAssessmentError(ValueError):
     """AI 返回无法修复的评估结构。"""
 
 
+class ElliottExplanationVerdict(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    candidate_id: str = ""
+    label: str = "无法确定"
+    structure_family: str = "无法确定"
+    direction: str = "无法确定"
+    current_wave: str = "无法确定"
+    phase: str = "无法确定"
+    plain_text: str = "无法确定"
+
+
+class ElliottPrimaryScenario(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    candidate_id: str = ""
+    current_structure: str = ""
+    current_wave: str = "无法确定"
+    interpretation: str = ""
+    next_expected: str = ""
+    supporting_reasons: list[str] = Field(default_factory=list, max_length=8)
+
+
+class ElliottAlternateScenario(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    candidate_id: str = ""
+    scenario: str = ""
+    interpretation: str = ""
+    difference_from_primary: str = ""
+    becomes_more_likely_if: str = ""
+
+
 class ElliottExplanation(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    schema: Literal["elliott.explanation.public.v1"] = "elliott.explanation.public.v1"
+    schema: Literal["elliott.explanation.public.v2"] = "elliott.explanation.public.v2"
     explanation_id: str = Field(min_length=1)
     instrument: str = Field(min_length=1)
     timeframe: ElliottPeriod
     as_of: str = Field(min_length=1)
+    verdict: ElliottExplanationVerdict = Field(default_factory=ElliottExplanationVerdict)
     summary: str = ""
+    primary_scenario: ElliottPrimaryScenario | None = None
+    alternate_scenarios: list[ElliottAlternateScenario] = Field(default_factory=list, max_length=2)
     evidence_refs: list[str] = Field(default_factory=list, max_length=12)
     disagreements: list[str] = Field(default_factory=list, max_length=8)
     limitations: list[str] = Field(default_factory=list, max_length=8)
@@ -203,22 +239,37 @@ _EXPLANATION_BLOCKED_TERMS = (
 )
 
 
-_EXPLANATION_SYSTEM_PROMPT = """你是一个只做研究记录的艾略特波浪解释器。输入中的 local_analysis 是确定性引擎已经生成的事实。
-只返回 JSON，不要输出 Markdown、代码围栏或交易建议。
+_EXPLANATION_SYSTEM_PROMPT = """你是一个“艾略特波浪结构路径解释器”，只做研究记录。
 
-规则：
-1. local_analysis 是确定性引擎计算出的候选和证据。可以在已有的 primaryCount、alternateCounts 候选中判断当前更支持的类型（family）；没有可用候选或证据不足时必须写“无法确定”。不得创造新类型、新候选或改写本地计数和硬规则。
-2. summary 必须明确写出“AI判断类型：...”或“AI判断类型：无法确定”，并用已有证据说明支持、冲突和限制；这只是对本地候选的解释性佐证，不改变 primaryCount、alternateCounts 或 hardRuleChecks。
-3. 只能引用 local_analysis 中已有的 evidence id 和 source_refs；不得编造引用。
-4. 只能解释主计数、备选、硬规则结果、独立证据、歧义和限制。
-5. 不得输出概率、胜率、买入、减仓、卖出、仓位或订单动作。
-6. 不得使用 as_of 之后的数据；多周期证据保持不可用。
-7. 输出键必须为：
-schema, explanation_id, instrument, timeframe, as_of, summary, evidence_refs,
-disagreements, limitations, confirmation, invalidation, recount_conditions,
-next_observation, source_refs, research_only。
-8. research_only 必须为 true。
-"""
+输入中的 local_analysis 来自确定性艾略特波浪引擎。primaryCount、alternateCounts、rank、rankingBasis、wavePath、currentWave、stage、hardRuleChecks、证据和观察边界都是事实。
+
+你的任务不是重新数浪，而是把本地候选翻译成普通投资者容易理解的结构路径：当前是什么结构、当前更支持哪一浪、该浪属于上涨/下跌/调整、如果主计数继续成立接下来观察什么、有哪些备选以及什么条件会使主备判断切换。
+
+严格规则：
+1. 候选名次由确定性引擎决定。rank=1 的 primaryCount 是唯一主判断；rank=2、rank=3 的 alternateCounts 才能作为备选。不得改排名、创造候选或修改本地计数、硬规则和证据。
+2. candidate_id 必须来自对应本地候选；primary_scenario 必须引用 rank=1，alternate_scenarios 只能引用 rank=2/3。没有可用主候选时，verdict 和 summary 必须明确写“无法确定”，primary_scenario 为 null。
+3. current_wave、wavePath/current_wave、structure_family/direction 必须与对应本地候选一致。local_analysis 只有 C 浪时不得扩展成 C3；没有 parentWave/subWave 时不得自行补出子浪。推动结构使用 1、2、3、4、5，调整结构使用 A、B、C，不得创造第 6 浪。
+4. phase 只能依据本地 stage、确认状态和已有证据判断；证据不足时写“无法确定”。
+5. 必须先给结论再解释原因。summary 用 2～4 句话直接说明“AI判断：……”，不要以 evidence id 开头。证据编号放入 evidence_refs。
+6. primary_scenario 要说明当前结构、当前位置、解释、后续结构路径和支持原因。next_expected 是结构观察，不是价格预测。
+7. 每个 alternate_scenario 要说明它认为当前是什么浪、与主方案的主要差异，以及什么已有条件出现后其重要性会上升；不要只返回候选名称。
+8. confirmation、invalidation、recount_conditions、next_observation 只能改写 local_analysis 已有的条件、硬规则和关键结构点，不得自行创造价格边界。
+9. 不得自行编造概率、胜率、分数含义、目标价、支撑位、阻力位、止损、止盈或任何买卖/仓位/订单动作。rank 只是名次，不是概率；只能说“当前最支持”“次选”“暂时无法明显区分”。
+10. 只能引用 local_analysis 中已有的 evidence id 和 source_refs，不得编造引用；不得使用 as_of 之后的数据，多周期证据保持不可用。
+11. 只返回合法 JSON，不要输出 Markdown、代码围栏或额外文字。
+
+JSON 的 schema 必须是 elliott.explanation.public.v2。
+
+输出键必须为：
+schema, explanation_id, instrument, timeframe, as_of, verdict, summary,
+primary_scenario, alternate_scenarios, confirmation, invalidation,
+recount_conditions, next_observation, evidence_refs, disagreements,
+limitations, source_refs, research_only。
+
+verdict 结构必须包含：candidate_id、label、structure_family、direction、current_wave、phase、plain_text。
+primary_scenario 结构必须包含：candidate_id、current_structure、current_wave、interpretation、next_expected、supporting_reasons。
+alternate_scenarios 每项必须包含：candidate_id、scenario、interpretation、difference_from_primary、becomes_more_likely_if。
+research_only 必须为 true。"""
 
 
 _SYSTEM_PROMPT = """你是一个只做研究记录的艾略特波浪结构分析器。请基于给定的点时 OHLCV 和本地摆动代理，生成一个 JSON 对象，不要输出 Markdown、代码围栏或交易建议。
@@ -429,18 +480,96 @@ def _local_source_refs(local_analysis: dict[str, Any]) -> set[str]:
     return {item for item in refs if isinstance(item, str)} if isinstance(refs, list) else set()
 
 
+def _local_counts(local_analysis: dict[str, Any]) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    primary = local_analysis.get("primaryCount", local_analysis.get("primary_count"))
+    alternates = local_analysis.get("alternateCounts", local_analysis.get("alternate_counts"))
+    return (
+        primary if isinstance(primary, dict) else None,
+        [item for item in alternates if isinstance(item, dict)] if isinstance(alternates, list) else [],
+    )
+
+
+def _local_count_value(count: dict[str, Any], key: str, default: Any = None) -> Any:
+    camel_key = {
+        "candidate_id": "candidateId",
+        "current_wave": "currentWave",
+        "wave_path": "wavePath",
+        "ranking_basis": "rankingBasis",
+        "next_observation": "nextObservation",
+    }.get(key)
+    value = count.get(key)
+    if value is None and camel_key:
+        value = count.get(camel_key)
+    if value is None and key == "candidate_id":
+        value = count.get("id")
+    return default if value is None else value
+
+
+def _local_candidate_ranking(local_analysis: dict[str, Any]) -> list[dict[str, Any]]:
+    primary, alternates = _local_counts(local_analysis)
+    counts = ([primary] if primary else []) + alternates
+    return [{
+        "rank": count.get("rank"),
+        "candidate_id": _local_count_value(count, "candidate_id"),
+        "family": count.get("family"),
+        "direction": count.get("direction"),
+        "current_wave": _local_count_value(count, "current_wave"),
+        "wave_path": _local_count_value(count, "wave_path", []),
+        "stage": count.get("stage"),
+        "ranking_basis": _local_count_value(count, "ranking_basis", {}),
+    } for count in counts]
+
+
+_EXPLANATION_FAMILY_LABELS = {
+    "impulse": "推动结构",
+    "leading_diagonal": "推动结构",
+    "ending_diagonal": "推动结构",
+    "zigzag": "调整结构",
+    "flat": "调整结构",
+    "triangle": "三角形调整",
+    "combination": "复杂调整",
+    "unknown": "无法确定",
+}
+_EXPLANATION_DIRECTION_LABELS = {
+    "up": "上涨",
+    "down": "下跌",
+    "sideways": "横向调整",
+    "mixed": "混合方向",
+}
+_EXPLANATION_PHASES = {"起始阶段", "延伸阶段", "末段", "完成待确认", "无法确定"}
+
+
+def _candidate_label(count: dict[str, Any] | None) -> str:
+    if not count:
+        return "无法确定"
+    direction = _EXPLANATION_DIRECTION_LABELS.get(str(count.get("direction")), "无法确定")
+    current_wave = _local_count_value(count, "current_wave")
+    if not isinstance(current_wave, str) or not current_wave.strip():
+        return direction if direction != "无法确定" else "无法确定"
+    return f"{direction} {current_wave.strip()}浪"
+
+
+def _candidate_structure(count: dict[str, Any] | None) -> str:
+    if not count:
+        return "无法确定"
+    family = _EXPLANATION_FAMILY_LABELS.get(str(count.get("family")), "无法确定")
+    direction = _EXPLANATION_DIRECTION_LABELS.get(str(count.get("direction")), "无法确定")
+    return f"{family}，{direction}方向"
+
+
 def _explanation_prompt(req: ElliottAnalyzeRequest, *, repair: str | None = None) -> list[dict[str, str]]:
     user: dict[str, Any] = {
         "symbol": req.symbol,
         "period": req.period,
         "as_of": req.as_of,
         "price_basis": req.price_basis,
+        "candidate_ranking": _local_candidate_ranking(req.local_analysis),
         "local_analysis": req.local_analysis,
     }
     if repair:
         user = {
             "original_invalid_output": repair,
-            "repair_instruction": "只返回符合要求的完整 JSON；不得输出计数、规则、价格边界或交易动作。",
+            "repair_instruction": "只返回符合 elliott.explanation.public.v2 的完整 JSON；不得输出计数、规则、价格边界或交易动作。",
             **user,
         }
     return [
@@ -452,13 +581,75 @@ def _explanation_prompt(req: ElliottAnalyzeRequest, *, repair: str | None = None
 def _enforce_explanation_safety(payload: dict[str, Any], req: ElliottAnalyzeRequest) -> ElliottExplanation:
     local_evidence = _local_evidence_ids(req.local_analysis)
     local_sources = _local_source_refs(req.local_analysis)
+    primary, alternates = _local_counts(req.local_analysis)
+    raw_verdict = payload.get("verdict") if isinstance(payload.get("verdict"), dict) else {}
+    primary_id = _local_count_value(primary, "candidate_id", "") if primary else ""
+    current_wave = _local_count_value(primary, "current_wave", "无法确定") if primary else "无法确定"
+    if not isinstance(current_wave, str) or not current_wave.strip():
+        current_wave = "无法确定"
+    phase = _safe_explanation_text(raw_verdict.get("phase"))
+    if phase not in _EXPLANATION_PHASES:
+        phase = "无法确定"
+    label = _candidate_label(primary)
+    raw_plain_text = _safe_explanation_text(raw_verdict.get("plain_text"))
+    if not raw_plain_text:
+        raw_plain_text = f"当前最支持本地排名 #1 的{label}。" if primary else "当前没有可用的本地主计数，无法确定波浪路径。"
+
+    normalized_primary = None
+    if primary:
+        raw_primary = payload.get("primary_scenario") if isinstance(payload.get("primary_scenario"), dict) else {}
+        local_next = _local_count_value(primary, "next_observation", [])
+        local_next_text = local_next[0] if isinstance(local_next, list) and local_next and isinstance(local_next[0], str) else ""
+        normalized_primary = {
+            "candidate_id": primary_id if isinstance(primary_id, str) else "",
+            "current_structure": _safe_explanation_text(raw_primary.get("current_structure")) or _candidate_structure(primary),
+            "current_wave": current_wave,
+            "interpretation": _safe_explanation_text(raw_primary.get("interpretation")),
+            "next_expected": _safe_explanation_text(raw_primary.get("next_expected")) or _safe_explanation_text(local_next_text),
+            "supporting_reasons": _safe_explanation_list(raw_primary.get("supporting_reasons")),
+        }
+
+    alternate_ids = {
+        _local_count_value(count, "candidate_id")
+        for count in alternates
+        if isinstance(_local_count_value(count, "candidate_id"), str) and _local_count_value(count, "candidate_id")
+    }
+    normalized_alternates = []
+    raw_alternates = payload.get("alternate_scenarios")
+    if isinstance(raw_alternates, list):
+        for raw_alternate in raw_alternates[:2]:
+            if not isinstance(raw_alternate, dict):
+                continue
+            candidate_id = raw_alternate.get("candidate_id")
+            if not isinstance(candidate_id, str) or candidate_id not in alternate_ids:
+                continue
+            normalized_alternates.append({
+                "candidate_id": candidate_id,
+                "scenario": _safe_explanation_text(raw_alternate.get("scenario")),
+                "interpretation": _safe_explanation_text(raw_alternate.get("interpretation")),
+                "difference_from_primary": _safe_explanation_text(raw_alternate.get("difference_from_primary")),
+                "becomes_more_likely_if": _safe_explanation_text(raw_alternate.get("becomes_more_likely_if")),
+            })
+
+    verdict = {
+        "candidate_id": primary_id if isinstance(primary_id, str) else "",
+        "label": label,
+        "structure_family": _EXPLANATION_FAMILY_LABELS.get(str(primary.get("family")), "无法确定") if primary else "无法确定",
+        "direction": _EXPLANATION_DIRECTION_LABELS.get(str(primary.get("direction")), "无法确定") if primary else "无法确定",
+        "current_wave": current_wave,
+        "phase": phase,
+        "plain_text": raw_plain_text,
+    }
     normalized = {
-        "schema": "elliott.explanation.public.v1",
+        "schema": "elliott.explanation.public.v2",
         "explanation_id": str(payload.get("explanation_id") or f"explanation-{uuid.uuid4().hex[:12]}"),
         "instrument": req.symbol,
         "timeframe": req.period,
         "as_of": req.as_of,
+        "verdict": verdict,
         "summary": _safe_explanation_text(payload.get("summary")),
+        "primary_scenario": normalized_primary,
+        "alternate_scenarios": normalized_alternates,
         "evidence_refs": [item for item in _string_list(payload.get("evidence_refs"), 12) if item in local_evidence],
         "disagreements": _safe_explanation_list(payload.get("disagreements")),
         "limitations": _safe_explanation_list(payload.get("limitations")),
@@ -470,7 +661,11 @@ def _enforce_explanation_safety(payload: dict[str, Any], req: ElliottAnalyzeRequ
         "research_only": True,
     }
     if not normalized["summary"]:
-        normalized["summary"] = "AI 未提供可用解释；请以本地确定性计数和证据为准。"
+        normalized["summary"] = (
+            f"AI判断：当前最支持{label}。请结合主判断的后续结构观察和备选切换条件理解本次解释。"
+            if primary
+            else "AI判断：无法确定。当前没有通过本地硬规则的有效主计数，请以确定性结果和后续确认拐点为准。"
+        )
     return ElliottExplanation.model_validate(normalized)
 
 

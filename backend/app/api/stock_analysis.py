@@ -208,7 +208,7 @@ async def analyze_elliott_wave(req: ElliottAnalyzeRequest):
 
 @router.post("/elliott/explain", response_model=ElliottExplanation)
 async def explain_elliott_wave(req: ElliottAnalyzeRequest):
-    """艾略特波浪 AI 解释, 计数、规则和价格事实必须来自详情页本地结果。"""
+    """艾略特波浪 AI v2 解释；计数、排名、规则和价格事实必须来自详情页本地结果。"""
     if not ai_configured():
         raise HTTPException(status_code=503, detail="AI 未配置; 请在设置页配置 API Key 与接口地址")
     try:

@@ -33,6 +33,13 @@ assert.equal(bullishAnalysis.definitionMode, 'strict_elliott')
 assert.equal(bullishAnalysis.primaryCount?.family, 'impulse')
 assert.equal(bullishAnalysis.primaryCount?.direction, 'up')
 assert.ok(bullishAnalysis.primaryCount?.id)
+assert.equal(bullishAnalysis.primaryCount?.rank, 1)
+assert.deepEqual(bullishAnalysis.primaryCount?.wavePath, ['0', '1', '2', '3', '4', '5'])
+assert.deepEqual(bullishAnalysis.primaryCount?.rankingBasis, {
+  strict: true,
+  pivotCount: 6,
+  supportingEvidence: bullishAnalysis.primaryCount?.rankingBasis?.supportingEvidence,
+})
 assert.deepEqual(bullishAnalysis.primaryCount?.pivots.map(pivot => pivot.label), ['0', '1', '2', '3', '4', '5'])
 assert.ok(bullishAnalysis.hardRuleChecks.every(rule => rule.candidateId))
 assert.ok(bullishAnalysis.guidelineEvidence.every(item => item.id))
@@ -43,6 +50,12 @@ assert.equal(bullishAnalysis.hardRuleChecks.filter(rule => rule.result === 'fail
 assert.ok(bullishAnalysis.pivots.every(pivot => pivot.state !== 'projected'))
 assert.deepEqual(analyzeElliott(bullish, '1d').primaryCount?.id, bullishAnalysis.primaryCount?.id)
 assert.deepEqual(analyzeElliott(bullish, '1d').alternateCounts.map(count => count.id), bullishAnalysis.alternateCounts.map(count => count.id))
+const rankedBullish = [bullishAnalysis.primaryCount, ...bullishAnalysis.alternateCounts].filter(Boolean)
+assert.deepEqual(rankedBullish.map(count => count.rank), rankedBullish.map((_, index) => index + 1))
+assert.deepEqual(
+  analyzeElliott(bullish, '1d').alternateCounts.map(count => ({ id: count.id, rank: count.rank, basis: count.rankingBasis })),
+  bullishAnalysis.alternateCounts.map(count => ({ id: count.id, rank: count.rank, basis: count.rankingBasis })),
+)
 assert.equal(bullishAnalysis.alternateCounts.some(count => count.family === 'triangle' || count.family === 'combination'), false)
 assert.deepEqual(describeElliottCount(bullishAnalysis.primaryCount), {
   pattern: 'five_wave',
@@ -66,6 +79,8 @@ assert.ok(wave4Overlap.hardRuleChecks.some(rule => rule.ruleId === 'impulse.wave
 const correction = analyzeElliott(makeBars([12, 20, 15, 24, 16, 22]), '1d')
 assert.equal(correction.status, 'ready')
 assert.equal(correction.primaryCount?.family, 'unknown')
+assert.deepEqual(correction.primaryCount?.wavePath, ['0', 'A', 'B', 'C'])
+assert.equal(correction.primaryCount?.rank, 1)
 assert.match(correction.primaryCount?.stage ?? '', /修正/)
 assert.equal(correction.definitionMode, 'structure_proxy')
 assert.ok(correction.hardRuleChecks.some(rule => rule.result === 'unknown'))
@@ -80,6 +95,7 @@ assert.deepEqual(describeElliottCount(correction.primaryCount), {
 const zigzag = analyzeElliott(makeBars([30, 12, 20, 15, 24, 10]), '1d')
 assert.equal(zigzag.primaryCount?.family, 'zigzag')
 assert.equal(zigzag.primaryCount?.currentWave, 'C')
+assert.deepEqual(zigzag.primaryCount?.wavePath, ['0', 'A', 'B', 'C'])
 assert.ok(zigzag.hardRuleChecks.some(rule => rule.ruleId === 'zigzag.c_extends_a' && rule.result === 'pass'))
 assert.equal(describeElliottCount(zigzag.primaryCount).title, '锯齿修正候选')
 

@@ -276,13 +276,14 @@ export interface TechnicalScoreRow {
   trend: number | null
   momentum: number | null
   volume_price: number | null
+  state_confirmation?: number | null
   volatility_risk: number | null
   activity: number | null
   available: boolean
 }
 
 export interface TechnicalScores {
-  version: 'technical-score-v1' | string
+  version: 'technical-score-v1' | 'technical-score-v2' | string
   rows: TechnicalScoreRow[]
 }
 
@@ -3261,7 +3262,7 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  /** 艾略特波浪 AI 只读解释；计数、规则和价格边界以 local_analysis 为准。 */
+  /** 艾略特波浪 AI v2 只读解释；计数、排名、规则和价格边界以 local_analysis 为准。 */
   elliottExplain: (body: ElliottAssessmentRequest) =>
     request<ElliottExplanationResponse>('/api/stock-analysis/elliott/explain', {
       method: 'POST',

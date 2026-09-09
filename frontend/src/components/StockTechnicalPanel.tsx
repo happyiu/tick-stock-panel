@@ -14,7 +14,7 @@ import {
 import { fmtAssetPrice, fmtPct, fmtVolume } from '@/lib/format'
 
 type Tone = 'bull' | 'bear' | 'neutral'
-type ScoreKind = 'direction' | 'risk' | 'activity'
+type ScoreKind = 'direction' | 'risk'
 
 interface TechnicalMetric {
   label: string
@@ -29,6 +29,7 @@ interface TechnicalIndicatorModel {
   status: string
   tone: Tone
   metrics: TechnicalMetric[]
+  summary?: string
   detail: string
 }
 
@@ -39,7 +40,7 @@ interface TechnicalIndicatorDef {
 }
 
 interface TechnicalGroupDef {
-  key: 'trend' | 'momentum' | 'volume_price' | 'volatility' | 'activity'
+  key: 'trend' | 'momentum' | 'volume_price' | 'environment'
   label: string
   description: string
   scoreKind: ScoreKind
@@ -78,23 +79,16 @@ const GROUP_DEFS: TechnicalGroupDef[] = [
   {
     key: 'volume_price',
     label: '量价',
-    description: '价格变化是否得到成交量确认',
+    description: '价格、当前放量与量能持续性',
     scoreKind: 'direction',
-    indicatorKeys: ['volume_price'],
+    indicatorKeys: ['volume_price', 'volume_ratio', 'volume_trend'],
   },
   {
-    key: 'volatility',
-    label: '波动风险',
-    description: '波动水平只表示风险，不代表多空方向',
+    key: 'environment',
+    label: '市场环境',
+    description: '波动与流动性只作独立风险观察',
     scoreKind: 'risk',
     indicatorKeys: ['atr', 'boll_width'],
-  },
-  {
-    key: 'activity',
-    label: '成交活跃度',
-    description: '相对量能用于判断信号可信度',
-    scoreKind: 'activity',
-    indicatorKeys: ['volume_ratio', 'volume_trend'],
   },
 ]
 
@@ -276,6 +270,7 @@ function buildIndicator(
         ...def,
         status,
         tone: status.includes('多头') ? 'bull' : status.includes('空头') ? 'bear' : 'neutral',
+        summary: status,
         metrics: [
           { label: 'MA5', value: fmtAssetPrice(ma5, assetType) },
           { label: 'MA20', value: fmtAssetPrice(ma20, assetType) },
@@ -299,17 +294,21 @@ function buildIndicator(
         ? '样本不足'
         : available.every(value => value > 0) ? '整体上行'
           : available.every(value => value < 0) ? '整体下行' : '方向分化'
+      const shortStatus = slopes[0] == null ? '短线未知' : Math.abs(slopes[0]) < 0.0001 ? '短线走平' : slopes[0] > 0 ? '短线向上' : '短线向下'
+      const medium = slopes.slice(1).filter((value): value is number => value != null)
+      const mediumStatus = !medium.length ? '中期未知' : medium.every(value => value > 0) ? '中期向上' : medium.every(value => value < 0) ? '中期向下' : '中期分化'
       return {
         ...def,
         status,
         tone: status === '整体上行' ? 'bull' : status === '整体下行' ? 'bear' : 'neutral',
+        summary: shortStatus + ' · ' + mediumStatus,
         metrics: [
           { label: 'MA5斜率', value: fmtUnsignedPct(slopes[0]), tone: toneForChange(slopes[0]) },
           { label: 'MA20斜率', value: fmtUnsignedPct(slopes[1]), tone: toneForChange(slopes[1]) },
           { label: 'MA60斜率', value: fmtUnsignedPct(slopes[2]), tone: toneForChange(slopes[2]) },
           { label: '方向', value: status },
         ],
-        detail: !available.length ? '需要当前与上一周期的均线值' : '斜率按当前 K 线周期计算，不混用日历天数',
+        detail: !available.length ? '需要当前与上一周期的均线值' : shortStatus + ' · ' + mediumStatus + '；斜率按当前 K 线周期计算',
       }
     }
 
@@ -331,6 +330,7 @@ function buildIndicator(
         ...def,
         status: !complete ? '样本不足' : cross ?? (dif! >= dea! ? 'DIF在DEA上方' : 'DIF在DEA下方'),
         tone,
+        summary: !complete ? '样本不足' : [histogramState, zeroAxis].filter(Boolean).join(' · ') || '柱体方向暂未变化',
         metrics: [
           { label: 'DIF', value: fmtIndicator(dif, 3) },
           { label: 'DEA', value: fmtIndicator(dea, 3) },
@@ -355,6 +355,7 @@ function buildIndicator(
         ...def,
         status,
         tone,
+        summary: !complete ? '样本不足' : [status, direction].filter(Boolean).join(' · '),
         metrics: [
           { label: 'RSI6', value: fmtIndicator(rsi6, 1) },
           { label: 'RSI14', value: fmtIndicator(rsi14, 1), tone },
@@ -378,6 +379,7 @@ function buildIndicator(
         ...def,
         status,
         tone,
+        summary: !complete ? '样本不足' : [status, cross].filter(Boolean).join(' · '),
         metrics: [
           { label: 'K', value: fmtIndicator(k, 1) },
           { label: 'D', value: fmtIndicator(d, 1) },
@@ -402,6 +404,7 @@ function buildIndicator(
         ...def,
         status,
         tone: status === '动能向上' ? 'bull' : status === '动能向下' ? 'bear' : 'neutral',
+        summary: status,
         metrics: [
           { label: '5周期', value: fmtPct(values[0]), tone: toneForChange(values[0]) },
           { label: '20周期', value: fmtPct(values[1]), tone: toneForChange(values[1]) },
@@ -426,6 +429,7 @@ function buildIndicator(
         ...def,
         status,
         tone,
+        summary: status,
         metrics: [
           { label: '量比', value: fmtRatio(ratio) },
           { label: '成交方向', value: priceChange == null ? '—' : priceChange >= 0 ? '上涨' : '下跌', tone },
@@ -450,6 +454,7 @@ function buildIndicator(
         ...def,
         status,
         tone: 'neutral',
+        summary: status,
         metrics: [
           { label: 'ATR14', value: fmtAssetPrice(atr, assetType) },
           { label: 'ATR/价', value: fmtUnsignedPct(atrPct) },
@@ -479,6 +484,7 @@ function buildIndicator(
         ...def,
         status,
         tone: 'neutral',
+        summary: status,
         metrics: [
           { label: '上轨', value: fmtAssetPrice(upper, assetType) },
           { label: '中轨', value: fmtAssetPrice(middle, assetType) },
@@ -498,13 +504,14 @@ function buildIndicator(
         ...def,
         status,
         tone: 'neutral',
+        summary: ratio == null ? '样本不足' : status + ' · 量比 ' + fmtRatio(ratio),
         metrics: [
           { label: '量比', value: fmtRatio(ratio) },
           { label: 'VOL5', value: fmtVolume(vol5) },
           { label: '前5均量', value: fmtVolume(previousAverage) },
           { label: '状态', value: status },
         ],
-        detail: ratio == null ? '需要当前量及前 5 个周期成交量' : '量比用于成交活跃度分，不直接表示上涨或下跌',
+        detail: ratio == null ? '需要当前量及前 5 个周期成交量' : '量比用于量价与量能持续性观察，不直接表示上涨或下跌',
       }
     }
 
@@ -517,13 +524,14 @@ function buildIndicator(
         ...def,
         status,
         tone: 'neutral',
+        summary: relative == null ? '样本不足' : status + ' · VOL5/VOL10 ' + fmtRatio(relative),
         metrics: [
           { label: 'VOL5', value: fmtVolume(vol5) },
           { label: 'VOL10', value: fmtVolume(vol10) },
           { label: 'VOL5/VOL10', value: fmtRatio(relative) },
           { label: '状态', value: status },
         ],
-        detail: relative == null ? '需要至少 10 个当前周期成交量样本' : '短期均量与中期均量的相对变化用于活跃度分',
+        detail: relative == null ? '需要至少 10 个当前周期成交量样本' : '短期均量与中期均量的相对变化用于量能持续性观察',
       }
     }
   }
@@ -573,13 +581,133 @@ function persistLayoutConfig(config: StockPreviewTechnicalLayoutConfig) {
   window.dispatchEvent(new CustomEvent('stock-preview-technical-layout-change'))
 }
 
-function scoreForDate(scores: TechnicalScores | undefined, selectedDate: string | null, period: KlinePeriod): TechnicalScoreRow | null {
+function scoreIndexForDate(scores: TechnicalScores | undefined, selectedDate: string | null, period: KlinePeriod): number {
   const rows = scores?.rows ?? []
-  if (!rows.length) return null
+  if (!rows.length) return -1
   const selectedKey = selectedDate ? normalizeBarKey(selectedDate, period) : ''
-  return selectedKey
-    ? rows.find(row => normalizeBarKey(row.as_of, period) === selectedKey) ?? null
-    : rows.at(-1) ?? null
+  return selectedKey ? rows.findIndex(row => normalizeBarKey(row.as_of, period) === selectedKey) : rows.length - 1
+}
+
+function scoreForDate(scores: TechnicalScores | undefined, selectedDate: string | null, period: KlinePeriod): TechnicalScoreRow | null {
+  const index = scoreIndexForDate(scores, selectedDate, period)
+  return index >= 0 ? scores?.rows[index] ?? null : null
+}
+
+function previousScoreForDate(scores: TechnicalScores | undefined, selectedDate: string | null, period: KlinePeriod): TechnicalScoreRow | null {
+  const index = scoreIndexForDate(scores, selectedDate, period)
+  return index > 0 ? scores?.rows[index - 1] ?? null : null
+}
+
+function scoreDelta(current: number | null | undefined, previous: number | null | undefined): number | null {
+  return current != null && previous != null ? current - previous : null
+}
+
+function scoreChangeLabel(value: number | null): string {
+  if (value == null) return '—'
+  const rounded = Math.round(value)
+  return rounded === 0 ? '→ 0' : (rounded > 0 ? '↑ +' : '↓ ') + rounded
+}
+
+function scoreChangeClass(value: number | null, inverse = false): string {
+  if (value == null || Math.abs(value) < 0.5) return 'text-muted'
+  const positive = inverse ? value < 0 : value > 0
+  return positive ? 'text-bull' : 'text-bear'
+}
+
+function scoreDirectionLabel(value: number | null): string {
+  if (value == null) return '未评估'
+  return value >= 60 ? '偏多' : value <= 40 ? '偏空' : '中性'
+}
+
+function technicalStateLabel(value: number | null, change: number | null): string {
+  const direction = scoreDirectionLabel(value)
+  if (direction === '未评估' || change == null || Math.abs(change) < 0.5) return direction
+  if (change > 0) return direction === '偏多' ? '偏多强化' : direction === '偏空' ? '偏空修复' : '中性修复'
+  return direction === '偏多' ? '偏多走弱' : direction === '偏空' ? '偏空延续' : '中性走弱'
+}
+
+function confidenceLabel(value: number | null | undefined): string {
+  if (value == null) return '—'
+  return value >= 75 ? '高' : value >= 50 ? '中' : '低'
+}
+
+function riskLabel(value: number | null | undefined): string {
+  if (value == null) return '未评估'
+  return value >= 70 ? '高' : value >= 40 ? '中等' : '正常'
+}
+
+function metricValue(indicator: TechnicalIndicatorModel | undefined, label: string): string {
+  return indicator?.metrics.find(metric => metric.label === label)?.value ?? '—'
+}
+
+function trendPhaseSummary(indicators: Map<StockTechnicalIndicatorKey, TechnicalIndicatorModel>): string {
+  const alignment = indicators.get('ma_alignment')?.status
+  const slope = indicators.get('ma_slope')?.summary ?? ''
+  const shortWeakening = slope.startsWith('短线走平') || slope.startsWith('短线向上')
+  if (alignment === '空头排列') return shortWeakening ? '空头运行 → 空头衰减' : '空头运行'
+  if (alignment === '多头排列') return slope.startsWith('短线向下') || slope.startsWith('短线走平') ? '多头运行 → 多头衰减' : '多头运行'
+  if (alignment === '均线纠缠') return '震荡'
+  return alignment === '样本不足' ? '趋势未评估' : '趋势分化'
+}
+
+function compactTrendSummary(indicators: Map<StockTechnicalIndicatorKey, TechnicalIndicatorModel>): string {
+  return [trendPhaseSummary(indicators), indicators.get('ma_alignment')?.summary, indicators.get('ma_slope')?.summary].filter(Boolean).join(' · ') || '趋势未评估'
+}
+
+function compactMomentumSummary(indicators: Map<StockTechnicalIndicatorKey, TechnicalIndicatorModel>): string {
+  return [indicators.get('macd')?.summary, indicators.get('rsi')?.summary, indicators.get('kdj')?.summary, indicators.get('roc')?.summary]
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(' · ') || '动能未评估'
+}
+
+function compactVolumeSummary(indicators: Map<StockTechnicalIndicatorKey, TechnicalIndicatorModel>): string {
+  const price = indicators.get('volume_price')
+  const trend = indicators.get('volume_trend')
+  if (!price && !trend) return '量价未评估'
+  const current = price?.summary ?? '量价未评估'
+  const ratio = metricValue(price, '量比')
+  const sustained = trend?.status === '短期降温' ? '中期量能不足' : trend?.status === '短期活跃' ? '中期量能偏强' : trend?.status ?? '量能持续性待定'
+  return [current, ratio !== '—' ? '量比 ' + ratio : null, sustained].filter(Boolean).join(' · ')
+}
+
+function compactEnvironmentSummary(indicators: Map<StockTechnicalIndicatorKey, TechnicalIndicatorModel>): string {
+  const atr = indicators.get('atr')?.summary
+  const boll = indicators.get('boll_width')?.summary
+  return [atr ? 'ATR ' + atr : null, boll ? 'BOLL ' + boll : null].filter(Boolean).join(' · ') || '波动未评估'
+}
+
+function dimensionStateLabel(value: number | null | undefined, change: number | null): string {
+  const direction = scoreDirectionLabel(value == null ? null : value)
+  if (direction === '未评估' || change == null || Math.abs(change) < 0.5) return direction
+  if (change > 0) return direction === '偏空' ? '弱势修复' : direction === '偏多' ? '偏多强化' : '中性改善'
+  return direction === '偏多' ? '偏多走弱' : direction === '偏空' ? '偏空延续' : '中性走弱'
+}
+
+function stateConfirmationLabel(value: number | null | undefined): string {
+  if (value == null) return '未评估'
+  return value >= 70 ? '偏多一致' : value <= 30 ? '偏空一致' : '存在分歧'
+}
+
+function technicalSummary(
+  score: TechnicalScoreRow | null,
+  previousScore: TechnicalScoreRow | null,
+  indicators: Map<StockTechnicalIndicatorKey, TechnicalIndicatorModel>,
+): string {
+  if (!score?.available) return '当前周期数据不足，暂不形成技术方向结论。'
+  const parts: string[] = []
+  const momentumChange = scoreDelta(score.momentum, previousScore?.momentum)
+  const trend = scoreDirectionLabel(score.trend)
+  if (momentumChange != null && momentumChange > 0.5) parts.push('短线动能正在改善')
+  else if (momentumChange != null && momentumChange < -0.5) parts.push('短线动能正在走弱')
+  else if (indicators.get('macd')?.status !== '样本不足') parts.push('短线动能维持当前状态')
+  if (trend === '偏空') parts.push('中期趋势仍偏空')
+  else if (trend === '偏多') parts.push('中期趋势偏多')
+  const volumeStatus = indicators.get('volume_price')?.status
+  if (volumeStatus === '价涨量增') parts.push('短线放量确认，但需观察持续性')
+  else if (volumeStatus === '价跌量增') parts.push('下跌伴随放量，量价偏空')
+  else if (volumeStatus && volumeStatus !== '样本不足') parts.push('量价持续性一般')
+  return (parts.slice(0, 3).join('，') || '技术指标暂未形成一致方向') + '。'
 }
 
 function scoreLabel(value: number | null | undefined): string {
@@ -639,12 +767,34 @@ export function StockTechnicalPanel({
     () => scoreForDate(technicalScores, selectedDate, period),
     [period, selectedDate, technicalScores],
   )
+  const previousScore = useMemo(
+    () => previousScoreForDate(technicalScores, selectedDate, period),
+    [period, selectedDate, technicalScores],
+  )
   const indicators = useMemo(
     () => INDICATOR_DEFS.map(def => buildIndicator(def, bars, selectedIndex, assetType)),
     [assetType, bars, selectedIndex],
   )
   const indicatorsByKey = useMemo(() => new Map(indicators.map(indicator => [indicator.key, indicator])), [indicators])
   const isLatest = selectedIndex >= 0 && selectedIndex === bars.length - 1
+  const directionChange = scoreDelta(score?.direction_score, previousScore?.direction_score)
+  const trendChange = scoreDelta(score?.trend, previousScore?.trend)
+  const momentumChange = scoreDelta(score?.momentum, previousScore?.momentum)
+  const volumePriceChange = scoreDelta(score?.volume_price, previousScore?.volume_price)
+  const stateConfirmationChange = scoreDelta(score?.state_confirmation, previousScore?.state_confirmation)
+  const riskChange = scoreDelta(score?.volatility_risk, previousScore?.volatility_risk)
+  const currentDirectionScore = score?.available ? score.direction_score : null
+  const currentConfidence = score?.available ? score.confidence : null
+  const volumeStatus = indicatorsByKey.get('volume_price')?.status
+  const volumeState = volumeStatus === '价涨量增' || volumeStatus === '价涨量平'
+    ? '偏多确认'
+    : volumeStatus === '价跌量增' || volumeStatus === '价跌量平' ? '偏空确认' : volumeStatus ?? '未评估'
+  const dimensions = [
+    { key: 'trend', label: '趋势', score: score?.trend, change: trendChange, state: dimensionStateLabel(score?.trend, trendChange), summary: compactTrendSummary(indicatorsByKey) },
+    { key: 'momentum', label: '动能', score: score?.momentum, change: momentumChange, state: dimensionStateLabel(score?.momentum, momentumChange), summary: compactMomentumSummary(indicatorsByKey) },
+    { key: 'volume_price', label: '量价', score: score?.volume_price, change: volumePriceChange, state: volumeState, summary: compactVolumeSummary(indicatorsByKey) },
+    { key: 'state_confirmation', label: '状态确认', score: score?.state_confirmation, change: stateConfirmationChange, state: stateConfirmationLabel(score?.state_confirmation), summary: '趋势、动能与量价的一致性' },
+  ]
 
   const updateConfig = (next: StockPreviewTechnicalLayoutConfig) => {
     const normalized = normalizeLayoutConfig(next)
@@ -682,15 +832,10 @@ export function StockTechnicalPanel({
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
                 <span className="text-xs font-medium text-foreground">技术指标</span>
-                <span className={`rounded border px-1.5 py-0.5 text-[12px] font-semibold ${scoreBadgeClasses(score?.direction_score, 'direction')}`}>
-                  技术分 {scoreLabel(score?.direction_score)}
-                </span>
                 <span className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[12px] text-secondary">{PERIOD_LABELS[period]}</span>
               </div>
               {!collapsed && (
                 <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[13px] text-muted">
-                  <span>置信度 {score?.available ? `${Math.round(score.confidence)}%` : '—'}</span>
-                  {score?.volatility_risk != null && <span className="text-warning">波动风险 {score.volatility_risk}</span>}
                   {!isLatest && bars.length > 0 && (
                     <button type="button" onClick={onLatest} className="text-accent transition-colors hover:text-foreground">
                       回到最新
@@ -739,23 +884,92 @@ export function StockTechnicalPanel({
           ) : bars.length === 0 ? (
             <div className="flex items-center justify-center px-4 py-6 text-center text-xs text-muted">暂无技术指标数据</div>
           ) : (
-            <div className="divide-y divide-border/70">
-              {GROUP_DEFS.map(group => {
-                const groupIndicators = group.indicatorKeys
-                  .map(key => indicatorsByKey.get(key))
-                  .filter((indicator): indicator is TechnicalIndicatorModel => !!indicator && config.visible[indicator.key] !== false)
-                const groupScore = score?.[group.key === 'volume_price' ? 'volume_price' : group.key === 'volatility' ? 'volatility_risk' : group.key]
-                return (
-                  <TechnicalGroup
-                    key={group.key}
-                    group={group}
-                    score={groupScore}
-                    collapsed={collapsedGroups[group.key] === true}
-                    onToggle={() => toggleGroup(group.key)}
-                    indicators={groupIndicators}
-                  />
-                )
-              })}
+            <div className="space-y-2 p-2">
+              <div className="rounded-card border border-border bg-surface/70 p-2.5 shadow-sm">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="text-[12px] font-medium text-foreground">技术研判</span>
+                  <span className="text-[12px] text-muted">状态 → 变化 → 观察</span>
+                </div>
+                <div className="grid grid-cols-3 gap-1.5">
+                  <div className="rounded border border-border/70 bg-base/30 p-2">
+                    <div className="text-[12px] text-muted">技术状态</div>
+                    <div className="mt-1 flex flex-wrap items-baseline gap-1.5">
+                      <span className="text-[13px] font-semibold text-foreground">{technicalStateLabel(currentDirectionScore, directionChange)}</span>
+                      <span className="font-mono text-[13px] tabular-nums text-secondary">{currentDirectionScore == null ? '—' : `${Math.round(currentDirectionScore)}/100`}</span>
+                      <span className={`font-mono text-[12px] tabular-nums ${scoreChangeClass(directionChange)}`}>{scoreChangeLabel(directionChange)}</span>
+                    </div>
+                  </div>
+                  <div className="rounded border border-border/70 bg-base/30 p-2">
+                    <div className="text-[12px] text-muted">信号可信度</div>
+                    <div className="mt-1 flex flex-wrap items-baseline gap-1.5">
+                      <span className="font-mono text-[13px] font-semibold tabular-nums text-foreground">{currentConfidence == null ? '—' : `${Math.round(currentConfidence)}%`}</span>
+                      <span className="text-[12px] text-secondary">{confidenceLabel(currentConfidence)}</span>
+                    </div>
+                  </div>
+                  <div className="rounded border border-border/70 bg-base/30 p-2">
+                    <div className="text-[12px] text-muted">风险</div>
+                    <div className="mt-1 flex flex-wrap items-baseline gap-1.5">
+                      <span className="font-mono text-[13px] font-semibold tabular-nums text-warning">{score?.volatility_risk == null ? '—' : `${Math.round(score.volatility_risk)}/100`}</span>
+                      <span className="text-[12px] text-warning">{riskLabel(score?.volatility_risk)}</span>
+                      <span className={`font-mono text-[12px] tabular-nums ${scoreChangeClass(riskChange, true)}`}>{scoreChangeLabel(riskChange)}</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-2 border-t border-border/50 pt-2 text-[12px] leading-relaxed text-secondary">
+                  {technicalSummary(score, previousScore, indicatorsByKey)}
+                </div>
+              </div>
+
+              <div className="grid gap-1.5 sm:grid-cols-2">
+                {dimensions.map(dimension => (
+                  <div key={dimension.key} className="rounded-card border border-border bg-surface/70 p-2.5 shadow-sm">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="text-[12px] font-medium text-foreground">{dimension.label}</span>
+                      <span className="flex items-baseline gap-1.5">
+                        <span className="font-mono text-[13px] font-semibold tabular-nums text-foreground">{dimension.score == null ? '—' : `${Math.round(dimension.score)}/100`}</span>
+                        <span className={`font-mono text-[12px] tabular-nums ${scoreChangeClass(dimension.change)}`}>{scoreChangeLabel(dimension.change)}</span>
+                      </span>
+                    </div>
+                    <div className="mt-1 text-[12px] text-secondary">{dimension.state}</div>
+                    <div className="mt-1 truncate text-[12px] text-muted" title={dimension.summary}>{dimension.summary}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="rounded-card border border-border bg-surface/70 px-2.5 py-2 shadow-sm">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-[12px] font-medium text-foreground">市场环境</span>
+                  <span className="text-[12px] text-warning">{riskLabel(score?.volatility_risk)}</span>
+                </div>
+                <div className="mt-1 truncate text-[12px] text-muted" title={compactEnvironmentSummary(indicatorsByKey)}>{compactEnvironmentSummary(indicatorsByKey)}</div>
+              </div>
+
+              <details className="rounded-card border border-border bg-base/20">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-2.5 py-2 text-[12px] text-secondary">
+                  <span>展开指标详情</span>
+                  <span className="truncate text-muted">MA · MACD · RSI · KDJ · ATR · BOLL</span>
+                </summary>
+                <div className="divide-y divide-border/70 border-t border-border/70">
+                  {GROUP_DEFS.map(group => {
+                    const groupIndicators = group.indicatorKeys
+                      .map(key => indicatorsByKey.get(key))
+                      .filter((indicator): indicator is TechnicalIndicatorModel => !!indicator && config.visible[indicator.key] !== false)
+                    const groupScore = group.key === 'environment'
+                      ? score?.volatility_risk
+                      : group.key === 'volume_price' ? score?.volume_price : score?.[group.key]
+                    return (
+                      <TechnicalGroup
+                        key={group.key}
+                        group={group}
+                        score={groupScore}
+                        collapsed={collapsedGroups[group.key] === true}
+                        onToggle={() => toggleGroup(group.key)}
+                        indicators={groupIndicators}
+                      />
+                    )
+                  })}
+                </div>
+              </details>
             </div>
           ))}
         </>
@@ -791,7 +1005,7 @@ function TechnicalGroup({
           <span className="truncate text-[12px] text-muted">{group.description}</span>
         </span>
         <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[12px] font-semibold ${scoreBadgeClasses(score, group.scoreKind)}`}>
-          {scoreLabel(score)}
+          {group.scoreKind === 'risk' ? '风险 ' : ''}{scoreLabel(score)}
         </span>
       </button>
       {!collapsed && (
@@ -863,7 +1077,7 @@ function TechnicalSettings({
             <div key={group.key} className="rounded-card border border-border bg-base/30 p-2">
               <div className="mb-1.5 flex items-center justify-between">
                 <span className="text-[12px] font-medium text-foreground">{group.label}</span>
-                <span className="text-[12px] text-muted">{group.scoreKind === 'direction' ? '方向分' : group.scoreKind === 'risk' ? '风险分' : '活跃度分'}</span>
+                <span className="text-[12px] text-muted">{group.scoreKind === 'direction' ? '方向分' : '风险分'}</span>
               </div>
               <div className="space-y-1">
                 {group.indicatorKeys.map(key => {

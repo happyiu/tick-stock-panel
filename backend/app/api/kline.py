@@ -458,7 +458,7 @@ def get_daily(
     start_date: Optional[str] = Query(None, description="起始日期 YYYY-MM-DD, 优先于 days"),
     end_date: Optional[str] = Query(None, description="截止日期 YYYY-MM-DD, 默认今天"),
     ext_columns: Optional[str] = Query(None, description="逗号分隔的 ext 列: config_id.field_name"),
-    include_technical_scores: bool = Query(False, description="是否附带 technical-score-v1 评分序列"),
+    include_technical_scores: bool = Query(False, description="是否附带 technical-score-v2 评分序列"),
 ):
     """优先读取展示行情快照, 不可用时回退本地 enriched 和当日行情。"""
     import polars as pl
@@ -552,7 +552,7 @@ def get_period_kline(
     start_date: Optional[str] = Query(None, description="展示起始日期 YYYY-MM-DD"),
     end_date: Optional[str] = Query(None, description="展示截止日期 YYYY-MM-DD,默认今天"),
     days: int = Query(20, ge=1, le=120, description="30分钟K最近交易日数量"),
-    include_technical_scores: bool = Query(False, description="是否附带 technical-score-v1 评分序列"),
+    include_technical_scores: bool = Query(False, description="是否附带 technical-score-v2 评分序列"),
 ):
     """优先原生30分钟K和展示日线, 周/月聚合后重算指标, 不落库。"""
     import polars as pl
