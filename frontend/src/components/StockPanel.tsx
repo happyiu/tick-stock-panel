@@ -23,6 +23,7 @@ import { StockPriceZonesPanel } from '@/components/StockPriceZonesPanel'
 import { StockSignalRiskPanel } from '@/components/StockSignalRiskPanel'
 import { financialMetricsQueryOptions, useFinancialMetrics } from '@/lib/useFinancials'
 import { useCapabilities, useQuoteStatus } from '@/lib/useSharedQueries'
+import { scheduleNeighborPrefetch } from '@/lib/neighborPrefetch'
 import type { ChartMarker, ChartPriceBand, ChartPriceLine, ChartRange } from '@/components/EChartsCandlestick'
 import {
   loadInfoFields,
@@ -829,47 +830,45 @@ export function StockPanel({
     }
   }, [splitDragging])
 
-  // 邻近预取: 对切股导航的左右邻股提前拉取缓存, 切股瞬间免 loading。
+  // 当前日K就绪后, 等可见查询空闲再串行预取邻股, 避免首屏争抢公网带宽。
   // 日K/分时预取 staleTime 30s 防来回切换重复请求; 成为当前股后 useQuery(staleTime=0) 立即后台刷新,
   // SSE 也只按焦点股精准失效, 实时性不受影响。财务指标与正式查询同 staleTime, 5min 内不重复拉取。
   // prefetchKey 按内容 join: 自选页 navList 随行情 tick 重建但邻股集合通常不变, 避免 effect 每次 tick 重跑。
   const qc = useQueryClient()
   const prefetchKey = prefetchSymbols?.join(',') ?? ''
-  // 守卫快速连续切股: 旧链路上异步回来的日K不再级联预取 (避免串股/浪费)
-  const prefetchTickRef = useRef('')
   useEffect(() => {
-    if (!prefetchKey) return
-    prefetchTickRef.current = prefetchKey
-    for (const s of prefetchKey.split(',')) {
+    if (!symbol || !prefetchKey || !kline.isSuccess || kline.isPlaceholderData) return
+    const tasks: Array<() => Promise<unknown>> = []
+    for (const s of new Set(prefetchKey.split(',').filter(Boolean))) {
       if (s === symbol) continue
-      if (hasFinanceField && hasFinancialCap) {
-        qc.prefetchQuery(financialMetricsQueryOptions(s))
-      }
-      // 分时 tab 的多日分时 + 最新分时: 切股后分时图也免 loading (与日K并行预取)
-      qc.prefetchQuery({ ...klineMinuteRangeQueryOptions(s, intradayDays), staleTime: 30_000 })
-      // latest 当日分时同样 live=true: 预取与渲染同读实时源 (历史日期后端忽略 live)
-      qc.prefetchQuery({ ...klineMinuteQueryOptions(s, undefined, true), staleTime: 30_000 })
-      // 日K用 fetchQuery (返回数据) 以便级联预取分时; 邻股预取失败静默, 不影响切股。
-      if (period !== '1d') {
-        qc.prefetchQuery({
-          ...klinePeriodQueryOptions(s, period, chartDateRange, periodDays, extColumns, includeTechnicalScores, includeShortTermAnalysis),
+      let lastDate: string | undefined
+      tasks.push(async () => {
+        const res = await qc.fetchQuery({
+          ...klineDailyQueryOptions(s, infoDateRange, extColumns, includeTechnicalScores, includeShortTermAnalysis),
           staleTime: 30_000,
         })
+        const date = res?.rows?.at(-1)?.date
+        lastDate = date ? String(date).slice(0, 10) : undefined
+      })
+      // 独立排队, 切股/关闭后的日K响应不会继续级联分钟请求。
+      tasks.push(async () => {
+        if (lastDate) await qc.prefetchQuery({ ...klineMinuteQueryOptions(s, lastDate, true), staleTime: 30_000 })
+      })
+      if (hasFinanceField && hasFinancialCap) {
+        tasks.push(() => qc.prefetchQuery(financialMetricsQueryOptions(s)))
       }
-      void qc.fetchQuery({ ...klineDailyQueryOptions(s, infoDateRange, extColumns, includeTechnicalScores, includeShortTermAnalysis), staleTime: 30_000 })
-        .then((res) => {
-          if (prefetchTickRef.current !== prefetchKey) return
-          // 日K到货后级联预取其默认选中日的分时数据: 日K视图并排展示分时图(默认选中最后交易日)。
-          const lastDate = res?.rows?.at(-1)?.date
-          if (lastDate) {
-            const d = String(lastDate).slice(0, 10)
-            // 同上 live=true: 该日若为当日即命中实时源 (历史日期后端忽略 live)
-            qc.prefetchQuery({ ...klineMinuteQueryOptions(s, d, true), staleTime: 30_000 })
-          }
-        })
-        .catch(() => {})
+      // 分时 tab 的多日分时 + 最新分时: 切股后分时图也免 loading。
+      tasks.push(() => qc.prefetchQuery({ ...klineMinuteRangeQueryOptions(s, intradayDays), staleTime: 30_000 }))
+      tasks.push(() => qc.prefetchQuery({ ...klineMinuteQueryOptions(s, undefined, true), staleTime: 30_000 }))
+      if (period !== '1d') {
+        tasks.push(() => qc.prefetchQuery({
+          ...klinePeriodQueryOptions(s, period, chartDateRange, periodDays, extColumns, includeTechnicalScores, includeShortTermAnalysis),
+          staleTime: 30_000,
+        }))
+      }
     }
-  }, [prefetchKey, symbol, chartDateRange, infoDateRange, extColumns, hasFinanceField, hasFinancialCap, intradayDays, period, periodDays, includeTechnicalScores, includeShortTermAnalysis, qc])
+    return scheduleNeighborPrefetch(qc, symbol, tasks)
+  }, [prefetchKey, symbol, chartDateRange, infoDateRange, extColumns, hasFinanceField, hasFinancialCap, intradayDays, period, periodDays, includeTechnicalScores, includeShortTermAnalysis, qc, kline.isSuccess, kline.isPlaceholderData])
 
   // symbol 变化时重置分时相关状态，避免切股后残留旧日期。
   // 日K信息直接读 query data (切股到已预取邻股首帧即有), 无需清空或门控。

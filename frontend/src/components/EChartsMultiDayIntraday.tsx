@@ -27,7 +27,7 @@ interface Props {
 interface InfoPoint {
   date: string
   row: MinuteKlineRow
-  average: number
+  average: number | null
   prevClose: number | null
 }
 
@@ -67,7 +67,7 @@ function buildModel(sessions: MinuteKlineSession[]) {
     }
 
     const averagePrices = computeIntradayAverage(session.rows)
-    const rowsByTime = new Map<string, { row: MinuteKlineRow; average: number }>()
+    const rowsByTime = new Map<string, { row: MinuteKlineRow; average: number | null }>()
     session.rows.forEach((row, index) => {
       rowsByTime.set(formatMinuteTime(row.datetime), {
         row,
@@ -107,7 +107,8 @@ function buildModel(sessions: MinuteKlineSession[]) {
         },
       })
       prevRef = row.close
-      priceValues.push(row.low, row.high, average)
+      priceValues.push(row.low, row.high)
+      if (average != null) priceValues.push(average)
       pointByIndex.set(index, {
         date: session.date,
         row,
