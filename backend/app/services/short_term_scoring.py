@@ -2,7 +2,7 @@
 
 This is a dependency-free port of the executable rules in stock_analysis.
 The service deliberately owns a separate indicator namespace so the existing
-technical-score-v2 and structure calculations keep their current semantics.
+technical-score-v3 and structure calculations keep their current semantics.
 """
 from __future__ import annotations
 

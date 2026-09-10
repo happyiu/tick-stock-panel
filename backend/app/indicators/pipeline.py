@@ -335,7 +335,7 @@ _INDICATOR_DEPS: dict[str, set[str]] = {
 
 # compute_indicators 可产出的全部指标/临时列 (needed=None 时即为此全集, 行为不变)
 _ALL_INDICATOR_COLS: frozenset[str] = frozenset({
-    "prev_close", "ma5", "ma10", "ma20", "ma30", "ma60",
+    "prev_close", "ma5", "ma10", "ma20", "ma30", "ma60", "ma120",
     "ema5", "ema10", "ema20", "ema30", "ema60", "_ema12", "_ema26",
     "_boll_std", "_kdj_ln", "_kdj_hn", "_tr", "vol_ma5", "vol_ma10",
     "_vol_ma5", "high_60d", "low_60d", "high_20d", "low_20d",
@@ -406,6 +406,8 @@ def compute_indicators(
         _p1.append(pl.col("close").rolling_mean(30).over("symbol").alias("ma30"))
     if "ma60" in want:
         _p1.append(pl.col("close").rolling_mean(60).over("symbol").alias("ma60"))
+    if "ma120" in want:
+        _p1.append(pl.col("close").rolling_mean(120).over("symbol").alias("ma120"))
     if "ema5" in want:
         _p1.append(pl.col("close").ewm_mean(alpha=_ema_alpha(5), adjust=False).over("symbol").alias("ema5"))
     if "ema10" in want:

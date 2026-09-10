@@ -1110,6 +1110,7 @@ export function StockPanel({
                   rows={analysisResponse?.rows ?? []}
                   technicalScores={analysisResponse?.technical_scores}
                   shortTermAnalysis={analysisResponse?.short_term_analysis}
+                  amountEstimated={analysisResponse?.data_status?.amount_estimated}
                   period={period}
                   selectedDate={selectedBarKey}
                   assetType={analysisAssetType}

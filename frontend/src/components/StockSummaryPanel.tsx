@@ -168,6 +168,7 @@ export function StockSummaryPanel({ snapshot, onSelectZone, onSelectSignal, onFo
   const tone = TONE_CLASSES[snapshot.observation.tone]
   const actionTone = TONE_CLASSES[decisionTone(snapshot)]
   const period = snapshot.context.period
+  const isEtf = snapshot.context.assetType === 'etf'
   const activeSignalId = snapshot.structure.activeCandidate?.id
   const dimensions: Array<{ label: string; value: number | null; status: string; focus: FocusSection }> = [
     { label: '趋势', value: snapshot.technical.trend, status: snapshot.technical.dimensionLabels.trend, focus: 'technical' },
@@ -201,18 +202,22 @@ export function StockSummaryPanel({ snapshot, onSelectZone, onSelectSignal, onFo
           <span className="flex flex-wrap items-center gap-1.5">
             <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${tone.dot}`} />
             <span className="text-xs font-medium text-foreground">综合研判</span>
-            <span className={`rounded border px-1.5 py-0.5 text-[12px] font-semibold ${tone.badge}`}>{snapshot.observation.label}</span>
-            <span className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[12px] text-secondary">{PERIOD_LABELS[period]}</span>
+            {!isEtf && <>
+              <span className={`rounded border px-1.5 py-0.5 text-[12px] font-semibold ${tone.badge}`}>{snapshot.observation.label}</span>
+              <span className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[12px] text-secondary">{PERIOD_LABELS[period]}</span>
+            </>}
           </span>
         </span>
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        {!collapsed && snapshot.context.historical && onLatest && <button type="button" onClick={onLatest} className="text-[12px] text-accent hover:text-foreground">回到最新</button>}
-        {!collapsed && <span className={`font-mono text-sm font-semibold tabular-nums ${snapshot.technical.score == null ? 'text-muted' : TONE_CLASSES[snapshot.technical.directionTone].text}`}>{scoreText(snapshot.technical.score)}<span className="ml-0.5 text-[12px] font-normal text-muted">/100</span></span>}
+        {!isEtf && !collapsed && snapshot.context.historical && onLatest && <button type="button" onClick={onLatest} className="text-[12px] text-accent hover:text-foreground">回到最新</button>}
+        {!isEtf && !collapsed && <span className={`font-mono text-sm font-semibold tabular-nums ${snapshot.technical.score == null ? 'text-muted' : TONE_CLASSES[snapshot.technical.directionTone].text}`}>{scoreText(snapshot.technical.score)}<span className="ml-0.5 text-[12px] font-normal text-muted">/100</span></span>}
         <button type="button" onClick={() => setCollapsed(value => !value)} className="rounded-btn p-1 text-muted transition-colors hover:bg-elevated hover:text-foreground" aria-expanded={!collapsed} aria-label={collapsed ? '展开综合研判' : '收起综合研判'} title={collapsed ? '展开综合研判' : '收起综合研判'}><ChevronDown className={`h-3.5 w-3.5 transition-transform ${collapsed ? '-rotate-90' : ''}`} /></button>
       </div>
     </div>
-    {!collapsed && <div className="grid gap-2 p-2">
+    {!collapsed && (isEtf
+      ? <div className="min-h-24" aria-hidden="true" />
+      : <div className="grid gap-2 p-2">
       {isLoading && snapshot.quality.status === 'blocked' && <div className="rounded border border-border bg-elevated/40 px-2 py-1.5 text-[12px] text-muted">正在加载当前周期综合分析…</div>}
       {error && snapshot.quality.status === 'blocked' && <div className="flex items-center justify-between gap-2 rounded border border-bear/30 bg-bear/5 px-2 py-1.5 text-[12px] text-bear"><span>当前周期行情加载失败，摘要暂不可用。</span>{onRetry && <button type="button" onClick={onRetry} className="rounded-btn bg-elevated px-2 py-1 text-[12px] text-secondary hover:text-foreground">重试</button>}</div>}
       {snapshot.action ? <ActionSignalCard action={snapshot.action} comparison={snapshot.actionComparison} assetType={snapshot.context.assetType} /> : <div className={`rounded-card border p-2.5 shadow-sm ${actionTone.badge}`}>
@@ -281,6 +286,6 @@ export function StockSummaryPanel({ snapshot, onSelectZone, onSelectSignal, onFo
         {snapshot.limitations.length > 0 && <div className="rounded border border-border/60 bg-elevated/30 px-2 py-1.5 text-[12px] text-muted"><div className="mb-0.5 flex items-center gap-1 text-secondary"><Info className="h-3 w-3" />分析限制</div>{snapshot.limitations.slice(0, 3).map((item, index) => <div key={`${item}-${index}`} className="leading-relaxed">· {item}</div>)}</div>}
         <div className="flex items-center gap-1 text-[12px] text-muted"><Database className="h-3 w-3" />规则版本 {snapshot.versions.summary} · {snapshot.context.priceBasis} · {snapshot.structure.definitionMode}</div>
       </div>}
-    </div>}
+    </div>)}
   </section>
 }

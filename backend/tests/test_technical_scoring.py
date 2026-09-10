@@ -12,6 +12,9 @@ from app.api import kline as kline_api
 from app.services.technical_scoring import (
     TECHNICAL_SCORE_COLUMNS,
     TECHNICAL_SCORE_VERSION,
+    _ma_alignment_state,
+    _ma_slope_state,
+    _ma_slope_summary,
     score_technical_frame,
     technical_score_payload,
 )
@@ -111,8 +114,98 @@ def _raw_frame(count: int = 100, *, slope: float = 0.25, volume: float = 1000.0)
             "low": close - 0.4,
             "close": close,
             "volume": volume,
+            "amount": close * volume,
         })
     return pl.DataFrame(rows)
+
+
+def _ma_state_row(*, ma5: float, ma10: float, ma20: float, ma60: float, ma120: float) -> dict:
+    return {"ma5": ma5, "ma10": ma10, "ma20": ma20, "ma60": ma60, "ma120": ma120}
+
+
+@pytest.mark.parametrize(
+    ("current", "expected_state", "expected_score"),
+    [
+        (_ma_state_row(ma5=110, ma10=108, ma20=105, ma60=102, ma120=100), "强多头排列", 100),
+        (_ma_state_row(ma5=110, ma10=108, ma20=105, ma60=102, ma120=103), "多头排列", 80),
+        (_ma_state_row(ma5=98, ma10=100, ma20=105, ma60=102, ma120=100), "多头回调", 65),
+        (_ma_state_row(ma5=100.1, ma10=100.0, ma20=100.2, ma60=99.9, ma120=99.8), "均线收敛/缠绕", 50),
+        (_ma_state_row(ma5=102, ma10=100, ma20=95, ma60=98, ma120=100), "空头反弹", 35),
+        (_ma_state_row(ma5=95, ma10=98, ma20=100, ma60=102, ma120=101), "空头排列", 20),
+        (_ma_state_row(ma5=95, ma10=98, ma20=100, ma60=102, ma120=105), "强空头排列", 0),
+    ],
+)
+def test_ma_alignment_state_groups_common_orderings(current, expected_state: str, expected_score: int):
+    score, state, _ = _ma_alignment_state([current], 0)
+
+    assert score == expected_score
+    assert state == expected_state
+
+
+def test_ma_alignment_state_identifies_early_reversal_and_missing_ma120():
+    bottom_turn = [
+        _ma_state_row(ma5=99, ma10=100.2, ma20=100.4, ma60=105, ma120=110),
+        _ma_state_row(ma5=101, ma10=100, ma20=100.5, ma60=105, ma120=110),
+    ]
+    top_turn = [
+        _ma_state_row(ma5=101, ma10=99.8, ma20=99.4, ma60=95, ma120=90),
+        _ma_state_row(ma5=99, ma10=100, ma20=99.5, ma60=95, ma120=90),
+    ]
+
+    bottom_score, bottom_state, bottom_detail = _ma_alignment_state(bottom_turn, 1)
+    top_score, top_state, top_detail = _ma_alignment_state(top_turn, 1)
+    missing_score, missing_state, missing_detail = _ma_alignment_state([
+        _ma_state_row(ma5=99, ma10=100, ma20=101, ma60=102, ma120=float("nan")),
+    ], 0)
+
+    assert (bottom_score, bottom_state) == (70, "底部转强")
+    assert "上穿" in bottom_detail
+    assert (top_score, top_state) == (30, "顶部转弱")
+    assert "下穿" in top_detail
+    assert missing_score is None
+    assert missing_state == "数据不足"
+    assert "MA120" in missing_detail
+
+
+@pytest.mark.parametrize(
+    ("values", "expected_state"),
+    [
+        ([100.0, 100.3], "强上升"),
+        ([100.0, 100.1], "上升"),
+        ([100.0, 100.02], "走平"),
+        ([100.0, 99.9], "下降"),
+        ([100.0, 99.7], "强下降"),
+        ([100.0, 100.4, 100.5], "上升减速"),
+        ([100.0, 99.6, 99.5], "下降减速"),
+        ([100.0, 100.02, 100.12], "由平转升"),
+        ([100.0, 100.02, 99.92], "由平转降"),
+    ],
+)
+def test_ma_slope_state_covers_direction_strength_and_turning_points(values, expected_state: str):
+    records = [{"ma5": value} for value in values]
+    index = len(records) - 1
+
+    score, state, slope, previous_slope = _ma_slope_state(records, index, "ma5")
+
+    assert score is not None
+    assert state == expected_state
+    assert slope is not None
+    if len(values) >= 3:
+        assert previous_slope is not None
+
+
+def test_ma_slope_summary_keeps_each_ma_state_visible():
+    records = [
+        {"ma5": 100.0, "ma20": 200.0, "ma60": 300.0},
+        {"ma5": 100.02, "ma20": 200.4, "ma60": 299.8},
+        {"ma5": 100.12, "ma20": 200.5, "ma60": 299.6},
+    ]
+
+    score, coverage, status = _ma_slope_summary(records, 2)
+
+    assert score is not None
+    assert coverage == 1.0
+    assert status == "MA5由平转升 · MA20上升减速 · MA60下降"
 
 
 def test_missing_and_invalid_base_data_is_not_reported_as_zero_score():
@@ -185,7 +278,41 @@ def test_payload_is_versioned_and_date_aligned():
     assert set(payload["rows"][0]) == {
         "as_of", "direction_score", "confidence", "coverage", "trend",
         "momentum", "volume_price", "state_confirmation", "volatility_risk", "activity", "available",
+        "category_direction_score", "category_direction_coverage", "direction_available",
+        "category_risk_score", "risk_available", "category_activity_score", "activity_available",
+        "categories",
     }
+
+
+def test_category_payload_exposes_nested_scores_and_independent_activity():
+    payload = technical_score_payload(score_technical_frame(_raw_frame(100)))
+    latest = payload["rows"][-1]
+
+    assert latest["direction_available"] is True
+    assert latest["category_direction_score"] is not None
+    assert latest["risk_available"] is True
+    assert latest["activity_available"] is True
+    assert [category["id"] for category in latest["categories"]] == [
+        "trend", "momentum", "volume_price", "price_position", "volatility_risk", "activity",
+    ]
+    assert all("score" in indicator and "raw_values" in indicator for category in latest["categories"] for indicator in category["indicators"])
+    trend = next(category for category in latest["categories"] if category["id"] == "trend")
+    alignment = next(indicator for indicator in trend["indicators"] if indicator["id"] == "ma_alignment")
+    assert alignment["detail"].splitlines()[0] == "比较价格、MA5/10/20/60/120 的相对排列"
+    assert len(alignment["detail"].splitlines()) == 2
+    slope = next(indicator for indicator in trend["indicators"] if indicator["id"] == "ma_slope")
+    assert slope["status"] in {"偏强", "中性", "偏弱", "数据不足"}
+    assert slope["detail"].splitlines()[0] == "分别识别 MA5/20/60 的方向、力度与拐点状态"
+    assert len(slope["detail"].splitlines()) == 4
+    assert "↑" in slope["detail"]
+
+
+def test_missing_amount_does_not_become_activity_score():
+    frame = _raw_frame(100).drop("amount")
+    latest = score_technical_frame(frame).row(-1, named=True)
+
+    assert latest["technical_category_activity_score"] is None
+    assert latest["technical_category_activity_available"] is False
 
 
 class _ScoringRepo:

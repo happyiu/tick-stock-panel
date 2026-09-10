@@ -268,6 +268,7 @@ export interface KlineRow {
   low: number
   close: number
   volume?: number
+  amount?: number | null
   change_pct?: number
   ma5?: number | null
   ma10?: number | null
@@ -296,6 +297,29 @@ export interface KlineRow {
   [key: string]: any
 }
 
+export type TechnicalScoreKind = 'direction' | 'risk' | 'activity'
+
+export interface TechnicalScoreIndicator {
+  id: string
+  name: string
+  score: number | null
+  weight: number
+  status: string
+  detail: string
+  raw_values: Record<string, number | null>
+}
+
+export interface TechnicalScoreCategory {
+  id: string
+  name: string
+  kind: TechnicalScoreKind
+  weight: number | null
+  score: number | null
+  coverage: number
+  available: boolean
+  indicators: TechnicalScoreIndicator[]
+}
+
 export interface TechnicalScoreRow {
   as_of: string
   direction_score: number | null
@@ -308,6 +332,14 @@ export interface TechnicalScoreRow {
   volatility_risk: number | null
   activity: number | null
   available: boolean
+  category_direction_score?: number | null
+  category_direction_coverage?: number
+  direction_available?: boolean
+  category_risk_score?: number | null
+  risk_available?: boolean
+  category_activity_score?: number | null
+  activity_available?: boolean
+  categories?: TechnicalScoreCategory[]
 }
 
 export interface TechnicalScores {
