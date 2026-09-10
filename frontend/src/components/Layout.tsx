@@ -82,7 +82,8 @@ type CoreIndex = (typeof CORE_INDEXES)[number]
 
 const nav = [
   { to: '/',                label: '看板',     icon: LayoutDashboard },
-  { to: '/watchlist',  label: '自选',   icon: Star },
+  { to: '/watchlist',  label: '自选股',   icon: Star },
+  { to: '/watchlist-etf', label: '自选ETF', icon: Star },
   { to: '/screener',   label: '策略',   icon: ScanSearch },
   { to: '/factors',    label: '因子', icon: Sigma },
   { to: '/backtest',   label: '回测', icon: History },
@@ -418,10 +419,14 @@ export function Layout() {
     staleTime: 60_000,
   })
   const navGroupPcts = useMemo(
-    () => computeGroupPcts(
-      navWatchlist?.symbols ?? [],
-      new Map((navEnriched?.rows ?? []).map((r: any) => [r.symbol as string, r])),
-    ),
+    () => {
+      const stockRows = (navEnriched?.rows ?? []).filter((r: any) => r.asset_type === 'stock')
+      const stockSymbols = new Set(stockRows.map((r: any) => r.symbol))
+      return computeGroupPcts(
+        (navWatchlist?.symbols ?? []).filter(entry => stockSymbols.has(entry.symbol)),
+        new Map(stockRows.map((r: any) => [r.symbol as string, r])),
+      )
+    },
     [navWatchlist, navEnriched],
   )
 

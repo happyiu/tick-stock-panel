@@ -168,9 +168,6 @@ export const storage = {
   /** 自选列表视图模式 table | card (分组卡片为临时模式, 不持久化) */
   watchlistView:        kv<string>('watchlist_view'),
 
-  /** 自选列表资产类型筛选 all | stock | etf | index */
-  watchlistAssetFilter: kv<'all' | 'stock' | 'etf' | 'index'>('watchlist_assetFilter'),
-
   /** 自选列表日K蜡烛图显示状态 */
   watchlistCandle:      kv<boolean>('watchlist_showCandle'),
 

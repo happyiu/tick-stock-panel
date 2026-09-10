@@ -378,7 +378,7 @@ function GroupManagerDialog({
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
         <div>
           <h2 id="watchlist-groups-title" className="text-sm font-semibold text-foreground">管理自选分组</h2>
-          <p className="mt-0.5 text-[11px] text-muted">删除分组不会删除其中的股票</p>
+          <p className="mt-0.5 text-[11px] text-muted">删除分组不会删除其中的标的</p>
         </div>
         <button type="button" onClick={onClose} className="h-8 w-8 inline-flex items-center justify-center text-muted hover:text-foreground" aria-label="关闭">
           <X className="h-4 w-4" />
@@ -467,7 +467,7 @@ function GroupManagerDialog({
             ) : deletingId === group.id ? (
               <>
                 <span className="min-w-0 flex-1 text-xs text-secondary">
-                  删除“{group.name}”？{(counts[group.id] ?? 0) > 0 ? ` ${counts[group.id]} 只股票将回到未分组。` : ''}
+                  删除“{group.name}”？{(counts[group.id] ?? 0) > 0 ? ` ${counts[group.id]} 个标的将回到未分组。` : ''}
                 </span>
                 <button
                   type="button"
