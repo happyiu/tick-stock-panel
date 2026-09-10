@@ -93,6 +93,8 @@ interface Props {
   periodDays?: number
   /** 技术分析模式下附带后端统一评分序列。 */
   includeTechnicalScores?: boolean
+  /** 技术分析模式下附带短线评分、反陷阱区和降噪信号。 */
+  includeShortTermAnalysis?: boolean
   /** 当前周期、当前历史截面的缠论结构近似结果；未传入时不显示相关控件和覆盖层。 */
   chanlunAnalysis?: ChanlunAnalysis
   /** 当前周期、当前历史截面的艾略特波浪摆动代理；覆盖层默认关闭。 */
@@ -179,6 +181,7 @@ export function StockDailyKChart({
   period = '1d',
   periodDays = DEFAULT_30M_DAYS,
   includeTechnicalScores = false,
+  includeShortTermAnalysis = false,
   chanlunAnalysis,
   elliottAnalysis,
 }: Props) {
@@ -200,7 +203,7 @@ export function StockDailyKChart({
 
   // 日K仍与 StockPanel 信息条共享 cache key；其余周期走独立、含 period 的查询键。
   const kline = useQuery({
-    ...klinePeriodQueryOptions(symbol, period, dateRange, periodDays, extColumns, includeTechnicalScores),
+    ...klinePeriodQueryOptions(symbol, period, dateRange, periodDays, extColumns, includeTechnicalScores, includeShortTermAnalysis),
     enabled: !!symbol,
     refetchInterval: refetchIntervalMs,
   })

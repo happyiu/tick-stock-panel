@@ -193,6 +193,7 @@ export function StockPanel({
   const resolvedRightPaneMode: StockPanelRightPaneMode = rightPaneMode
     ?? (showIntradayChart ? 'intraday' : 'empty')
   const includeTechnicalScores = resolvedRightPaneMode === 'technical'
+  const includeShortTermAnalysis = resolvedRightPaneMode === 'technical'
   const [linkedPrice, setLinkedPrice] = useState<number | null>(null)
   const [selectedBarKey, setSelectedBarKey] = useState<string | null>(null)
   const [followsLatest, setFollowsLatest] = useState(true)
@@ -274,7 +275,7 @@ export function StockPanel({
   // 信息条直接读 query data: 切股到已预取邻股时首帧即有数据, 配合 StockInfoBar 加载态占位,
   // 弹窗整体高度在切换瞬间不塌陷 (不抖动)。
   const kline = useQuery({
-    ...klineDailyQueryOptions(symbol, infoDateRange, extColumns, includeTechnicalScores),
+    ...klineDailyQueryOptions(symbol, infoDateRange, extColumns, includeTechnicalScores, includeShortTermAnalysis),
     enabled: !!symbol,
     refetchInterval: refetchIntervalMs,
   })
@@ -284,7 +285,7 @@ export function StockPanel({
   const rows = useMemo(() => toOHLC(rawRows, '1d'), [rawRows])
   // 技术面板观察与左侧 K 线完全相同的 period query; 1d 时会与上面的日K query 共享缓存。
   const periodKline = useQuery({
-    ...klinePeriodQueryOptions(symbol, period, chartDateRange, periodDays, extColumns, includeTechnicalScores),
+    ...klinePeriodQueryOptions(symbol, period, chartDateRange, periodDays, extColumns, includeTechnicalScores, includeShortTermAnalysis),
     enabled: !!symbol && (
       resolvedRightPaneMode === 'technical'
       || (resolvedRightPaneMode === 'intraday' && period !== '1d')
@@ -306,13 +307,13 @@ export function StockPanel({
     )
   }, [comparisonEndDate, comparisonPeriod, periodDays])
   const comparisonKline = useQuery({
-    ...klinePeriodQueryOptions(symbol, comparisonPeriod ?? '1d', comparisonRange, periodDays, extColumns, true),
+    ...klinePeriodQueryOptions(symbol, comparisonPeriod ?? '1d', comparisonRange, periodDays, extColumns, true, includeShortTermAnalysis),
     enabled: !!symbol && resolvedRightPaneMode === 'technical' && comparisonPeriod != null,
     staleTime: 30_000,
   })
   const refetchPeriod = periodKline.refetch
   const refetchComparison = comparisonKline.refetch
-  const analysisContextKey = `${symbol}|${resolvedRightPaneMode}|${period}|${chartDateRange.start}|${chartDateRange.end}|${periodDays}|${extColumns ?? ''}|${includeTechnicalScores}`
+  const analysisContextKey = `${symbol}|${resolvedRightPaneMode}|${period}|${chartDateRange.start}|${chartDateRange.end}|${periodDays}|${extColumns ?? ''}|${includeTechnicalScores}|${includeShortTermAnalysis}`
   const comparisonSnapshotKey = `${comparisonPeriod ?? 'none'}|${comparisonRange.start}|${comparisonRange.end}|${selectedBarKey ?? ''}`
   const [analysisSnapshot, setAnalysisSnapshot] = useState<AnalysisSnapshot | null>(null)
   const [analysisRefreshing, setAnalysisRefreshing] = useState(false)
@@ -392,6 +393,7 @@ export function StockPanel({
       period,
       rows: analysisRows,
       technicalScores: analysisResponse?.technical_scores,
+      shortTermAnalysis: analysisResponse?.short_term_analysis,
       dataStatus: analysisResponse?.data_status,
       dataSource: analysisResponse?.source,
       selectedDate: selectedBarKey,
@@ -492,6 +494,7 @@ export function StockPanel({
       period: comparisonPeriod,
       rows: comparisonRows,
       technicalScores: analysisComparisonResponse?.technical_scores,
+      shortTermAnalysis: analysisComparisonResponse?.short_term_analysis,
       dataStatus: analysisComparisonResponse?.data_status,
       dataSource: analysisComparisonResponse?.source,
       selectedDate: comparisonSelectedDate,
@@ -591,6 +594,7 @@ export function StockPanel({
       period,
       rows: summaryRows,
       technicalScores: analysisResponse?.technical_scores,
+      shortTermAnalysis: analysisResponse?.short_term_analysis,
       dataStatus: analysisResponse?.data_status,
       dataSource: analysisResponse?.source,
       selectedBarKey,
@@ -620,9 +624,28 @@ export function StockPanel({
       preferredSignal,
       actionSignals,
       actionComparison,
+      analysisResponse?.short_term_analysis,
     ],
   )
   const priceBands: ChartPriceBand[] = useMemo(() => {
+    const shortTerm = analysisResponse?.short_term_analysis
+    if (shortTerm) {
+      const supports = [...(shortTerm.zones.support ?? [])].sort((a, b) => a.distance_pct - b.distance_pct)
+      const resistances = [...(shortTerm.zones.resistance ?? [])].sort((a, b) => a.distance_pct - b.distance_pct)
+      const zones = [...supports, ...resistances]
+      return zones.map(zone => {
+        const support = zone.id.startsWith('support')
+        const rank = (support ? supports : resistances).findIndex(item => item.id === zone.id) + 1
+        const highlighted = selectedZoneId === zone.id
+        return {
+          low: zone.low,
+          high: zone.high,
+          label: support ? `S${rank}` : `R${rank}`,
+          color: highlighted ? 'rgba(59,130,246,0.16)' : support ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)',
+          borderColor: highlighted ? '#3B82F6' : support ? 'rgba(34,197,94,0.48)' : 'rgba(239,68,68,0.48)',
+        }
+      })
+    }
     const supports = priceZones.filter(zone => zone.side === 'support').sort((a, b) => (a.distancePct ?? Infinity) - (b.distancePct ?? Infinity))
     const resistances = priceZones.filter(zone => zone.side === 'resistance').sort((a, b) => (a.distancePct ?? Infinity) - (b.distancePct ?? Infinity))
     const highlightedZoneIds = new Set([
@@ -640,7 +663,7 @@ export function StockPanel({
         borderColor: highlightedZoneIds.has(zone.id) ? '#3B82F6' : zone.side === 'support' ? 'rgba(34,197,94,0.48)' : zone.side === 'resistance' ? 'rgba(239,68,68,0.48)' : 'rgba(59,130,246,0.48)',
       }
     })
-  }, [priceZones, selectedSignal, selectedZoneId])
+  }, [analysisResponse?.short_term_analysis, priceZones, selectedSignal, selectedZoneId])
   const decisionPriceLines: ChartPriceLine[] = useMemo(() => {
     if (!selectedSignal) return []
     const lines: ChartPriceLine[] = []
@@ -829,11 +852,11 @@ export function StockPanel({
       // 日K用 fetchQuery (返回数据) 以便级联预取分时; 邻股预取失败静默, 不影响切股。
       if (period !== '1d') {
         qc.prefetchQuery({
-          ...klinePeriodQueryOptions(s, period, chartDateRange, periodDays, extColumns, includeTechnicalScores),
+          ...klinePeriodQueryOptions(s, period, chartDateRange, periodDays, extColumns, includeTechnicalScores, includeShortTermAnalysis),
           staleTime: 30_000,
         })
       }
-      void qc.fetchQuery({ ...klineDailyQueryOptions(s, infoDateRange, extColumns, includeTechnicalScores), staleTime: 30_000 })
+      void qc.fetchQuery({ ...klineDailyQueryOptions(s, infoDateRange, extColumns, includeTechnicalScores, includeShortTermAnalysis), staleTime: 30_000 })
         .then((res) => {
           if (prefetchTickRef.current !== prefetchKey) return
           // 日K到货后级联预取其默认选中日的分时数据: 日K视图并排展示分时图(默认选中最后交易日)。
@@ -846,7 +869,7 @@ export function StockPanel({
         })
         .catch(() => {})
     }
-  }, [prefetchKey, symbol, chartDateRange, infoDateRange, extColumns, hasFinanceField, hasFinancialCap, intradayDays, period, periodDays, includeTechnicalScores, qc])
+  }, [prefetchKey, symbol, chartDateRange, infoDateRange, extColumns, hasFinanceField, hasFinancialCap, intradayDays, period, periodDays, includeTechnicalScores, includeShortTermAnalysis, qc])
 
   // symbol 变化时重置分时相关状态，避免切股后残留旧日期。
   // 日K信息直接读 query data (切股到已预取邻股首帧即有), 无需清空或门控。
@@ -966,6 +989,7 @@ export function StockPanel({
             period={period}
             periodDays={periodDays}
             includeTechnicalScores={includeTechnicalScores}
+            includeShortTermAnalysis={includeShortTermAnalysis}
             chanlunAnalysis={resolvedRightPaneMode === 'technical' ? chanlunAnalysis : undefined}
             elliottAnalysis={resolvedRightPaneMode === 'technical' ? elliottAnalysis : undefined}
           />
@@ -1047,6 +1071,7 @@ export function StockPanel({
                 <StockTechnicalPanel
                   rows={analysisResponse?.rows ?? []}
                   technicalScores={analysisResponse?.technical_scores}
+                  shortTermAnalysis={analysisResponse?.short_term_analysis}
                   period={period}
                   selectedDate={selectedBarKey}
                   assetType={analysisAssetType}
@@ -1105,6 +1130,7 @@ export function StockPanel({
                 <StockPriceZonesPanel
                   analysis={chanlunAnalysis}
                   zones={priceZones}
+                  shortTermAnalysis={analysisResponse?.short_term_analysis}
                   assetType={analysisAssetType}
                   collapsed={decisionSections.priceZonesCollapsed}
                   onToggleCollapsed={() => toggleDecisionSection('priceZonesCollapsed')}

@@ -3,17 +3,19 @@ import type { ChanlunAnalysis } from '@/lib/chanlun'
 import { fmtAssetPrice, fmtPct } from '@/lib/format'
 import type { PriceZone, PriceZoneSide } from '@/lib/priceZones'
 import { zoneSourcesSummary } from '@/lib/priceZones'
+import type { ShortTermAnalysis, ShortTermIndicatorZone } from '@/lib/api'
 
 interface Props {
   analysis: ChanlunAnalysis
   zones: PriceZone[]
+  shortTermAnalysis?: ShortTermAnalysis
   assetType?: 'stock' | 'etf' | 'index'
   collapsed?: boolean
   onToggleCollapsed?: () => void
   showZones?: boolean
   onToggleShowZones?: () => void
   selectedZoneId?: string | null
-  onSelectZone?: (zone: PriceZone) => void
+  onSelectZone?: (zone: PriceZone | ShortTermIndicatorZone) => void
 }
 
 const PERIOD_LABELS: Record<ChanlunAnalysis['period'], string> = {
@@ -72,9 +74,34 @@ function ZoneCard({
   )
 }
 
+function ShortTermZoneCard({
+  zone,
+  rank,
+  assetType,
+  selected,
+  onSelect,
+}: {
+  zone: ShortTermIndicatorZone
+  rank: number
+  assetType?: string
+  selected: boolean
+  onSelect?: () => void
+}) {
+  const support = zone.id.startsWith('support')
+  const status = zone.status === 'trap' ? '假突破' : zone.status === 'broken' ? '已突破' : '正常'
+  return (
+    <button type="button" onClick={onSelect} className={`w-full rounded-card border p-2 text-left transition-colors ${selected ? 'border-accent/70 bg-accent/10' : 'border-border bg-surface/60 hover:bg-elevated'}`} aria-pressed={selected}>
+      <div className="flex items-center justify-between gap-2"><span className={`text-[13px] font-medium ${support ? 'text-bull' : 'text-bear'}`}>{support ? `S${rank}` : `R${rank}`} · {support ? '支撑' : '压力'}</span><span className="font-mono text-[13px] tabular-nums text-foreground">{fmtAssetPrice(zone.low, assetType)}{zone.low !== zone.high ? ` ~ ${fmtAssetPrice(zone.high, assetType)}` : ''}</span></div>
+      <div className="mt-1 flex items-center justify-between gap-2 text-[12px] text-muted"><span className={zone.status === 'trap' ? 'text-warning' : zone.status === 'broken' ? 'text-bear' : 'text-secondary'}>{status} · 区域分 {zone.score}</span><span>距离 {fmtPct(zone.distance_pct / 100)}</span></div>
+      <div className="mt-0.5 truncate text-[12px] text-muted" title={zone.sources.join('、')}>{zone.sources.join('、')} · 触碰 {zone.touches}</div>
+    </button>
+  )
+}
+
 export function StockPriceZonesPanel({
   analysis,
   zones,
+  shortTermAnalysis,
   assetType,
   collapsed = false,
   onToggleCollapsed,
@@ -83,6 +110,19 @@ export function StockPriceZonesPanel({
   selectedZoneId,
   onSelectZone,
 }: Props) {
+  if (shortTermAnalysis) {
+    const supports = shortTermAnalysis.zones.support ?? []
+    const resistances = shortTermAnalysis.zones.resistance ?? []
+    return (
+      <section className="border-b border-border/70">
+        <div className={`flex items-start justify-between gap-2 px-2.5 py-2 ${collapsed ? '' : 'border-b border-border/70'}`}>
+          <div className="min-w-0"><span className="flex flex-wrap items-center gap-1.5"><span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#F97316]" /><span className="text-xs font-medium text-foreground">反陷阱支撑 / 阻力</span><span className="rounded bg-[#F97316]/10 px-1.5 py-0.5 text-[12px] text-[#FB923C]">short-term</span><span className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[12px] text-secondary">{PERIOD_LABELS[shortTermAnalysis.period]}</span></span>{!collapsed && <span className="mt-0.5 block truncate text-[12px] text-muted">聚类阈值 max(价格1%，ATR×0.5)，状态含正常 / 假突破 / 已突破</span>}</div>
+          <div className="flex shrink-0 items-center gap-1">{onToggleShowZones && <button type="button" onClick={onToggleShowZones} className={`flex shrink-0 items-center gap-1 rounded-btn px-1.5 py-1 text-[12px] ${showZones ? 'bg-accent/15 text-accent' : 'bg-elevated text-muted'}`} aria-pressed={showZones}>{showZones ? <Check className="h-3 w-3" /> : <CircleHelp className="h-3 w-3" />}价位带</button>}{onToggleCollapsed && <button type="button" onClick={onToggleCollapsed} className="rounded-btn p-1 text-muted transition-colors hover:bg-elevated hover:text-foreground" aria-expanded={!collapsed} aria-label={collapsed ? '展开反陷阱价位' : '收起反陷阱价位'}><ChevronDown className={`h-3.5 w-3.5 transition-transform ${collapsed ? '-rotate-90' : ''}`} /></button>}</div>
+        </div>
+        {!collapsed && <div className="grid gap-2 p-2"><div className="grid gap-2 sm:grid-cols-2"><div className="grid gap-1.5"><div className="text-[12px] font-medium text-bull">支撑区 ↓</div>{supports.length ? supports.map((zone, index) => <ShortTermZoneCard key={zone.id} zone={zone} rank={index + 1} assetType={assetType} selected={selectedZoneId === zone.id} onSelect={() => onSelectZone?.(zone)} />) : <div className="rounded-card border border-border/60 px-2 py-2 text-[12px] text-muted">暂无可用支撑区</div>}</div><div className="grid gap-1.5"><div className="text-[12px] font-medium text-bear">压力区 ↑</div>{resistances.length ? resistances.map((zone, index) => <ShortTermZoneCard key={zone.id} zone={zone} rank={index + 1} assetType={assetType} selected={selectedZoneId === zone.id} onSelect={() => onSelectZone?.(zone)} />) : <div className="rounded-card border border-border/60 px-2 py-2 text-[12px] text-muted">暂无可用压力区</div>}</div></div><div className="text-[12px] text-muted">来源包括局部高低点、均线、放量柱、缺口和横盘平台；缠论区间仅保留给结构行动层。</div></div>}
+      </section>
+    )
+  }
   const supports = zones.filter(zone => zone.side === 'support')
   const resistances = zones.filter(zone => zone.side === 'resistance')
   const current = zones.find(zone => zone.side === 'current')

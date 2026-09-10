@@ -25,6 +25,7 @@ from app.services.technical_scoring import (
     score_technical_frame,
     technical_score_payload,
 )
+from app.services.short_term_scoring import short_term_analysis_payload
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,11 @@ def _normalize_include_technical_scores(value: object) -> bool:
     return value if isinstance(value, bool) else False
 
 
+def _normalize_include_short_term_analysis(value: object) -> bool:
+    """Keep direct route calls compatible with FastAPI's Query wrapper objects."""
+    return value if isinstance(value, bool) else False
+
+
 def _date_text(value: object) -> str:
     """Normalize date-like values before mixing historical and live rows."""
     text = value.isoformat() if hasattr(value, "isoformat") else str(value)
@@ -67,6 +73,76 @@ def _rows_and_score_payload(frame, include_technical_scores: bool):
     visible = _clean_technical_columns(frame)
     payload = technical_score_payload(frame) if include_technical_scores else None
     return visible.to_dicts(), payload
+
+
+def _short_term_payload(
+    frame,
+    include: bool,
+    *,
+    symbol: str,
+    asset_type: str,
+    period: str,
+    stock_name: str | None,
+    start: date | None = None,
+    end: date | None = None,
+    visible_keys: set[str] | None = None,
+):
+    if not include:
+        return None
+    payload = short_term_analysis_payload(
+        frame,
+        symbol=symbol,
+        asset_type=asset_type,
+        period=period,
+        risk_warning=is_risk_warning_name(stock_name),
+    )
+    if start is None or end is None:
+        return payload
+    keys = visible_keys
+    if keys is None:
+        keys = set()
+        for record in frame.to_dicts():
+            if period in {"1w", "1mo"} and record.get("period_start") is not None and record.get("period_end") is not None:
+                period_start = str(record["period_start"])[:10]
+                period_end = str(record["period_end"])[:10]
+                in_range = period_start <= end.isoformat() and period_end >= start.isoformat()
+            else:
+                raw_date = record.get("date") or record.get("period_end")
+                key = str(raw_date).replace("T", " ")
+                in_range = start.isoformat() <= key[:10] <= end.isoformat()
+            if in_range:
+                raw_date = record.get("date") or record.get("period_end")
+                keys.add(str(raw_date).replace("T", " ")[:16 if period == "30m" else 10])
+
+    def visible(as_of: object) -> bool:
+        key = str(as_of or "").replace("T", " ")[:16 if period == "30m" else 10]
+        return key in keys
+
+    payload["rows"] = [
+        row for row in payload.get("rows", [])
+        if visible(row.get("as_of"))
+    ]
+    payload["signals"] = {
+        key: [
+            item for item in values
+            if visible(item.get("as_of"))
+        ]
+        for key, values in payload.get("signals", {}).items()
+    }
+    return payload
+
+
+def _empty_short_term_payload(*, period: str, reason: str = "当前周期没有可计算的K线"):
+    return {
+        "version": "short-term-score-v1",
+        "period": period,
+        "bar_semantics": "native-bars",
+        "rows": [],
+        "zones": {"support": [], "resistance": []},
+        "signals": {},
+        "as_of": None,
+        "limitations": [reason],
+    }
 
 
 def _annotate_bar_closure(rows: list[dict], period: str, requested_end: date) -> list[dict]:
@@ -459,11 +535,14 @@ def get_daily(
     end_date: Optional[str] = Query(None, description="截止日期 YYYY-MM-DD, 默认今天"),
     ext_columns: Optional[str] = Query(None, description="逗号分隔的 ext 列: config_id.field_name"),
     include_technical_scores: bool = Query(False, description="是否附带 technical-score-v2 评分序列"),
+    include_short_term_analysis: bool = Query(False, description="是否附带 short-term-score-v1 短线分析"),
 ):
     """优先读取展示行情快照, 不可用时回退本地 enriched 和当日行情。"""
     import polars as pl
 
     include_technical_scores = _normalize_include_technical_scores(include_technical_scores)
+    include_short_term_analysis = _normalize_include_short_term_analysis(include_short_term_analysis)
+    include_analysis = include_technical_scores or include_short_term_analysis
     repo = request.app.state.repo
     try:
         end = date.fromisoformat(end_date) if end_date else cn_today()
@@ -479,7 +558,7 @@ def get_daily(
 
     snapshot = _chart_snapshot(request, symbol, asset_type, "1d", start - timedelta(days=180), end)
     if not snapshot.frame.is_empty():
-        if include_technical_scores:
+        if include_analysis:
             chart_rows = snapshot.frame.to_dicts()
             if start <= cn_today() <= end and in_continuous_session():
                 chart_rows = _maybe_inject_live_candle(request, symbol, chart_rows, asset_type)
@@ -487,25 +566,40 @@ def get_daily(
                 {**row, "date": _date_text(row.get("date"))}
                 for row in chart_rows
             ], infer_schema_length=None)
-            scored = _score_frame_if_requested(chart_frame, True)
+            scored = _score_frame_if_requested(chart_frame, include_technical_scores)
             visible = scored.filter(pl.col("date").is_between(pl.lit(start.isoformat()), pl.lit(end.isoformat())))
-            rows, score_payload = _rows_and_score_payload(visible, True)
+            if not include_technical_scores:
+                visible = chart_frame.filter(pl.col("date").is_between(pl.lit(start.isoformat()), pl.lit(end.isoformat())))
+            rows, score_payload = _rows_and_score_payload(visible, include_technical_scores)
+            short_payload = _short_term_payload(
+                chart_frame,
+                include_short_term_analysis,
+                symbol=symbol,
+                asset_type=asset_type,
+                period="1d",
+                stock_name=stock_name,
+                start=start,
+                end=end,
+            )
         else:
             visible = snapshot.frame.filter(pl.col("date").is_between(start, end))
             rows = visible.to_dicts()
             if start <= cn_today() <= end and in_continuous_session():
                 rows = _maybe_inject_live_candle(request, symbol, rows, asset_type)
             score_payload = None
+            short_payload = None
         rows = _annotate_bar_closure(rows, "1d", end)
         resp = {"symbol": symbol, "name": stock_name, "asset_type": asset_type,
                 "stock_info": stock_info, "rows": rows, "source": "chart",
                 "data_status": snapshot.metadata()}
         if score_payload is not None:
             resp["technical_scores"] = score_payload
+        if short_payload is not None:
+            resp["short_term_analysis"] = short_payload
         return _attach_ext(resp, repo, symbol, ext_columns)
 
     # 从 enriched 表读取 (已含前复权 OHLCV + 技术指标 + 信号); ETF/指数走独立存储
-    data_start = start - timedelta(days=180) if include_technical_scores else start
+    data_start = start - timedelta(days=180) if include_analysis else start
     df = repo.get_daily_asset(asset_type, symbol, data_start, end)
 
     if df.is_empty():
@@ -514,12 +608,14 @@ def get_daily(
                 "data_status": snapshot.metadata()}
         if include_technical_scores:
             resp["technical_scores"] = {"version": TECHNICAL_SCORE_VERSION, "rows": []}
+        if include_short_term_analysis:
+            resp["short_term_analysis"] = _empty_short_term_payload(period="1d")
         return _attach_ext(resp, repo, symbol, ext_columns)
 
     # 追加/覆盖今日实时蜡烛. 仅评分路径需要重新构造 Polars 帧; 实时注入的
     # date 是字符串而历史 enriched 可能是 date, 先统一成 ISO 字符串避免混型.
     raw_rows = _maybe_inject_live_candle(request, symbol, df.to_dicts(), asset_type)
-    if include_technical_scores:
+    if include_analysis:
         normalized_rows = [
             {
                 **row,
@@ -528,11 +624,22 @@ def get_daily(
             for row in raw_rows
         ]
         frame = pl.DataFrame(normalized_rows, infer_schema_length=None)
-        scored = _score_frame_if_requested(frame, True)
-        visible = scored.filter(pl.col("date").is_between(pl.lit(start.isoformat()), pl.lit(end.isoformat())))
-        rows, score_payload = _rows_and_score_payload(visible, True)
+        scored = _score_frame_if_requested(frame, include_technical_scores)
+        visible = scored.filter(pl.col("date").is_between(pl.lit(start.isoformat()), pl.lit(end.isoformat()))) if include_technical_scores else frame.filter(pl.col("date").is_between(pl.lit(start.isoformat()), pl.lit(end.isoformat())))
+        rows, score_payload = _rows_and_score_payload(visible, include_technical_scores)
+        short_payload = _short_term_payload(
+            frame,
+            include_short_term_analysis,
+            symbol=symbol,
+            asset_type=asset_type,
+            period="1d",
+            stock_name=stock_name,
+            start=start,
+            end=end,
+        )
     else:
         rows, score_payload = raw_rows, None
+        short_payload = None
 
     rows = _annotate_bar_closure(rows, "1d", end)
 
@@ -541,6 +648,8 @@ def get_daily(
             "data_status": snapshot.metadata()}
     if score_payload is not None:
         resp["technical_scores"] = score_payload
+    if short_payload is not None:
+        resp["short_term_analysis"] = short_payload
     return _attach_ext(resp, repo, symbol, ext_columns)
 
 
@@ -553,11 +662,14 @@ def get_period_kline(
     end_date: Optional[str] = Query(None, description="展示截止日期 YYYY-MM-DD,默认今天"),
     days: int = Query(20, ge=1, le=120, description="30分钟K最近交易日数量"),
     include_technical_scores: bool = Query(False, description="是否附带 technical-score-v2 评分序列"),
+    include_short_term_analysis: bool = Query(False, description="是否附带 short-term-score-v1 短线分析"),
 ):
     """优先原生30分钟K和展示日线, 周/月聚合后重算指标, 不落库。"""
     import polars as pl
 
     include_technical_scores = _normalize_include_technical_scores(include_technical_scores)
+    include_short_term_analysis = _normalize_include_short_term_analysis(include_short_term_analysis)
+    include_analysis = include_technical_scores or include_short_term_analysis
     repo = request.app.state.repo
     asset_type = repo.resolve_asset_type(symbol)
     if asset_type == "index":
@@ -616,19 +728,33 @@ def get_period_kline(
                         ).sort(["symbol", "datetime"])
                         source = "chart+live"
             trade_dates = sorted(native["datetime"].dt.date().unique().to_list())[-days:]
-            if include_technical_scores:
+            if include_analysis:
                 bars = prepare_native_30m(native)
-                scored = score_technical_frame(bars)
-                scored = scored.filter(pl.col("date").str.slice(0, 10).is_in([str(value) for value in trade_dates]))
-                rows, score_payload = _rows_and_score_payload(scored, True)
+                scored = score_technical_frame(bars) if include_technical_scores else bars
+                visible = scored.filter(pl.col("date").str.slice(0, 10).is_in([str(value) for value in trade_dates]))
+                rows, score_payload = _rows_and_score_payload(visible, include_technical_scores)
+                short_payload = _short_term_payload(
+                    bars,
+                    include_short_term_analysis,
+                    symbol=symbol,
+                    asset_type=asset_type,
+                    period="30m",
+                    stock_name=stock_info.get("name"),
+                    start=start,
+                    end=end,
+                    visible_keys={str(value).replace("T", " ")[:16] for value in visible["date"].to_list()},
+                )
             else:
                 native = native.filter(pl.col("datetime").dt.date().is_in(trade_dates))
                 rows, score_payload = _rows_and_score_payload(prepare_native_30m(native), False)
+                short_payload = None
             rows = _annotate_bar_closure(rows, "30m", end)
             response = {**base, "rows": rows, "source": source,
                         "requested_days": days, "available_days": len(trade_dates)}
             if score_payload is not None:
                 response["technical_scores"] = score_payload
+            if short_payload is not None:
+                response["short_term_analysis"] = short_payload
             return response
         # 多取自然日覆盖节假日，最终严格裁成最近 N 个实际交易日。
         scan_start = min(start, end - timedelta(days=days * 3 + 20))
@@ -655,18 +781,32 @@ def get_period_kline(
             response = {**base, "rows": [], "source": source, "requested_days": days, "available_days": 0}
             if include_technical_scores:
                 response["technical_scores"] = {"version": TECHNICAL_SCORE_VERSION, "rows": []}
+            if include_short_term_analysis:
+                response["short_term_analysis"] = _empty_short_term_payload(period="30m")
             return response
         minute = minute.with_columns(pl.col("datetime").dt.date().alias("_trade_date"))
         trade_dates = sorted(minute["_trade_date"].unique().to_list())[-days:]
-        if include_technical_scores:
+        if include_analysis:
             minute = minute.drop("_trade_date")
             bars = aggregate_minute_30m(minute)
-            scored = score_technical_frame(bars)
-            scored = scored.filter(pl.col("date").str.slice(0, 10).is_in([str(value) for value in trade_dates]))
-            rows, score_payload = _rows_and_score_payload(scored, True)
+            scored = score_technical_frame(bars) if include_technical_scores else bars
+            visible = scored.filter(pl.col("date").str.slice(0, 10).is_in([str(value) for value in trade_dates]))
+            rows, score_payload = _rows_and_score_payload(visible, include_technical_scores)
+            short_payload = _short_term_payload(
+                bars,
+                include_short_term_analysis,
+                symbol=symbol,
+                asset_type=asset_type,
+                period="30m",
+                stock_name=stock_info.get("name"),
+                start=start,
+                end=end,
+                visible_keys={str(value).replace("T", " ")[:16] for value in visible["date"].to_list()},
+            )
         else:
             minute = minute.filter(pl.col("_trade_date").is_in(trade_dates)).drop("_trade_date")
             rows, score_payload = _rows_and_score_payload(aggregate_minute_30m(minute), False)
+            short_payload = None
         rows = _annotate_bar_closure(rows, "30m", end)
         response = {
             **base,
@@ -677,11 +817,16 @@ def get_period_kline(
         }
         if score_payload is not None:
             response["technical_scores"] = score_payload
+        if short_payload is not None:
+            response["short_term_analysis"] = short_payload
         return response
 
-    # 指标按目标周期重算，因此额外读取预热数据：周K覆盖 MA60 约需 14 个月，
-    # 月K覆盖 MA60 约需 5 年；只扫描单标的基础列，不触发日线全指标热路径。
-    warmup_days = 500 if period == "1w" else 6 * 366
+    # 指标和反陷阱区按目标周期重算，因此额外读取至少 120 根目标周期K的预热数据；
+    # 只扫描单标的基础列，不触发日线全指标热路径。
+    # 短线区扫描最多 120 根目标周期K; 日线聚合时至少预取对应根数。
+    warmup_days = (
+        120 * 7 + 90 if period == "1w" else 120 * 31 + 366
+    ) if include_short_term_analysis else (500 if period == "1w" else 6 * 366)
     warmup_start = start - timedelta(days=warmup_days)
     base_columns = ["symbol", "date", "open", "high", "low", "close", "volume", "amount"]
     source = "enriched"
@@ -701,12 +846,15 @@ def get_period_kline(
             end_date=end.isoformat(),
             ext_columns=None,
             include_technical_scores=include_technical_scores,
+            include_short_term_analysis=include_short_term_analysis,
         )
         fallback_rows = fallback.get("rows", []) if isinstance(fallback, dict) else []
         if not fallback_rows:
             response = {**base, "rows": [], "source": "none"}
             if include_technical_scores:
                 response["technical_scores"] = {"version": TECHNICAL_SCORE_VERSION, "rows": []}
+            if include_short_term_analysis:
+                response["short_term_analysis"] = _empty_short_term_payload(period=period)
             return response
         daily = pl.DataFrame(fallback_rows, infer_schema_length=None)
         source = str(fallback.get("source") or "live")
@@ -721,6 +869,16 @@ def get_period_kline(
         ], infer_schema_length=None)
 
     bars = aggregate_daily_period(daily, period)
+    short_payload = _short_term_payload(
+        bars,
+        include_short_term_analysis,
+        symbol=symbol,
+        asset_type=asset_type,
+        period=period,
+        stock_name=stock_info.get("name"),
+        start=start,
+        end=end,
+    )
     scored = _score_frame_if_requested(bars, include_technical_scores)
     if not scored.is_empty():
         scored = scored.filter(
@@ -731,6 +889,8 @@ def get_period_kline(
     response = {**base, "rows": rows, "source": source}
     if score_payload is not None:
         response["technical_scores"] = score_payload
+    if short_payload is not None:
+        response["short_term_analysis"] = short_payload
     return response
 
 
@@ -830,8 +990,12 @@ def _latest_live_candle(
         "volume": q.get("volume"),
         "amount": q.get("amount"),
         "change_pct": q.get("change_pct"),
+        "turnover_rate": q.get("turnover_rate"),
         "is_live": True,
     }
+    for key in ("raw_close", "raw_high", "raw_low"):
+        if q.get(key) is not None:
+            live_row[key] = q[key]
     for key in ("ma5", "ma10", "ma20", "ma30", "ma60",
                 "macd_dif", "macd_dea", "macd_hist",
                 "kdj_k", "kdj_d", "kdj_j",

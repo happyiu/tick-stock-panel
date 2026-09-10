@@ -52,7 +52,7 @@ export type StockTechnicalIndicatorKey =
   | 'volume_trend'
 
 export interface StockPreviewTechnicalLayoutConfig {
-  version: 2
+  version: 3
   visible: Partial<Record<StockTechnicalIndicatorKey, boolean>>
 }
 

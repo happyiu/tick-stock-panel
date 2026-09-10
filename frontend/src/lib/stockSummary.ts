@@ -2,6 +2,9 @@ import type {
   ChartDataStatus,
   KlinePeriod,
   KlineRow,
+  ShortTermAnalysis,
+  ShortTermIndicatorZone,
+  ShortTermAnalysisRow,
   TechnicalScoreRow,
   TechnicalScores,
 } from '@/lib/api'
@@ -72,6 +75,7 @@ export interface StockSummaryTechnical {
     momentum: string
     volumePrice: string
   }
+  shortTerm?: boolean
 }
 
 export interface StockSummaryStructure {
@@ -171,6 +175,7 @@ export interface StockSummaryInput {
   period: KlinePeriod
   rows: KlineRow[]
   technicalScores?: TechnicalScores
+  shortTermAnalysis?: ShortTermAnalysis
   dataStatus?: ChartDataStatus
   /** API response source; enriched means the chart snapshot fell back to local canonical data. */
   dataSource?: string
@@ -246,6 +251,20 @@ function scoreForSelection(
   return values.find(row => normalizeKey(row.as_of, period) === selected) ?? null
 }
 
+type SummaryScore = TechnicalScoreRow | ShortTermAnalysisRow
+
+function shortTermScoreForSelection(
+  analysis: ShortTermAnalysis | undefined,
+  rows: KlineRow[],
+  selectedBarKey: string | null | undefined,
+  period: KlinePeriod,
+): ShortTermAnalysisRow | null {
+  const values = analysis?.rows ?? []
+  if (!values.length) return null
+  const selected = selectedBarKey ? normalizeKey(selectedBarKey, period) : normalizeKey(rows.at(-1)?.date, period)
+  return values.find(row => normalizeKey(row.as_of, period) === selected) ?? null
+}
+
 function scoreLabel(value: number | null): { label: string; tone: StockSummaryTone } {
   if (!finite(value)) return { label: '未评估', tone: 'neutral' }
   if (value >= 60) return { label: '偏强', tone: 'bull' }
@@ -253,10 +272,11 @@ function scoreLabel(value: number | null): { label: string; tone: StockSummaryTo
   return { label: '中性', tone: 'neutral' }
 }
 
-function scoreDimensionLabel(value: number | null): string {
+function scoreDimensionLabel(value: number | null, shortTerm = false): string {
   if (!finite(value)) return '未评估'
-  if (value >= 60) return '改善'
-  if (value <= 40) return '偏弱'
+  if (shortTerm) return value > 50 ? '改善' : value < 50 ? '偏弱' : '中性'
+  if (value >= (shortTerm ? 50 : 60)) return '改善'
+  if (value <= (shortTerm ? 50 : 40)) return '偏弱'
   return '中性'
 }
 
@@ -293,10 +313,40 @@ function nearestZone(zones: PriceZone[], side: PriceZone['side']): PriceZone | n
     .sort((a, b) => (a.distancePct ?? Infinity) - (b.distancePct ?? Infinity))[0] ?? null
 }
 
+function sourceType(label: string): PriceZone['sources'][number]['type'] {
+  if (label.includes('MA')) return 'ma20'
+  if (label.includes('缺口') || label.includes('平台')) return 'fractal'
+  return 'fractal'
+}
+
+function shortTermZonesAsPriceZones(input: StockSummaryInput): PriceZone[] {
+  const analysis = input.shortTermAnalysis
+  if (!analysis) return input.priceZones
+  const zones: ShortTermIndicatorZone[] = [
+    ...(analysis.zones.support ?? []),
+    ...(analysis.zones.resistance ?? []),
+  ]
+  return zones.map(zone => ({
+    id: zone.id,
+    side: zone.id.startsWith('support') ? 'support' : 'resistance',
+    low: zone.low,
+    high: zone.high,
+    center: zone.center,
+    distancePct: zone.distance_pct / 100,
+    sources: zone.sources.map(label => ({ type: sourceType(label), label, price: zone.center, date: zone.as_of })),
+    sourceCount: zone.sources.length,
+    lastTouchTime: zone.as_of,
+    period: input.period,
+    structureSource: 'stroke',
+    ruleVersion: 'price-zone-v1',
+    atrAvailable: true,
+  }))
+}
+
 function buildQuality(
   input: StockSummaryInput,
   row: KlineRow | null,
-  score: TechnicalScoreRow | null,
+  score: SummaryScore | null,
 ): StockSummaryQualityInfo {
   const reasons: string[] = []
   if (!row) reasons.push(input.selectedBarKey ? '选中的观察时点没有对应 K 线' : '暂无当前周期 K 线')
@@ -323,7 +373,44 @@ function buildQuality(
   }
 }
 
-function buildTechnical(score: TechnicalScoreRow | null): StockSummaryTechnical {
+function normalizedShortTermDimension(score: ShortTermAnalysisRow, id: string): number | null {
+  const raw = score.dimensions.find(item => item.id === id)?.score
+  return finite(raw) ? (raw + 10) * 5 : null
+}
+
+function buildTechnical(score: SummaryScore | null): StockSummaryTechnical {
+  if (score && 'total' in score) {
+    const scoreValue = finite(score.total) ? score.total : null
+    const direction = scoreValue == null
+      ? { label: '未评估', tone: 'neutral' as const }
+      : scoreValue >= 78
+        ? { label: '强势偏多', tone: 'bull' as const }
+        : scoreValue >= 63
+          ? { label: '偏多', tone: 'bull' as const }
+          : scoreValue <= 25
+            ? { label: '强势偏空', tone: 'bear' as const }
+            : scoreValue <= 40
+              ? { label: '偏弱', tone: 'bear' as const }
+              : { label: '中性', tone: 'neutral' as const }
+    return {
+      score: scoreValue,
+      confidence: finite(score.coverage) ? score.coverage * 100 : null,
+      coverage: finite(score.coverage) ? score.coverage * 100 : null,
+      trend: normalizedShortTermDimension(score, 'ma_trend'),
+      momentum: normalizedShortTermDimension(score, 'momentum'),
+      volumePrice: normalizedShortTermDimension(score, 'volume_price'),
+      volatilityRisk: null,
+      activity: finite(score.indicators.vol_ratio_5d) ? Math.max(0, Math.min(100, score.indicators.vol_ratio_5d * 50)) : null,
+      direction: direction.label,
+      directionTone: direction.tone,
+      dimensionLabels: {
+        trend: scoreDimensionLabel(normalizedShortTermDimension(score, 'ma_trend'), true),
+        momentum: scoreDimensionLabel(normalizedShortTermDimension(score, 'momentum'), true),
+        volumePrice: scoreDimensionLabel(normalizedShortTermDimension(score, 'volume_price'), true),
+      },
+      shortTerm: true,
+    }
+  }
   const scoreValue = finite(score?.direction_score) ? score.direction_score : null
   const direction = scoreLabel(scoreValue)
   return {
@@ -434,19 +521,20 @@ function buildEvidence(
 ): { supporting: StockSummaryEvidence[]; opposing: StockSummaryEvidence[] } {
   const supporting: StockSummaryEvidence[] = []
   const opposing: StockSummaryEvidence[] = []
-  if (technical.score != null && technical.score >= 60) {
+  const dimensionMin = technical.shortTerm ? 50 : 60
+  if (technical.score != null && technical.score >= (technical.shortTerm ? 63 : 60)) {
     supporting.push({ id: 'technical-direction', source: 'technical', label: '技术方向', text: `技术方向分 ${technical.score}，当前判断为${technical.direction}。`, tone: 'bull' })
   } else if (technical.score != null && technical.score <= 40) {
     opposing.push({ id: 'technical-direction', source: 'technical', label: '技术方向', text: `技术方向分 ${technical.score}，当前判断为${technical.direction}。`, tone: 'bear' })
   }
-  if (technical.momentum != null && technical.momentum >= 60) {
+  if (technical.momentum != null && technical.momentum > dimensionMin) {
     supporting.push({ id: 'technical-momentum', source: 'technical', label: '动能', text: `动能维度 ${technical.momentum} 分，状态为${technical.dimensionLabels.momentum}。`, tone: 'bull' })
-  } else if (technical.momentum != null && technical.momentum <= 40) {
+  } else if (technical.momentum != null && technical.momentum < dimensionMin) {
     opposing.push({ id: 'technical-momentum', source: 'technical', label: '动能', text: `动能维度 ${technical.momentum} 分，状态为${technical.dimensionLabels.momentum}。`, tone: 'bear' })
   }
-  if (technical.volumePrice != null && technical.volumePrice < 50) {
+  if (technical.volumePrice != null && technical.volumePrice < dimensionMin) {
     opposing.push({ id: 'technical-volume-price', source: 'technical', label: '量价', text: `量价维度 ${technical.volumePrice} 分，量价配合不足。`, tone: 'bear' })
-  } else if (technical.volumePrice != null && technical.volumePrice >= 60) {
+  } else if (technical.volumePrice != null && technical.volumePrice > dimensionMin) {
     supporting.push({ id: 'technical-volume-price', source: 'technical', label: '量价', text: `量价维度 ${technical.volumePrice} 分，量价配合较好。`, tone: 'bull' })
   }
   if (structure.direction === 'bull') {
@@ -550,10 +638,14 @@ function riskGate(risk: StockSummarySnapshot['risk']): StockSummaryCondition {
 function decisionInputState(
   input: StockSummaryInput,
   row: KlineRow | null,
-  score: TechnicalScoreRow | null,
+  score: SummaryScore | null,
 ): StockDecisionInputState {
-  const scoreReady = score?.available === true
-    && [score.direction_score, score.trend, score.momentum, score.volume_price].every(finite)
+  const scoreReady = score && 'total' in score
+    ? score.available === true
+      && finite(score.total)
+      && ['ma_trend', 'momentum', 'volume_price'].every(id => finite(score.dimensions.find(item => item.id === id)?.score))
+    : score?.available === true
+      && [score?.direction_score, score?.trend, score?.momentum, score?.volume_price].every(finite)
   if (!row || !scoreReady || input.chanlun.status !== 'ready') return 'blocked'
   const staleSnapshot = input.dataStatus?.stale === true && input.dataSource !== 'enriched'
   if (row.is_closed !== true || staleSnapshot) return 'provisional'
@@ -590,15 +682,17 @@ function buildDecisionConditions(
   const upgradeConditions: StockSummaryCondition[] = []
   const riskConditions: StockSummaryCondition[] = []
   const signal = active?.signal
+  const dimensionMin = technical.shortTerm ? 50 : 60
+  const scoreMin = technical.shortTerm ? 63 : 60
 
   if (signal?.status === 'candidate' && active?.direction === 'buy') {
     upgradeConditions.push(...conditions.filter(item => item.state !== 'met'))
     if (signal.kind !== 'first_buy') {
       upgradeConditions.push(
-        scoreGate('decision-direction-score', '技术方向 ≥ 60', technical.score, 60, 'min'),
-        scoreGate('decision-trend-score', '趋势 ≥ 60', technical.trend, 60, 'min'),
-        scoreGate('decision-momentum-score', '动能 ≥ 60', technical.momentum, 60, 'min'),
-        scoreGate('decision-volume-price-score', '量价 ≥ 60', technical.volumePrice, 60, 'min'),
+        scoreGate('decision-direction-score', `技术总分 ≥ ${scoreMin}`, technical.score, scoreMin, 'min'),
+        scoreGate('decision-trend-score', `MA趋势 ≥ ${dimensionMin}`, technical.trend, dimensionMin, 'min'),
+        scoreGate('decision-momentum-score', `动能 ≥ ${dimensionMin}`, technical.momentum, dimensionMin, 'min'),
+        scoreGate('decision-volume-price-score', `量价 ≥ ${dimensionMin}`, technical.volumePrice, dimensionMin, 'min'),
         riskGate(risk),
       )
     }
@@ -621,7 +715,7 @@ function buildDecisionConditions(
         : '卖侧候选失效后再重新评估。',
       sourceId: signal.id,
     })
-    upgradeConditions.push(scoreGate('decision-recovery-score', '技术方向恢复 ≥ 60', technical.score, 60, 'min'))
+    upgradeConditions.push(scoreGate('decision-recovery-score', `技术方向恢复 ≥ ${scoreMin}`, technical.score, scoreMin, 'min'))
     riskConditions.push({
       id: `decision-sell-signal-${signal.id}`,
       label: '卖侧结构',
@@ -684,7 +778,7 @@ function buildDecisionConditions(
 function buildDecision(
   input: StockSummaryInput,
   row: KlineRow | null,
-  score: TechnicalScoreRow | null,
+  score: SummaryScore | null,
   technical: StockSummaryTechnical,
   structure: StockSummaryStructure,
   active: SignalRiskContext | null,
@@ -704,22 +798,26 @@ function buildDecision(
   const lowerMissingAllowed = !!signal && lowerLevelCanBeMissing(signal)
   const lowerConfirmed = !!signal && lowerLevelConfirmed(signal)
   const allReady = !!signal && allSignalConditionsReady(signal)
+  const dimensionMin = technical.shortTerm ? 50 : 60
+  const totalMin = technical.shortTerm ? 63 : 60
+  const bearDimensionMax = technical.shortTerm ? 50 : 40
   const strongBull = technical.score != null
     && technical.trend != null
     && technical.momentum != null
     && technical.volumePrice != null
-    && technical.score >= 60
-    && technical.trend >= 60
-    && technical.momentum >= 60
-    && technical.volumePrice >= 60
+    && technical.score >= totalMin
+    && technical.trend >= dimensionMin
+    && technical.momentum >= dimensionMin
+    && technical.volumePrice >= dimensionMin
+  const strongBuy = strongBull && technical.score != null && technical.score >= (technical.shortTerm ? 78 : 60)
   const strongBear = technical.score != null
     && technical.trend != null
     && technical.momentum != null
     && technical.volumePrice != null
-    && technical.score <= 40
-    && technical.trend <= 40
-    && technical.momentum <= 40
-    && technical.volumePrice <= 40
+    && technical.score <= (technical.shortTerm ? 25 : 40)
+    && technical.trend <= bearDimensionMax
+    && technical.momentum <= bearDimensionMax
+    && technical.volumePrice <= bearDimensionMax
   // 波浪只进入摘要分歧，不参与买入、减仓、卖出门槛。
   const noActionConflict = !conflicts.some(item => item.id !== 'wave-structure-direction')
   const riskReady = risk.status === 'calculable' && risk.riskReward1 != null && risk.riskReward1 >= 2
@@ -733,7 +831,7 @@ function buildDecision(
       && !strongBull
       && structure.direction === 'bear') {
       state = 'reduce'
-    } else if (isFollowupBuyCandidate && allReady && lowerConfirmed && strongBull && riskReady) {
+    } else if (isFollowupBuyCandidate && allReady && lowerConfirmed && strongBuy && riskReady) {
       state = 'buy'
     } else if (isFollowupBuyCandidate && structureReady && lowerMissingAllowed && strongBull && riskReady) {
       state = 'probe'
@@ -803,7 +901,9 @@ function buildLimitations(input: StockSummaryInput, quality: StockSummaryQuality
  */
 export function buildStockSummary(input: StockSummaryInput): StockSummarySnapshot {
   const row = latestRow(input.rows, input.selectedBarKey, input.period)
-  const score = scoreForSelection(input.technicalScores, input.rows, input.selectedBarKey, input.period)
+  const score: SummaryScore | null = input.shortTermAnalysis
+    ? shortTermScoreForSelection(input.shortTermAnalysis, input.rows, input.selectedBarKey, input.period)
+    : scoreForSelection(input.technicalScores, input.rows, input.selectedBarKey, input.period)
   const quality = buildQuality(input, row, score)
   const technical = buildTechnical(score)
   const active = activeSignal(input.signalRiskContexts, input.preferredSignal)
@@ -811,9 +911,10 @@ export function buildStockSummary(input: StockSummaryInput): StockSummarySnapsho
   const structure = buildStructure(input.chanlun, active)
   const conflicts = buildConflicts(technical, structure, input.elliott)
   const observation = buildObservation(quality, conflicts, active, latest)
-  const support = nearestZone(input.priceZones, 'support')
-  const resistance = nearestZone(input.priceZones, 'resistance')
-  const current = nearestZone(input.priceZones, 'current')
+  const visiblePriceZones = shortTermZonesAsPriceZones(input)
+  const support = nearestZone(visiblePriceZones, 'support')
+  const resistance = nearestZone(visiblePriceZones, 'resistance')
+  const current = nearestZone(visiblePriceZones, 'current')
   const riskContext = active
     ? input.signalRiskContexts.find(context => context.signal.id === active.signal.id) ?? null
     : null
@@ -872,9 +973,9 @@ export function buildStockSummary(input: StockSummaryInput): StockSummarySnapsho
     versions: {
       summary: 'stock-summary-v1',
       decision: 'stock-decision-v1',
-      technical: input.technicalScores?.version ?? null,
+      technical: input.shortTermAnalysis?.version ?? input.technicalScores?.version ?? null,
       structure: input.chanlun.ruleVersion ?? null,
-      levels: input.priceZones[0]?.ruleVersion ?? null,
+      levels: input.shortTermAnalysis?.version ?? visiblePriceZones[0]?.ruleVersion ?? null,
       risk: riskContext ? 'signal-risk-v1' : null,
       wave: input.elliott.schema ?? null,
     },

@@ -56,10 +56,11 @@ export function klineDailyQueryOptions(
   dateRange: { start: string; end: string },
   extColumns?: string,
   includeTechnicalScores = false,
+  includeShortTermAnalysis = false,
 ) {
   return {
-    queryKey: QK.kline(symbol, dateRange.start, dateRange.end, extColumns, includeTechnicalScores),
-    queryFn: () => api.klineDaily(symbol, undefined, dateRange, extColumns, includeTechnicalScores),
+    queryKey: QK.kline(symbol, dateRange.start, dateRange.end, extColumns, includeTechnicalScores, includeShortTermAnalysis),
+    queryFn: () => api.klineDaily(symbol, undefined, dateRange, extColumns, includeTechnicalScores, includeShortTermAnalysis),
     // 工厂无 TData 泛型, 参数用 any 以便 useQuery/prefetchQuery 共用
     placeholderData: (prev: any, prevQuery: any) => {
       const prevKey = prevQuery?.queryKey as readonly unknown[] | undefined
@@ -75,11 +76,12 @@ export function klinePeriodQueryOptions(
   days = DEFAULT_30M_DAYS,
   extColumns?: string,
   includeTechnicalScores = false,
+  includeShortTermAnalysis = false,
 ): UseQueryOptions<KlineResponse, Error, KlineResponse, readonly unknown[]> {
-  if (period === '1d') return klineDailyQueryOptions(symbol, dateRange, extColumns, includeTechnicalScores)
+  if (period === '1d') return klineDailyQueryOptions(symbol, dateRange, extColumns, includeTechnicalScores, includeShortTermAnalysis)
   return {
-    queryKey: QK.klinePeriod(symbol, period, dateRange.start, dateRange.end, days, includeTechnicalScores),
-    queryFn: () => api.klinePeriod(symbol, period, dateRange, days, includeTechnicalScores),
+    queryKey: QK.klinePeriod(symbol, period, dateRange.start, dateRange.end, days, includeTechnicalScores, includeShortTermAnalysis),
+    queryFn: () => api.klinePeriod(symbol, period, dateRange, days, includeTechnicalScores, includeShortTermAnalysis),
     placeholderData: (prev: any, prevQuery: any) => {
       const prevKey = prevQuery?.queryKey as readonly unknown[] | undefined
       return prevKey?.[1] === symbol && prevKey?.[2] === period ? prev : undefined

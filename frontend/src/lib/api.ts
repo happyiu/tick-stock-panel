@@ -287,6 +287,58 @@ export interface TechnicalScores {
   rows: TechnicalScoreRow[]
 }
 
+export type ShortTermTrend = -2 | -1 | 0 | 1 | 2
+
+export interface ShortTermDimension {
+  id: string
+  name: string
+  score: number | null
+  weight: number
+  detail: string
+}
+
+export interface ShortTermIndicatorZone {
+  id: string
+  low: number
+  high: number
+  center: number
+  score: number
+  status: 'normal' | 'trap' | 'broken'
+  tag?: string
+  touches: number
+  false_breaks: number
+  valid_breakouts: number
+  sources: string[]
+  distance_pct: number
+  as_of: string
+}
+
+export interface ShortTermAnalysisRow {
+  as_of: string
+  total: number | null
+  action: string
+  hold_advice: string
+  trend: ShortTermTrend | null
+  coverage: number
+  available: boolean
+  dimensions: ShortTermDimension[]
+  indicators: Record<string, number | null>
+}
+
+export interface ShortTermAnalysis {
+  version: 'short-term-score-v1' | string
+  period: KlinePeriod
+  bar_semantics: 'native-bars' | string
+  rows: ShortTermAnalysisRow[]
+  zones: {
+    support: ShortTermIndicatorZone[]
+    resistance: ShortTermIndicatorZone[]
+  }
+  signals: Record<string, unknown[]>
+  as_of: string | null
+  limitations: string[]
+}
+
 export interface ChartDataStatus {
   data_through?: string | null
   provider: string
@@ -313,6 +365,7 @@ export interface KlineResponse {
   requested_days?: number
   available_days?: number
   technical_scores?: TechnicalScores
+  short_term_analysis?: ShortTermAnalysis
 }
 
 /** 兼容日K增量刷新路径的别名；完整日K响应包含图表状态和技术评分字段。 */
@@ -2364,13 +2417,14 @@ export const api = {
   redetectCapabilities: () =>
     request<CapabilitiesResponse>('/api/capabilities/redetect', { method: 'POST' }),
 
-  klineDaily: (symbol: string, days = 120, dateRange?: { start: string; end: string }, extColumns?: string, includeTechnicalScores = false) =>
+  klineDaily: (symbol: string, days = 120, dateRange?: { start: string; end: string }, extColumns?: string, includeTechnicalScores = false, includeShortTermAnalysis = false) =>
     request<KlineResponse>(
       (dateRange
         ? `/api/kline/daily?symbol=${encodeURIComponent(symbol)}&start_date=${dateRange.start}&end_date=${dateRange.end}`
         : `/api/kline/daily?symbol=${encodeURIComponent(symbol)}&days=${days}`)
       + (extColumns ? `&ext_columns=${encodeURIComponent(extColumns)}` : '')
-      + (includeTechnicalScores ? '&include_technical_scores=true' : ''),
+      + (includeTechnicalScores ? '&include_technical_scores=true' : '')
+      + (includeShortTermAnalysis ? '&include_short_term_analysis=true' : ''),
     ),
   klineDailyLatest: (symbol: string) =>
     request<KlineDailyLatestResponse>(
@@ -2387,11 +2441,13 @@ export const api = {
     dateRange: { start: string; end: string },
     days = 20,
     includeTechnicalScores = false,
+    includeShortTermAnalysis = false,
   ) =>
     request<KlineResponse>(
       `/api/kline/period?symbol=${encodeURIComponent(symbol)}&period=${period}`
       + `&start_date=${dateRange.start}&end_date=${dateRange.end}&days=${days}`
-      + (includeTechnicalScores ? '&include_technical_scores=true' : ''),
+      + (includeTechnicalScores ? '&include_technical_scores=true' : '')
+      + (includeShortTermAnalysis ? '&include_short_term_analysis=true' : ''),
     ),
   klineMinuteBatch: (symbols: string[], date?: string, preferLocal?: boolean, since?: string) =>
     request<{ data: Record<string, MinuteKlineRow[]>; full_minute_local?: boolean; incremental?: boolean }>('/api/kline/minute-batch', {

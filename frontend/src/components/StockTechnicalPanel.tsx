@@ -3,6 +3,8 @@ import { Check, ChevronDown, ChevronLeft, Settings2 } from 'lucide-react'
 import type {
   KlinePeriod,
   KlineRow,
+  ShortTermAnalysis,
+  ShortTermAnalysisRow,
   TechnicalScoreRow,
   TechnicalScores,
 } from '@/lib/api'
@@ -92,6 +94,13 @@ const GROUP_DEFS: TechnicalGroupDef[] = [
   },
 ]
 
+const SHORT_TERM_GROUP_DEFS: TechnicalGroupDef[] = [
+  { key: 'trend', label: 'MA / VWMA', description: '源项目均线与成交量加权均线', scoreKind: 'direction', indicatorKeys: ['ma_alignment', 'ma_slope'] },
+  { key: 'momentum', label: 'MACD / KDJ', description: '源项目动能与摆动状态', scoreKind: 'direction', indicatorKeys: ['macd', 'kdj'] },
+  { key: 'volume_price', label: '量价 / 换手', description: '价格、量比与成交活跃度', scoreKind: 'direction', indicatorKeys: ['volume_price', 'volume_ratio', 'volume_trend'] },
+  { key: 'environment', label: 'BOLL / 位置 / ATR', description: '波动、价格位置与风险观察', scoreKind: 'risk', indicatorKeys: ['boll_width', 'atr'] },
+]
+
 const INDICATOR_BY_KEY = new Map(INDICATOR_DEFS.map(def => [def.key, def]))
 const DEFAULT_VISIBLE = Object.fromEntries(INDICATOR_DEFS.map(def => [def.key, true])) as Partial<Record<StockTechnicalIndicatorKey, boolean>>
 const PERIOD_LABELS: Record<KlinePeriod, string> = {
@@ -151,6 +160,10 @@ function normalizeBarKey(value: unknown, period: KlinePeriod): string {
   return period === '30m'
     ? raw.replace('T', ' ').slice(0, 16)
     : raw.slice(0, 10)
+}
+
+function shortDate(value: string): string {
+  return value.replace('T', ' ').slice(0, 16)
 }
 
 function normalizeBars(rows: KlineRow[], period: KlinePeriod): TechnicalBar[] {
@@ -538,13 +551,14 @@ function buildIndicator(
 }
 
 function defaultLayoutConfig(): StockPreviewTechnicalLayoutConfig {
-  return { version: 2, visible: { ...DEFAULT_VISIBLE } }
+  return { version: 3, visible: { ...DEFAULT_VISIBLE } }
 }
 
 function migrateLegacyVisibility(): StockPreviewTechnicalLayoutConfig {
+  const saved = storage.stockPreviewTechnicalLayout.get(null) as unknown as { version?: number; visible?: Record<string, boolean> } | null
   const legacy = storage.stockPreviewTechnicalCards.get({ order: [], visible: {} })
   const visible = { ...DEFAULT_VISIBLE }
-  const legacyVisible = legacy.visible ?? {}
+  const legacyVisible = (saved?.version === 2 ? saved.visible : legacy.visible) ?? {}
   if (legacyVisible.ma === false) {
     visible.ma_alignment = false
     visible.ma_slope = false
@@ -560,7 +574,7 @@ function migrateLegacyVisibility(): StockPreviewTechnicalLayoutConfig {
   if (legacyVisible.momentum === false) visible.roc = false
   if (legacyVisible.boll === false) visible.boll_width = false
   if (legacyVisible.atr === false) visible.atr = false
-  return { version: 2, visible }
+  return { version: 3, visible }
 }
 
 function normalizeLayoutConfig(raw: StockPreviewTechnicalLayoutConfig | null | undefined): StockPreviewTechnicalLayoutConfig {
@@ -568,12 +582,12 @@ function normalizeLayoutConfig(raw: StockPreviewTechnicalLayoutConfig | null | u
   for (const def of INDICATOR_DEFS) {
     visible[def.key] = typeof raw?.visible?.[def.key] === 'boolean' ? raw.visible[def.key] : true
   }
-  return { version: 2, visible }
+  return { version: 3, visible }
 }
 
 function loadLayoutConfig(): StockPreviewTechnicalLayoutConfig {
   const saved = storage.stockPreviewTechnicalLayout.get(null)
-  return saved?.version === 2 ? normalizeLayoutConfig(saved) : migrateLegacyVisibility()
+  return saved?.version === 3 ? normalizeLayoutConfig(saved) : migrateLegacyVisibility()
 }
 
 function persistLayoutConfig(config: StockPreviewTechnicalLayoutConfig) {
@@ -729,6 +743,7 @@ function scoreBadgeClasses(value: number | null | undefined, kind: ScoreKind): s
 export interface StockTechnicalPanelProps {
   rows: KlineRow[]
   technicalScores?: TechnicalScores
+  shortTermAnalysis?: ShortTermAnalysis
   period: KlinePeriod
   selectedDate: string | null
   assetType?: 'stock' | 'etf' | 'index'
@@ -743,6 +758,7 @@ export interface StockTechnicalPanelProps {
 export function StockTechnicalPanel({
   rows,
   technicalScores,
+  shortTermAnalysis,
   period,
   selectedDate,
   assetType,
@@ -814,6 +830,36 @@ export function StockTechnicalPanel({
 
   const toggleGroup = (key: string) => {
     setCollapsedGroups(previous => ({ ...previous, [key]: !previous[key] }))
+  }
+
+  if (shortTermAnalysis && settingsOpen) {
+    return (
+      <TechnicalSettings
+        groups={SHORT_TERM_GROUP_DEFS}
+        config={config}
+        onBack={() => setSettingsOpen(false)}
+        onReset={resetConfig}
+        onToggle={toggleIndicator}
+      />
+    )
+  }
+
+  if (shortTermAnalysis) {
+    return (
+      <ShortTermPanel
+        analysis={shortTermAnalysis}
+        period={period}
+        selectedDate={selectedDate}
+        isLoading={isLoading}
+        error={error}
+        onRetry={onRetry}
+        onLatest={onLatest}
+        collapsed={collapsed}
+        onToggleCollapsed={onToggleCollapsed}
+        onSettings={() => setSettingsOpen(true)}
+        config={config}
+      />
+    )
   }
 
   return (
@@ -978,6 +1024,142 @@ export function StockTechnicalPanel({
   )
 }
 
+function shortTermRowForDate(
+  analysis: ShortTermAnalysis,
+  selectedDate: string | null,
+  period: KlinePeriod,
+): ShortTermAnalysisRow | null {
+  const selectedKey = selectedDate ? normalizeBarKey(selectedDate, period) : ''
+  const rows = analysis.rows ?? []
+  return rows.find(row => normalizeBarKey(row.as_of, period) === selectedKey)
+    ?? rows.at(-1)
+    ?? null
+}
+
+function shortTermScoreTone(value: number | null | undefined): Tone {
+  if (value == null || value === 0) return 'neutral'
+  return value > 0 ? 'bull' : 'bear'
+}
+
+function shortTermIndicatorValue(value: number | null | undefined, key: string): string {
+  if (value == null) return '—'
+  if (key === 'change_pct' || key === 'price_position_10' || key === 'bb_bandwidth' || key === 'turnover') {
+    return `${value.toFixed(2)}${key === 'change_pct' || key === 'price_position_10' || key === 'bb_bandwidth' || key === 'turnover' ? '%' : ''}`
+  }
+  if (key === 'vol_ratio_5d') return `${value.toFixed(2)}x`
+  return value.toFixed(key.startsWith('macd_') ? 4 : 2)
+}
+
+function shortTermDimensionTone(value: number | null): Tone {
+  return shortTermScoreTone(value)
+}
+
+function shortTermActionTone(action: string): Tone {
+  return action.includes('买') ? 'bull' : action.includes('卖') ? 'bear' : 'neutral'
+}
+
+function shortTermSignalItems(analysis: ShortTermAnalysis): Array<{ key: string; label: string; asOf: string; direction: string }> {
+  const items: Array<{ key: string; label: string; asOf: string; direction: string }> = []
+  for (const [key, values] of Object.entries(analysis.signals ?? {})) {
+    for (const raw of values) {
+      if (!raw || typeof raw !== 'object') continue
+      const value = raw as Record<string, unknown>
+      items.push({
+        key,
+        label: String(value.label ?? key),
+        asOf: String(value.as_of ?? ''),
+        direction: String(value.direction ?? 'neutral'),
+      })
+    }
+  }
+  return items.sort((a, b) => b.asOf.localeCompare(a.asOf)).slice(0, 8)
+}
+
+function ShortTermPanel({
+  analysis,
+  period,
+  selectedDate,
+  isLoading,
+  error,
+  onRetry,
+  onLatest,
+  collapsed,
+  onToggleCollapsed,
+  onSettings,
+  config,
+}: {
+  analysis: ShortTermAnalysis
+  period: KlinePeriod
+  selectedDate: string | null
+  isLoading: boolean
+  error?: Error | null
+  onRetry?: () => void
+  onLatest?: () => void
+  collapsed: boolean
+  onToggleCollapsed?: () => void
+  onSettings?: () => void
+  config: StockPreviewTechnicalLayoutConfig
+}) {
+  const row = shortTermRowForDate(analysis, selectedDate, period)
+  const signalItems = shortTermSignalItems(analysis)
+  const visible = config.visible
+  const indicatorGroups = [
+    { label: 'MA / VWMA', visible: visible.ma_alignment !== false || visible.ma_slope !== false, keys: ['ma5', 'ma7', 'ma10', 'ma20', 'ma60', 'vwma5', 'vwma10', 'vwma20'] },
+    { label: 'MACD', visible: visible.macd !== false, keys: ['macd_dif', 'macd_dea', 'macd_hist'] },
+    { label: 'KDJ', visible: visible.kdj !== false, keys: ['kdj_k', 'kdj_d', 'kdj_j'] },
+    { label: 'BOLL', visible: visible.boll_width !== false, keys: ['bb_upper', 'bb_middle', 'bb_lower', 'bb_bandwidth'] },
+    { label: '量价 / 换手', visible: visible.volume_price !== false || visible.volume_ratio !== false || visible.volume_trend !== false, keys: ['volume', 'vol_ma5', 'vol_ma10', 'vol_ratio_5d', 'turnover', 'change_pct'] },
+    { label: '位置 / 波动', visible: visible.atr !== false, keys: ['price_position_10', 'atr_14', 'close'] },
+  ].filter(group => group.visible)
+  return (
+    <section className="border-b border-border/70">
+      <div className={`flex shrink-0 items-start justify-between px-2.5 py-2 ${collapsed ? '' : 'border-b border-border/70'}`}>
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
+            <span className="text-xs font-medium text-foreground">短线评分</span>
+            <span className="rounded bg-accent/10 px-1.5 py-0.5 font-mono text-[12px] text-accent">{analysis.version}</span>
+            <span className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[12px] text-secondary">{PERIOD_LABELS[period]}</span>
+          </div>
+          {!collapsed && <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[12px] text-muted"><span>原生K线计数</span>{row && <span>截至 {shortDate(row.as_of)}</span>}{row && !normalizeBarKey(row.as_of, period).startsWith(normalizeBarKey(selectedDate, period)) && <button type="button" onClick={onLatest} className="text-accent hover:text-foreground">回到最新</button>}</div>}
+        </div>
+        <div className="flex shrink-0 items-center gap-0.5">
+          {!collapsed && onSettings && <button type="button" onClick={onSettings} className="rounded-btn p-1 text-muted transition-colors hover:bg-elevated hover:text-foreground" title="配置指标显隐" aria-label="配置指标显隐"><Settings2 className="h-3.5 w-3.5" /></button>}
+          <button type="button" onClick={onToggleCollapsed} className="rounded-btn p-1 text-muted transition-colors hover:bg-elevated hover:text-foreground" title={collapsed ? '展开短线评分' : '收起短线评分'} aria-label={collapsed ? '展开短线评分' : '收起短线评分'} aria-expanded={!collapsed}><ChevronDown className={`h-3.5 w-3.5 transition-transform ${collapsed ? '-rotate-90' : ''}`} /></button>
+        </div>
+      </div>
+      {!collapsed && (isLoading && !row ? (
+        <div className="p-2"><div className="h-28 animate-pulse rounded-card border border-border bg-surface/60" /></div>
+      ) : error && !row ? (
+        <div className="flex flex-col items-center gap-2 px-4 py-6 text-center"><span className="text-xs text-secondary">短线分析暂时不可用</span><span className="text-[13px] text-muted">周期行情加载失败，请稍后重试。</span>{onRetry && <button type="button" onClick={onRetry} className="rounded-btn bg-elevated px-2.5 py-1 text-[13px] text-secondary hover:text-foreground">重试</button>}</div>
+      ) : !row ? (
+        <div className="px-4 py-6 text-center text-xs text-muted">暂无短线分析数据</div>
+      ) : (
+        <div className="space-y-2 p-2">
+          <div className="rounded-card border border-border bg-surface/70 p-2.5 shadow-sm">
+            <div className="grid grid-cols-3 gap-1.5">
+              <div className="rounded border border-border/70 bg-base/30 p-2"><div className="text-[12px] text-muted">短线总分</div><div className={`mt-1 font-mono text-lg font-semibold tabular-nums ${TONE_CLASSES[shortTermActionTone(row.action)].value}`}>{row.total == null ? '—' : `${row.total}/100`}</div></div>
+              <div className="rounded border border-border/70 bg-base/30 p-2"><div className="text-[12px] text-muted">源建议</div><div className={`mt-1 text-[13px] font-semibold ${TONE_CLASSES[shortTermActionTone(row.action)].value}`}>{row.action}</div><div className="mt-0.5 truncate text-[12px] text-muted" title={row.hold_advice}>{row.hold_advice}</div></div>
+              <div className="rounded border border-border/70 bg-base/30 p-2"><div className="text-[12px] text-muted">覆盖度 / 趋势</div><div className="mt-1 font-mono text-[13px] tabular-nums text-foreground">{Math.round(row.coverage * 100)}%</div><div className="mt-0.5 text-[12px] text-secondary">{row.trend == null ? '趋势未评估' : ['强势下降', '下降', '震荡', '上升', '强势上升'][row.trend + 2]}</div></div>
+            </div>
+            <div className="mt-2 border-t border-border/50 pt-2 text-[12px] leading-relaxed text-secondary">权重总和 77；单项原始分 −10 至 +10，综合分使用 tanh 归一化。{row.available ? '' : ' 当前历史根数不足，结论仅作占位。'}</div>
+          </div>
+
+          <div className="grid gap-1.5 sm:grid-cols-2">
+            {row.dimensions.map(dimension => <div key={dimension.id} className="rounded-card border border-border bg-surface/70 p-2.5 shadow-sm"><div className="flex items-baseline justify-between gap-2"><span className="text-[12px] font-medium text-foreground">{dimension.name}</span><span className={`font-mono text-[13px] font-semibold tabular-nums ${TONE_CLASSES[shortTermDimensionTone(dimension.score)].value}`}>{dimension.score == null ? '—' : `${dimension.score > 0 ? '+' : ''}${dimension.score}`} <span className="text-[11px] font-normal text-muted">w{dimension.weight}</span></span></div><div className="mt-1 truncate text-[12px] text-secondary" title={dimension.detail}>{dimension.detail}</div></div>)}
+          </div>
+
+          <div className="rounded-card border border-border bg-surface/70 p-2.5 shadow-sm"><div className="mb-2 text-[12px] font-medium text-foreground">源指标</div><div className="grid gap-2 sm:grid-cols-2">{indicatorGroups.map(group => <div key={group.label} className="rounded border border-border/70 bg-base/20 p-2"><div className="mb-1 text-[12px] text-secondary">{group.label}</div><div className="grid grid-cols-2 gap-x-2 gap-y-1">{group.keys.map(key => <div key={key} className="min-w-0"><div className="text-[11px] text-muted">{key === 'price_position_10' ? '10根位置' : key === 'vol_ratio_5d' ? '量比' : key.replace(/_/g, ' ')}</div><div className={`truncate font-mono text-[12px] tabular-nums ${TONE_CLASSES[shortTermScoreTone(row.indicators[key])].value}`}>{shortTermIndicatorValue(row.indicators[key], key)}</div></div>)}</div></div>)}</div></div>
+
+          <div className="rounded-card border border-border bg-surface/70 p-2.5 shadow-sm"><div className="mb-1 text-[12px] font-medium text-foreground">降噪后信号 <span className="font-normal text-muted">（仅研究提示，不自动交易）</span></div>{signalItems.length ? <div className="flex flex-wrap gap-1.5">{signalItems.map((item, index) => <span key={`${item.key}-${item.asOf}-${index}`} className={`rounded border px-1.5 py-0.5 text-[12px] ${item.direction === 'bullish' ? 'border-bull/30 bg-bull/10 text-bull' : item.direction === 'bearish' ? 'border-bear/30 bg-bear/10 text-bear' : 'border-border bg-elevated text-secondary'}`}>{item.label} · {item.asOf.slice(period === '30m' ? 5 : 0, period === '30m' ? 16 : 10)}</span>)}</div> : <div className="text-[12px] text-muted">当前窗口无通过确认与去重的信号</div>}</div>
+
+          {analysis.limitations.length > 0 && <div className="rounded-card border border-warning/30 bg-warning/5 px-2.5 py-2 text-[12px] leading-relaxed text-warning">{analysis.limitations.join('；')}</div>}
+        </div>
+      ))}
+    </section>
+  )
+}
+
 function TechnicalGroup({
   group,
   score,
@@ -1051,11 +1233,13 @@ function TechnicalCard({ indicator }: { indicator: TechnicalIndicatorModel }) {
 }
 
 function TechnicalSettings({
+  groups = GROUP_DEFS,
   config,
   onBack,
   onReset,
   onToggle,
 }: {
+  groups?: TechnicalGroupDef[]
   config: StockPreviewTechnicalLayoutConfig
   onBack: () => void
   onReset: () => void
@@ -1073,7 +1257,7 @@ function TechnicalSettings({
       <div className="p-2.5">
         <p className="mb-2 text-[13px] leading-relaxed text-muted">分组和指标顺序固定，勾选控制指标卡显隐。评分由后端统一计算，不受这里的显隐设置影响。</p>
         <div className="space-y-2">
-          {GROUP_DEFS.map(group => (
+          {groups.map(group => (
             <div key={group.key} className="rounded-card border border-border bg-base/30 p-2">
               <div className="mb-1.5 flex items-center justify-between">
                 <span className="text-[12px] font-medium text-foreground">{group.label}</span>
