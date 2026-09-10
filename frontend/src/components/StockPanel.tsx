@@ -99,6 +99,13 @@ function normalizeDecisionSections(value: StockPreviewDecisionSectionsV1 | null 
 }
 
 export type StockPanelRightPaneMode = 'intraday' | 'technical' | 'empty'
+type StockAnalysisTab = 'indicator' | 'structure' | 'ai'
+
+const STOCK_ANALYSIS_TABS: Array<{ id: StockAnalysisTab; label: string }> = [
+  { id: 'indicator', label: '指标分析' },
+  { id: 'structure', label: '结构分析' },
+  { id: 'ai', label: 'AI分析' },
+]
 
 interface Props {
   symbol: string
@@ -209,6 +216,7 @@ export function StockPanel({
     storage.stockPreviewAnalysisSectionsV3.get(null),
     storage.stockPreviewAnalysisSectionsV2.get(null),
   ))
+  const [analysisTab, setAnalysisTab] = useState<StockAnalysisTab>('indicator')
   const [decisionSections, setDecisionSections] = useState(() => normalizeDecisionSections(
     storage.stockPreviewDecisionSectionsV1.get(null),
   ))
@@ -800,9 +808,11 @@ export function StockPanel({
 
   const handleSummaryFocus = useCallback((section: 'technical' | 'structure' | 'levels' | 'risk') => {
     if (section === 'technical') {
+      setAnalysisTab('indicator')
       setAnalysisSections(previous => ({ ...previous, technicalCollapsed: false }))
       return
     }
+    setAnalysisTab('structure')
     if (section === 'structure') {
       setAnalysisSections(previous => ({ ...previous, structureCollapsed: false, chanlunCollapsed: false }))
       return
@@ -1057,6 +1067,35 @@ export function StockPanel({
                     <RefreshCw className={`h-3.5 w-3.5 ${analysisRefreshing ? 'animate-spin' : ''}`} />
                   </button>
                 </div>
+                <div className="sticky top-0 z-10 border-b border-border/70 bg-surface">
+                  <div role="tablist" aria-label="指标详情分析类型" className="flex items-stretch">
+                    {STOCK_ANALYSIS_TABS.map(tab => {
+                      const active = analysisTab === tab.id
+                      return (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          role="tab"
+                          id={`stock-analysis-tab-${tab.id}`}
+                          aria-selected={active}
+                          aria-controls="stock-analysis-tabpanel"
+                          onClick={() => setAnalysisTab(tab.id)}
+                          className={`relative flex-1 px-2.5 py-2 text-xs transition-colors ${active ? 'font-medium text-accent' : 'text-muted hover:text-secondary'}`}
+                        >
+                          {tab.label}
+                          {active && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-accent" />}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+                <div
+                  id="stock-analysis-tabpanel"
+                  role="tabpanel"
+                  aria-labelledby={`stock-analysis-tab-${analysisTab}`}
+                  className="min-h-0"
+                >
+                {analysisTab === 'indicator' && <>
                 <StockSummaryPanel
                   snapshot={stockSummary}
                   onSelectZone={zone => setSelectedZoneId(current => current === zone.id ? null : zone.id)}
@@ -1081,6 +1120,8 @@ export function StockPanel({
                   collapsed={analysisSections.technicalCollapsed}
                   onToggleCollapsed={() => toggleAnalysisSection('technicalCollapsed')}
                 />
+                </>}
+                {analysisTab === 'structure' && <>
                 <section className="border-b border-border/70">
                   <div className={`flex shrink-0 items-start justify-between px-2.5 py-2 ${analysisSections.structureCollapsed ? '' : 'border-b border-border/70'}`}>
                     <div className="flex items-center gap-1.5">
@@ -1149,6 +1190,9 @@ export function StockPanel({
                   selectedSignalId={selectedSignalId}
                   onSelectSignal={setSelectedSignalId}
                 />
+                </>}
+                {analysisTab === 'ai' && <div className="min-h-[320px]" />}
+                </div>
               </div>
             )}
           </div>
