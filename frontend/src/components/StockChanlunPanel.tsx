@@ -94,10 +94,13 @@ export function StockChanlunPanel({ analysis, period, assetType, collapsed = fal
   return <section>
     <div className={`flex w-full items-start justify-between gap-2 px-2.5 py-2 ${collapsed ? 'border-b border-border/70' : ''}`}>
       <button type="button" onClick={onToggleCollapsed} className="flex min-w-0 flex-1 items-start gap-1.5 text-left" aria-expanded={!collapsed}>
-        {onToggleCollapsed && <ChevronDown className={`mt-0.5 h-3.5 w-3.5 shrink-0 text-muted transition-transform ${collapsed ? '-rotate-90' : ''}`} />}
+        <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-[#8B5CF6]" />
         <span className="min-w-0"><span className="flex flex-wrap items-center gap-1.5"><span className="text-xs font-medium text-foreground">缠论</span><span className="rounded bg-[#8B5CF6]/10 px-1.5 py-0.5 text-[12px] text-[#A78BFA]">结构近似 v{analysis.ruleVersion}</span><span className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[12px] text-secondary">{PERIOD_LABELS[period]}</span></span>{!collapsed && <span className="mt-0.5 block truncate text-[13px] text-muted" title={analysis.approximationLoss}>{analysis.approximationLoss}</span>}</span>
       </button>
-      {!collapsed && onSourceChange && <div className="flex rounded border border-border bg-base p-0.5 text-[12px]">{(['stroke', 'segment'] as const).map(value => <button key={value} type="button" onClick={() => onSourceChange(value)} className={`rounded px-1.5 py-0.5 ${source === value ? 'bg-[#8B5CF6]/20 text-[#A78BFA]' : 'text-muted'}`}>{value === 'stroke' ? '笔中枢' : '线段中枢'}</button>)}</div>}
+      <div className="flex shrink-0 items-center gap-1">
+        {!collapsed && onSourceChange && <div className="flex rounded border border-border bg-base p-0.5 text-[12px]">{(['stroke', 'segment'] as const).map(value => <button key={value} type="button" onClick={() => onSourceChange(value)} className={`rounded px-1.5 py-0.5 ${source === value ? 'bg-[#8B5CF6]/20 text-[#A78BFA]' : 'text-muted'}`}>{value === 'stroke' ? '笔中枢' : '线段中枢'}</button>)}</div>}
+        {onToggleCollapsed && <button type="button" onClick={onToggleCollapsed} className="rounded-btn p-1 text-muted transition-colors hover:bg-elevated hover:text-foreground" title={collapsed ? '展开缠论' : '收起缠论'} aria-label={collapsed ? '展开缠论' : '收起缠论'} aria-expanded={!collapsed}><ChevronDown className={`h-3.5 w-3.5 transition-transform ${collapsed ? '-rotate-90' : ''}`} /></button>}
+      </div>
     </div>
 
     {!collapsed && (isLoading && analysis.window.bars === 0 ? <div className="grid gap-2 p-2"><div className="h-32 animate-pulse rounded-card border border-border bg-surface/60" /></div> : error && analysis.window.bars === 0 ? <div className="px-4 py-6 text-center text-xs text-muted">缠论结构暂时不可用，周期行情加载失败。</div> : <div className="grid gap-2 p-2">

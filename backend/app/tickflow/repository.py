@@ -1864,11 +1864,18 @@ class KlineRepository:
         except Exception:  # noqa: BLE001
             return None
 
-    def earliest_daily_date(self) -> date | None:
-        """本地日K数据的最早日期。"""
+    def earliest_daily_date(self, asset_type: str = "stock") -> date | None:
+        """本地指定资产日K数据的最早日期。"""
+        table = {
+            "stock": "kline_daily",
+            "index": "kline_index_daily",
+            "etf": "kline_etf_daily",
+        }.get(asset_type)
+        if table is None:
+            return None
         try:
             res = self.execute_one(
-                "SELECT min(date) FROM kline_daily",
+                f"SELECT min(date) FROM {table}",
             )
             if res and res[0]:
                 d = res[0]

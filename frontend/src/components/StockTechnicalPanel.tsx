@@ -3,8 +3,6 @@ import { Check, ChevronDown, ChevronLeft, Info, Settings2 } from 'lucide-react'
 import type {
   KlinePeriod,
   KlineRow,
-  ShortTermAnalysis,
-  ShortTermAnalysisRow,
   TechnicalScoreCategory,
   TechnicalScoreIndicator,
   TechnicalRocPeriod,
@@ -97,13 +95,6 @@ const GROUP_DEFS: TechnicalGroupDef[] = [
   },
 ]
 
-const SHORT_TERM_GROUP_DEFS: TechnicalGroupDef[] = [
-  { key: 'trend', label: 'MA / VWMA', description: '源项目均线与成交量加权均线', scoreKind: 'direction', indicatorKeys: ['ma_alignment', 'ma_slope'] },
-  { key: 'momentum', label: 'MACD / KDJ', description: '源项目动能与摆动状态', scoreKind: 'direction', indicatorKeys: ['macd', 'kdj'] },
-  { key: 'volume_price', label: '量价', description: '价格、量比与成交量', scoreKind: 'direction', indicatorKeys: ['volume_price', 'volume_ratio', 'volume_trend'] },
-  { key: 'environment', label: 'BOLL / 位置 / ATR', description: '波动、价格位置与风险观察', scoreKind: 'risk', indicatorKeys: ['boll_width', 'atr'] },
-]
-
 const INDICATOR_BY_KEY = new Map(INDICATOR_DEFS.map(def => [def.key, def]))
 const DEFAULT_VISIBLE = Object.fromEntries(INDICATOR_DEFS.map(def => [def.key, true])) as Partial<Record<StockTechnicalIndicatorKey, boolean>>
 const PERIOD_LABELS: Record<KlinePeriod, string> = {
@@ -163,10 +154,6 @@ function normalizeBarKey(value: unknown, period: KlinePeriod): string {
   return period === '30m'
     ? raw.replace('T', ' ').slice(0, 16)
     : raw.slice(0, 10)
-}
-
-function shortDate(value: string): string {
-  return value.replace('T', ' ').slice(0, 16)
 }
 
 function normalizeBars(rows: KlineRow[], period: KlinePeriod): TechnicalBar[] {
@@ -839,8 +826,6 @@ function scoreBadgeClasses(value: number | null | undefined, kind: ScoreKind, st
 export interface StockTechnicalPanelProps {
   rows: KlineRow[]
   technicalScores?: TechnicalScores
-  shortTermAnalysis?: ShortTermAnalysis
-  amountEstimated?: boolean
   period: KlinePeriod
   selectedDate: string | null
   assetType?: 'stock' | 'etf' | 'index'
@@ -855,8 +840,6 @@ export interface StockTechnicalPanelProps {
 export function StockTechnicalPanel({
   rows,
   technicalScores,
-  shortTermAnalysis,
-  amountEstimated,
   period,
   selectedDate,
   assetType,
@@ -947,36 +930,8 @@ export function StockTechnicalPanel({
     setCollapsedGroups(previous => ({ ...previous, [key]: !previous[key] }))
   }
 
-  if (shortTermAnalysis && settingsOpen) {
-    return (
-      <TechnicalSettings
-        groups={SHORT_TERM_GROUP_DEFS}
-        config={config}
-        onBack={() => setSettingsOpen(false)}
-        onReset={resetConfig}
-        onToggle={toggleIndicator}
-      />
-    )
-  }
-
-  if (shortTermAnalysis) {
-    return (
-      <>
-        <ShortTermPanel
-          analysis={shortTermAnalysis}
-          period={period}
-          selectedDate={selectedDate}
-          isLoading={isLoading}
-          error={error}
-          onRetry={onRetry}
-          onLatest={onLatest}
-          collapsed={collapsed}
-          onToggleCollapsed={onToggleCollapsed}
-          onSettings={() => setSettingsOpen(true)}
-        />
-        {assetType === 'etf' && <ETFIndicatorScores score={score} amountEstimated={amountEstimated} />}
-      </>
-    )
+  if (assetType === 'etf') {
+    return <ETFIndicatorScores score={score} />
   }
 
   return (
@@ -1139,100 +1094,6 @@ export function StockTechnicalPanel({
           ))}
         </>
       )}
-    </section>
-  )
-}
-
-function shortTermRowForDate(
-  analysis: ShortTermAnalysis,
-  selectedDate: string | null,
-  period: KlinePeriod,
-): ShortTermAnalysisRow | null {
-  const selectedKey = selectedDate ? normalizeBarKey(selectedDate, period) : ''
-  const rows = analysis.rows ?? []
-  return rows.find(row => normalizeBarKey(row.as_of, period) === selectedKey)
-    ?? rows.at(-1)
-    ?? null
-}
-
-function shortTermScoreTone(value: number | null | undefined): Tone {
-  if (value == null || value === 0) return 'neutral'
-  return value > 0 ? 'bull' : 'bear'
-}
-
-function shortTermDimensionTone(value: number | null): Tone {
-  return shortTermScoreTone(value)
-}
-
-function shortTermActionTone(action: string): Tone {
-  return action.includes('买') ? 'bull' : action.includes('卖') ? 'bear' : 'neutral'
-}
-
-function ShortTermPanel({
-  analysis,
-  period,
-  selectedDate,
-  isLoading,
-  error,
-  onRetry,
-  onLatest,
-  collapsed,
-  onToggleCollapsed,
-  onSettings,
-}: {
-  analysis: ShortTermAnalysis
-  period: KlinePeriod
-  selectedDate: string | null
-  isLoading: boolean
-  error?: Error | null
-  onRetry?: () => void
-  onLatest?: () => void
-  collapsed: boolean
-  onToggleCollapsed?: () => void
-  onSettings?: () => void
-}) {
-  const row = shortTermRowForDate(analysis, selectedDate, period)
-  return (
-    <section className="border-b border-border/70">
-      <div className={`flex shrink-0 items-start justify-between px-2.5 py-2 ${collapsed ? '' : 'border-b border-border/70'}`}>
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
-            <span className="text-xs font-medium text-foreground">短线评分</span>
-            <span className="rounded bg-accent/10 px-1.5 py-0.5 font-mono text-[12px] text-accent">{analysis.version}</span>
-            <span className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[12px] text-secondary">{PERIOD_LABELS[period]}</span>
-          </div>
-          {!collapsed && <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[12px] text-muted"><span>原生K线计数</span>{row && <span>截至 {shortDate(row.as_of)}</span>}{row && !normalizeBarKey(row.as_of, period).startsWith(normalizeBarKey(selectedDate, period)) && <button type="button" onClick={onLatest} className="text-accent hover:text-foreground">回到最新</button>}</div>}
-        </div>
-        <div className="flex shrink-0 items-center gap-0.5">
-          {!collapsed && onSettings && <button type="button" onClick={onSettings} className="rounded-btn p-1 text-muted transition-colors hover:bg-elevated hover:text-foreground" title="配置指标显隐" aria-label="配置指标显隐"><Settings2 className="h-3.5 w-3.5" /></button>}
-          <button type="button" onClick={onToggleCollapsed} className="rounded-btn p-1 text-muted transition-colors hover:bg-elevated hover:text-foreground" title={collapsed ? '展开短线评分' : '收起短线评分'} aria-label={collapsed ? '展开短线评分' : '收起短线评分'} aria-expanded={!collapsed}><ChevronDown className={`h-3.5 w-3.5 transition-transform ${collapsed ? '-rotate-90' : ''}`} /></button>
-        </div>
-      </div>
-      {!collapsed && (isLoading && !row ? (
-        <div className="p-2"><div className="h-28 animate-pulse rounded-card border border-border bg-surface/60" /></div>
-      ) : error && !row ? (
-        <div className="flex flex-col items-center gap-2 px-4 py-6 text-center"><span className="text-xs text-secondary">短线分析暂时不可用</span><span className="text-[13px] text-muted">周期行情加载失败，请稍后重试。</span>{onRetry && <button type="button" onClick={onRetry} className="rounded-btn bg-elevated px-2.5 py-1 text-[13px] text-secondary hover:text-foreground">重试</button>}</div>
-      ) : !row ? (
-        <div className="px-4 py-6 text-center text-xs text-muted">暂无短线分析数据</div>
-      ) : (
-        <div className="space-y-2 p-2">
-          <div className="rounded-card border border-border bg-surface/70 p-2.5 shadow-sm">
-            <div className="grid grid-cols-3 gap-1.5">
-              <div className="rounded border border-border/70 bg-base/30 p-2"><div className="text-[12px] text-muted">短线总分</div><div className={`mt-1 font-mono text-lg font-semibold tabular-nums ${TONE_CLASSES[shortTermActionTone(row.action)].value}`}>{row.total == null ? '—' : `${row.total}/100`}</div></div>
-              <div className="rounded border border-border/70 bg-base/30 p-2"><div className="text-[12px] text-muted">源建议</div><div className={`mt-1 text-[13px] font-semibold ${TONE_CLASSES[shortTermActionTone(row.action)].value}`}>{row.action}</div><div className="mt-0.5 truncate text-[12px] text-muted" title={row.hold_advice}>{row.hold_advice}</div></div>
-              <div className="rounded border border-border/70 bg-base/30 p-2"><div className="text-[12px] text-muted">覆盖度 / 趋势</div><div className="mt-1 font-mono text-[13px] tabular-nums text-foreground">{Math.round(row.coverage * 100)}%</div><div className="mt-0.5 text-[12px] text-secondary">{row.trend == null ? '趋势未评估' : ['强势下降', '下降', '震荡', '上升', '强势上升'][row.trend + 2]}</div></div>
-            </div>
-            <div className="mt-2 border-t border-border/50 pt-2 text-[12px] leading-relaxed text-secondary">权重总和 73；单项原始分 −10 至 +10，综合分使用 tanh 归一化。{row.available ? '' : ' 当前历史根数不足，结论仅作占位。'}</div>
-          </div>
-
-          <div className="grid gap-1.5 sm:grid-cols-2">
-            {row.dimensions.map(dimension => <div key={dimension.id} className="rounded-card border border-border bg-surface/70 p-2.5 shadow-sm"><div className="flex items-baseline justify-between gap-2"><span className="text-[12px] font-medium text-foreground">{dimension.name}</span><span className={`font-mono text-[13px] font-semibold tabular-nums ${TONE_CLASSES[shortTermDimensionTone(dimension.score)].value}`}>{dimension.score == null ? '—' : `${dimension.score > 0 ? '+' : ''}${dimension.score}`} <span className="text-[11px] font-normal text-muted">w{dimension.weight}</span></span></div><div className="mt-1 truncate text-[12px] text-secondary" title={dimension.detail}>{dimension.detail}</div></div>)}
-          </div>
-
-          {analysis.limitations.length > 0 && <div className="rounded-card border border-warning/30 bg-warning/5 px-2.5 py-2 text-[12px] leading-relaxed text-warning">{analysis.limitations.join('；')}</div>}
-        </div>
-      ))}
     </section>
   )
 }
@@ -1685,7 +1546,7 @@ function ETFCategoryIndicator({ category, indicator, compact = false }: { catego
   )
 }
 
-function ETFIndicatorScores({ score, amountEstimated }: { score: TechnicalScoreRow | null; amountEstimated?: boolean }) {
+function ETFIndicatorScores({ score }: { score: TechnicalScoreRow | null }) {
   const categories = score?.categories ?? []
   const riskCategory = categories.find(category => category.id === 'volatility_risk')
   const riskTrend = riskTrendSummary(riskCategory)
@@ -1714,14 +1575,8 @@ function ETFIndicatorScores({ score, amountEstimated }: { score: TechnicalScoreR
     })))
   }
   return (
-    <section className="rounded-card border border-accent/30 bg-accent/5 p-2.5 shadow-sm">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <div>
-          <div className="text-[12px] font-medium text-foreground">指标评分</div>
-        </div>
-        <span className="text-[11px] text-muted">方向 / 市场风险 / 极端状态 / 活跃度分开计算</span>
-      </div>
-      <div className={`mt-2 grid gap-1.5 ${extremeSummaries.length > 0 ? 'grid-cols-2 sm:grid-cols-5' : 'grid-cols-3'}`}>
+    <section className="px-2.5 pb-2.5 pt-4">
+      <div className={`grid gap-1.5 ${extremeSummaries.length > 0 ? 'grid-cols-2 sm:grid-cols-5' : 'grid-cols-3'}`}>
         {summary.map(item => (
           <div key={item.label} className="rounded border border-border/70 bg-base/40 p-2">
             <div className="text-[11px] text-muted">{item.label}</div>
@@ -1770,7 +1625,6 @@ function ETFIndicatorScores({ score, amountEstimated }: { score: TechnicalScoreR
       ) : (
         <div className="mt-2 rounded border border-border/70 bg-base/20 px-2.5 py-2 text-[11px] text-muted">当前周期暂无分类评分明细。</div>
       )}
-      {amountEstimated && <div className="mt-2 rounded border border-warning/30 bg-warning/5 px-2 py-1.5 text-[10px] leading-relaxed text-warning">成交额为估算值，成交活跃度只作相对参考。</div>}
     </section>
   )
 }

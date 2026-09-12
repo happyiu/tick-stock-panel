@@ -14,6 +14,7 @@ export const STAGE_LABELS: Record<string, string> = {
   compute_enriched: '计算技术指标',
   sync_minute: '同步分钟 K',
   extend_history: '扩展日K历史',
+  extend_etf_history: '扩展 ETF 历史',
   extend_minute: '扩展分钟K历史',
   rebuild_enriched: '全量计算',
   refresh_views: '刷新视图',
@@ -112,6 +113,17 @@ export function ActiveJobCard({ job }: { job: PipelineJob }) {
       <LogViewer log={job.log} />
 
       {job.status === 'succeeded' && job.result && (() => {
+        if (job.result.asset_type === 'etf') {
+          return (
+            <div className="mt-3 grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
+              <Pill label="ETF 标的池" value={job.result.universe_size ?? '—'} />
+              <Pill label="新增日 K" value={`${job.result.etf_daily_rows ?? job.result.daily_days ?? 0} 行`} />
+              <Pill label="扩展前最早" value={job.result.earliest_before ?? '—'} />
+              <Pill label="扩展后最早" value={job.result.earliest_after ?? '—'} />
+              <Pill label="覆盖分区" value={`${job.result.etf_daily_days ?? 0} 天`} />
+            </div>
+          )
+        }
         const skipped = new Set(job.result.skipped_stages ?? [])
         const cell = (stage: string | null, v: string) =>
           stage && skipped.has(stage) ? '跳过' : v

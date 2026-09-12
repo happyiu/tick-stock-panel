@@ -385,6 +385,19 @@ class _RocContext:
     pivots: dict[tuple[int, str], list[int]]
 
 
+@dataclass(frozen=True)
+class _RiskMetricContext:
+    """一次评分请求内复用的风险基础序列, 避免逐日期重复扫描历史窗口."""
+
+    atr_pct: list[float | None]
+    realized_volatility: list[float | None]
+    boll_width: list[float | None]
+    downside_volatility: list[float | None]
+    drawdown_20: list[float | None]
+    drawdown_60: list[float | None]
+    negative_return_count: list[int]
+
+
 def _number(value: object) -> float | None:
     if value is None or value == "":
         return None
@@ -3196,6 +3209,10 @@ def _prior_metric_values(
     return [metric(records, position) for position in range(max(0, index - _RISK_HISTORY_WINDOW), index)]
 
 
+def _prior_series_values(values: list[float | None], index: int) -> list[float | None]:
+    return values[max(0, index - _RISK_HISTORY_WINDOW):index]
+
+
 def _atr_pct(records: list[dict], index: int) -> float | None:
     close = _number(records[index].get("close"))
     atr = _number(records[index].get("atr_14"))
@@ -3255,6 +3272,22 @@ def _rolling_drawdown_pct(records: list[dict], index: int, window: int) -> float
 def _drawdown_magnitude(records: list[dict], index: int, window: int) -> float | None:
     value = _rolling_drawdown_pct(records, index, window)
     return -value if value is not None else None
+
+
+def _negative_return_count(records: list[dict], index: int, window: int = _DOWNSIDE_VOLATILITY_WINDOW) -> int:
+    return sum(1 for value in (_return_window(records, index, window) or []) if value < 0)
+
+
+def _build_risk_metric_context(records: list[dict]) -> _RiskMetricContext:
+    return _RiskMetricContext(
+        atr_pct=[_atr_pct(records, index) for index in range(len(records))],
+        realized_volatility=[_realized_volatility(records, index) for index in range(len(records))],
+        boll_width=[_boll_width(records, index) for index in range(len(records))],
+        downside_volatility=[_downside_volatility(records, index) for index in range(len(records))],
+        drawdown_20=[_rolling_drawdown_pct(records, index, _DRAWDOWN_SHORT_WINDOW) for index in range(len(records))],
+        drawdown_60=[_rolling_drawdown_pct(records, index, _DRAWDOWN_MEDIUM_WINDOW) for index in range(len(records))],
+        negative_return_count=[_negative_return_count(records, index) for index in range(len(records))],
+    )
 
 
 def _drawdown_history_percentile(
@@ -3323,11 +3356,17 @@ def _risk_change_score(change: float | None) -> float | None:
     return _clamp(50.0 + change * 100.0)
 
 
-def _boll_width_analysis(records: list[dict], index: int) -> dict:
-    current = _boll_width(records, index)
+def _boll_width_analysis(
+    records: list[dict],
+    index: int,
+    boll_width_values: list[float | None] | None = None,
+) -> dict:
+    current = boll_width_values[index] if boll_width_values is not None else _boll_width(records, index)
     percentile, history_count = _historical_percentile(
         current,
-        _prior_metric_values(records, index, _boll_width),
+        _prior_series_values(boll_width_values, index)
+        if boll_width_values is not None
+        else _prior_metric_values(records, index, _boll_width),
     )
     previous = (
         _boll_width(records, index - _BOLL_CHANGE_WINDOW)
@@ -3386,20 +3425,37 @@ def _ma20_deviation_status(distance: float | None) -> str:
     return "上方明显偏离"
 
 
-def _risk_analysis(records: list[dict], index: int) -> dict:
-    current_atr_pct = _atr_pct(records, index)
-    atr_percentile, atr_history_count = _historical_percentile(
-        current_atr_pct,
-        _prior_metric_values(records, index, _atr_pct),
-    )
+def _risk_analysis(
+    records: list[dict],
+    index: int,
+    metric_context: _RiskMetricContext | None = None,
+) -> dict:
+    if metric_context is None:
+        current_atr_pct = _atr_pct(records, index)
+        atr_history = _prior_metric_values(records, index, _atr_pct)
+        current_realized_vol = _realized_volatility(records, index)
+        realized_vol_history = _prior_metric_values(records, index, _realized_volatility)
+        current_downside = _downside_volatility(records, index)
+        downside_history = _prior_metric_values(records, index, _downside_volatility)
+    else:
+        current_atr_pct = metric_context.atr_pct[index]
+        atr_history = _prior_series_values(metric_context.atr_pct, index)
+        current_realized_vol = metric_context.realized_volatility[index]
+        realized_vol_history = _prior_series_values(metric_context.realized_volatility, index)
+        current_downside = metric_context.downside_volatility[index]
+        downside_history = _prior_series_values(metric_context.downside_volatility, index)
 
-    current_realized_vol = _realized_volatility(records, index)
+    atr_percentile, atr_history_count = _historical_percentile(current_atr_pct, atr_history)
     realized_vol_percentile, realized_vol_history_count = _historical_percentile(
         current_realized_vol,
-        _prior_metric_values(records, index, _realized_volatility),
+        realized_vol_history,
     )
 
-    boll = _boll_width_analysis(records, index)
+    boll = _boll_width_analysis(
+        records,
+        index,
+        metric_context.boll_width if metric_context is not None else None,
+    )
     distance = _ma20_atr_distance(records, index)
     deviation_score = _ma20_deviation_score(distance)
     if distance is None:
@@ -3409,20 +3465,31 @@ def _risk_analysis(records: list[dict], index: int) -> dict:
         oversold_score = deviation_score if distance < -0.25 else 0.0
         overheat_score = deviation_score if distance > 0.25 else 0.0
 
-    current_downside = _downside_volatility(records, index)
     downside_percentile, downside_history_count = _historical_percentile(
         current_downside,
-        _prior_metric_values(records, index, _downside_volatility),
+        downside_history,
     )
 
-    drawdown_20 = _rolling_drawdown_pct(records, index, _DRAWDOWN_SHORT_WINDOW)
-    drawdown_60 = _rolling_drawdown_pct(records, index, _DRAWDOWN_MEDIUM_WINDOW)
-    drawdown_20_percentile, drawdown_20_history_count = _drawdown_history_percentile(
-        records, index, _DRAWDOWN_SHORT_WINDOW,
-    )
-    drawdown_60_percentile, drawdown_60_history_count = _drawdown_history_percentile(
-        records, index, _DRAWDOWN_MEDIUM_WINDOW,
-    )
+    if metric_context is None:
+        drawdown_20 = _rolling_drawdown_pct(records, index, _DRAWDOWN_SHORT_WINDOW)
+        drawdown_60 = _rolling_drawdown_pct(records, index, _DRAWDOWN_MEDIUM_WINDOW)
+        drawdown_20_percentile, drawdown_20_history_count = _drawdown_history_percentile(
+            records, index, _DRAWDOWN_SHORT_WINDOW,
+        )
+        drawdown_60_percentile, drawdown_60_history_count = _drawdown_history_percentile(
+            records, index, _DRAWDOWN_MEDIUM_WINDOW,
+        )
+    else:
+        drawdown_20 = metric_context.drawdown_20[index]
+        drawdown_60 = metric_context.drawdown_60[index]
+        drawdown_20_percentile, drawdown_20_history_count = _historical_percentile(
+            -drawdown_20 if drawdown_20 is not None else None,
+            [-value if value is not None else None for value in _prior_series_values(metric_context.drawdown_20, index)],
+        )
+        drawdown_60_percentile, drawdown_60_history_count = _historical_percentile(
+            -drawdown_60 if drawdown_60 is not None else None,
+            [-value if value is not None else None for value in _prior_series_values(metric_context.drawdown_60, index)],
+        )
     drawdown_20_score = _drawdown_score(drawdown_20_percentile)
     drawdown_60_score = _drawdown_score(drawdown_60_percentile)
     drawdown_score, drawdown_coverage = _weighted_mean((
@@ -3436,6 +3503,11 @@ def _risk_analysis(records: list[dict], index: int) -> dict:
         "超跌程度" if distance is not None and distance < -0.25
         else "过热程度" if distance is not None and distance > 0.25
         else "乖离程度"
+    )
+    negative_return_count = (
+        metric_context.negative_return_count[index]
+        if metric_context is not None
+        else _negative_return_count(records, index)
     )
 
     risk_indicators = [
@@ -3517,14 +3589,14 @@ def _risk_analysis(records: list[dict], index: int) -> dict:
             "group": "downside", "score_label": "风险",
             "status": _risk_percentile_status(downside_percentile, high="下行波动偏高", low="下行波动偏低"),
             "detail": "仅使用负收益计算20周期下行波动率\n"
-            + (f"历史分位 {downside_percentile:.0f}% / {downside_history_count}个样本; 负收益 {sum(1 for value in (_return_window(records, index, _DOWNSIDE_VOLATILITY_WINDOW) or []) if value < 0)}个"
+            + (f"历史分位 {downside_percentile:.0f}% / {downside_history_count}个样本; 负收益 {negative_return_count}个"
                if downside_percentile is not None else f"历史有效样本 {downside_history_count}个, 数据不足"),
             "coverage": 1.0 if downside_percentile is not None else 0.0,
             "raw_values": _raw_values(
                 downside_volatility=current_downside,
                 percentile=downside_percentile,
                 risk_score=downside_risk_score,
-                negative_count=sum(1 for value in (_return_window(records, index, _DOWNSIDE_VOLATILITY_WINDOW) or []) if value < 0),
+                negative_count=negative_return_count,
                 history_count=downside_history_count,
                 history_window=_RISK_HISTORY_WINDOW,
             ),
@@ -4681,6 +4753,8 @@ def _category_scores(
     roc_context: _RocContext | None = None,
     volume_price_analysis: dict | None = None,
     obv_values: list[float | None] | None = None,
+    metric_context: _RiskMetricContext | None = None,
+    risk_cache: dict[int, dict] | None = None,
 ) -> dict:
     row = records[index]
     previous = records[index - 1] if index > 0 else {}
@@ -5198,7 +5272,13 @@ def _category_scores(
     ]
     price_position_category = _price_position_category(position_indicators)
 
-    risk_analysis = _risk_analysis(records, index)
+    if risk_cache is None:
+        risk_analysis = _risk_analysis(records, index, metric_context)
+    else:
+        risk_analysis = risk_cache.get(index)
+        if risk_analysis is None:
+            risk_analysis = _risk_analysis(records, index, metric_context)
+            risk_cache[index] = risk_analysis
 
     activity_metrics = _activity_metrics(records, index)
     amount = activity_metrics["amount"]
@@ -5252,7 +5332,14 @@ def _category_scores(
     risk_category = _risk_category(risk_analysis)
     risk_change_5 = None
     if index >= 5 and risk_category["score"] is not None:
-        previous_risk = _risk_category(_risk_analysis(records, index - 5))["score"]
+        if risk_cache is None:
+            previous_risk_analysis = _risk_analysis(records, index - 5, metric_context)
+        else:
+            previous_risk_analysis = risk_cache.get(index - 5)
+            if previous_risk_analysis is None:
+                previous_risk_analysis = _risk_analysis(records, index - 5, metric_context)
+                risk_cache[index - 5] = previous_risk_analysis
+        previous_risk = _risk_category(previous_risk_analysis)["score"]
         if previous_risk is not None:
             risk_change_5 = risk_category["score"] - previous_risk
     if risk_change_5 is not None:
@@ -5304,6 +5391,8 @@ def _score_records(
     category_rows: list[dict] = []
     roc_context = _build_roc_context(records)
     obv_values = _obv_series(records, len(records) - 1) if records else []
+    metric_context = _build_risk_metric_context(records)
+    risk_cache: dict[int, dict] = {}
     for index in range(len(records)):
         trend, trend_coverage = _trend_score(records, index)
         momentum, momentum_coverage = _momentum_score(records, index, roc_context)
@@ -5312,7 +5401,15 @@ def _score_records(
         volume_price_coverage = volume_price_analysis["coverage"]
         state_confirmation, state_coverage = _state_confirmation_score((trend, momentum, volume_price))
         activity = _activity_score(records, index)
-        category_scores = _category_scores(records, index, roc_context, volume_price_analysis, obv_values)
+        category_scores = _category_scores(
+            records,
+            index,
+            roc_context,
+            volume_price_analysis,
+            obv_values,
+            metric_context=metric_context,
+            risk_cache=risk_cache,
+        )
         volatility = category_scores["risk_score"]
         category_rows.append(category_scores)
 

@@ -1345,6 +1345,18 @@ def test_risk_percentile_uses_tail_sensitive_mapping(percentile, expected):
     assert technical_scoring._percentile_to_risk_score(percentile) == pytest.approx(expected)
 
 
+def test_precomputed_risk_context_matches_point_in_time_analysis():
+    records = _raw_frame(100).to_dicts()
+    context = technical_scoring._build_risk_metric_context(records)
+
+    for index in range(len(records)):
+        assert technical_scoring._risk_analysis(records, index) == technical_scoring._risk_analysis(
+            records,
+            index,
+            context,
+        )
+
+
 def test_downside_volatility_ignores_positive_returns():
     positive = _volume_records([100.0 + index for index in range(21)], [100.0] * 21)
     assert technical_scoring._downside_volatility(positive, 20) == 0.0

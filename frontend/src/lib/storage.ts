@@ -70,7 +70,6 @@ export interface StockPreviewAnalysisSectionsV2 {
 export interface StockPreviewAnalysisSectionsV3 {
   version: 3
   technicalCollapsed: boolean
-  structureCollapsed: boolean
   chanlunCollapsed: boolean
   elliottCollapsed: boolean
 }

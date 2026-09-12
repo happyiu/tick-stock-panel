@@ -5,7 +5,7 @@ import type {
 } from './chanlun.ts'
 import { analyzeChanlun } from './chanlun.ts'
 import { buildPriceZones, type PriceZone } from './priceZones.ts'
-import type { ChartDataStatus, KlinePeriod, ShortTermAnalysis, ShortTermAnalysisRow, TechnicalScoreRow, TechnicalScores } from './api.ts'
+import type { ChartDataStatus, KlinePeriod, TechnicalScoreRow, TechnicalScores } from './api.ts'
 
 export const ACTION_SIGNAL_VERSION = 'action-signal-v1' as const
 export const ACTION_SIGNAL_WARMUP_BARS = 60
@@ -27,7 +27,7 @@ export interface ActionScore {
   momentum: number | null
   volumePrice: number | null
   available: boolean
-  source?: 'technical-score-v1' | 'technical-score-v2' | 'technical-score-v3' | 'technical-score-v4' | 'technical-score-v5' | 'technical-score-v6' | 'technical-score-v7' | 'technical-score-v8' | 'short-term-score-v1' | 'short-term-score-v2'
+  source?: 'technical-score-v1' | 'technical-score-v2' | 'technical-score-v3' | 'technical-score-v4' | 'technical-score-v5' | 'technical-score-v6' | 'technical-score-v7' | 'technical-score-v8'
 }
 
 export interface ActionSignalEvent {
@@ -85,7 +85,6 @@ export interface ActionSignalInput {
   period: KlinePeriod
   rows: ActionBar[]
   technicalScores?: TechnicalScores
-  shortTermAnalysis?: ShortTermAnalysis
   dataStatus?: ChartDataStatus
   /** enriched 是图表源不可用时仍可用的本地规范数据，不阻断行动信号回放。 */
   dataSource?: string
@@ -170,44 +169,18 @@ function scoreFromRow(row: TechnicalScoreRow, period: KlinePeriod): ActionScore 
   }
 }
 
-function rawDimension(row: ShortTermAnalysisRow, id: string): number | null {
-  const score = row.dimensions.find(dimension => dimension.id === id)?.score
-  return finite(score) ? (score + 10) * 5 : null
-}
-
-function scoreFromShortTermRow(row: ShortTermAnalysisRow, period: KlinePeriod, version: string): ActionScore {
-  return {
-    date: normalizeKey(row.as_of, period),
-    direction: finite(row.total) ? row.total : null,
-    trend: rawDimension(row, 'ma_trend'),
-    momentum: rawDimension(row, 'momentum'),
-    volumePrice: rawDimension(row, 'volume_price'),
-    available: row.available === true && finite(row.total),
-    source: version === 'short-term-score-v1' ? 'short-term-score-v1' : 'short-term-score-v2',
-  }
-}
-
-function isShortTermScoreSource(source: ActionScore['source']): boolean {
-  return source === 'short-term-score-v1' || source === 'short-term-score-v2'
-}
-
-function buildScoreMap(
-  scores: TechnicalScores | undefined,
-  shortTermAnalysis: ShortTermAnalysis | undefined,
-  period: KlinePeriod,
-): Map<string, ActionScore> {
+function buildScoreMap(scores: TechnicalScores | undefined, period: KlinePeriod): Map<string, ActionScore> {
   const map = new Map<string, ActionScore>()
   for (const row of scores?.rows ?? []) map.set(normalizeKey(row.as_of, period), scoreFromRow(row, period))
-  for (const row of shortTermAnalysis?.rows ?? []) map.set(normalizeKey(row.as_of, period), scoreFromShortTermRow(row, period, shortTermAnalysis?.version ?? 'short-term-score-v2'))
   return map
 }
 
 function strongBull(score: ActionScore, minimum: number): boolean {
   return score.available
     && score.direction != null && score.direction >= minimum
-    && score.trend != null && score.trend >= (isShortTermScoreSource(score.source) ? 50 : 60)
-    && score.momentum != null && score.momentum >= (isShortTermScoreSource(score.source) ? 50 : 60)
-    && score.volumePrice != null && score.volumePrice >= (isShortTermScoreSource(score.source) ? 50 : 60)
+    && score.trend != null && score.trend >= 60
+    && score.momentum != null && score.momentum >= 60
+    && score.volumePrice != null && score.volumePrice >= 60
 }
 
 function scoreText(score: ActionScore): string {
@@ -419,10 +392,10 @@ function updatePullback(
   return { pending, confirmed: false }
 }
 
-function nextConditions(phase: ActionPhase, shortTerm = false): string[] {
-  if (phase === 'wait') return [shortTerm ? '总分达到 78，且动量、量价、MA趋势非负' : '方向、趋势、动能、量价均达到 60', '有效突破压力位或完成二买/三买结构代理确认']
+function nextConditions(phase: ActionPhase): string[] {
+  if (phase === 'wait') return ['方向、趋势、动能、量价均达到 60', '有效突破压力位或完成二买/三买结构代理确认']
   if (phase === 'defensive') return ['技术分恢复且出现新的突破、回踩确认或结构代理事件', '重新确认防守位后再恢复多头阶段']
-  return [shortTerm ? '总分达到 63，且动量、量价、MA趋势非负' : '方向分达到 65，趋势、动能、量价均达到 60', '出现新的突破、突破后回踩确认或新的结构代理事件']
+  return ['方向分达到 65，趋势、动能、量价均达到 60', '出现新的突破、突破后回踩确认或新的结构代理事件']
 }
 
 function riskConditions(phase: ActionPhase, defensePrice: number | null): string[] {
@@ -448,7 +421,7 @@ function selectStateAt(
  * 按闭合 K 线顺序回放行动信号。结构分析固定使用 stroke source，
  * 每个截面只读取该截面以前的数据，确认日期记录在事件本身而不是结构发生日期。
  */
-export function buildActionSignals({ symbol, assetType, period, rows, technicalScores, shortTermAnalysis, dataStatus, dataSource, selectedDate }: ActionSignalInput): ActionSignalResult {
+export function buildActionSignals({ symbol, assetType, period, rows, technicalScores, dataStatus, dataSource, selectedDate }: ActionSignalInput): ActionSignalResult {
   const context = { symbol, assetType }
   const stale = dataStatus?.stale === true && dataSource !== 'enriched'
   if (!rows.length) return emptyResult(period, 'blocked', '当前周期没有 K 线数据', undefined, context)
@@ -465,7 +438,7 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
     return result
   }
 
-  const scoreMap = buildScoreMap(technicalScores, shortTermAnalysis, period)
+  const scoreMap = buildScoreMap(technicalScores, period)
   const structureCache = new Map<number, StructureSnapshot>()
   const state: ReplayState = {
     phase: 'wait',
@@ -540,7 +513,7 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
       state.phase = 'defensive'
       state.reducedInRound = true
       state.lastEventId = event.id
-    } else if (!stale && score.available && addCooldownReady && strongBull(score, isShortTermScoreSource(score.source) ? 63 : 65) && state.phase !== 'wait'
+    } else if (!stale && score.available && addCooldownReady && strongBull(score, 65) && state.phase !== 'wait'
       && (breakoutTrigger || pullbackConfirmed || structureTrigger)) {
       const trigger: ActionSignalTrigger = pullbackConfirmed ? 'pullback' : structureTrigger ? 'structure' : 'breakout'
       const reference = pullbackConfirmed
@@ -557,7 +530,7 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
       state.lastEventId = event.id
       if (eventCandidate) state.usedStructureIds.add(eventCandidate.id)
       if (breakout) state.usedTriggerIds.add(breakout.id)
-    } else if (!stale && score.available && addCooldownReady && strongBull(score, isShortTermScoreSource(score.source) ? 78 : 60) && state.phase === 'wait'
+    } else if (!stale && score.available && addCooldownReady && strongBull(score, 60) && state.phase === 'wait'
       && (breakoutTrigger || structureTrigger)) {
       const trigger: ActionSignalTrigger = structureTrigger ? 'structure' : 'breakout'
       const reference = breakout?.reference ?? structureCandidateValue?.price ?? null
@@ -640,7 +613,7 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
     events: state.events,
     history: state.history,
     pendingConfirmation: inputHasUnclosed || !!state.pendingPullback,
-    nextConditions: nextConditions(selected.state.phase, isShortTermScoreSource(latestScore?.source)),
+    nextConditions: nextConditions(selected.state.phase),
     riskConditions: riskConditions(selected.state.phase, selected.state.defensePrice),
   }
 }

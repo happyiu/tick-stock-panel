@@ -229,10 +229,8 @@ export function StockElliottPanel({
       : '数据不足'
   const selectedAsOf = analysis.asOf
   const headerContent = (
-    <span className="flex min-w-0 items-start gap-1.5">
-      {onToggleCollapsed && (
-        <ChevronDown className={'mt-0.5 h-3.5 w-3.5 shrink-0 text-muted transition-transform ' + (collapsed ? '-rotate-90' : '')} />
-      )}
+    <span className="flex min-w-0 flex-1 items-start gap-1.5">
+      <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-[#F59E0B]" />
       <span className="min-w-0">
         <span className="flex flex-wrap items-center gap-1.5">
           <span className="text-xs font-medium text-foreground">艾略特波浪理论</span>
@@ -247,7 +245,7 @@ export function StockElliottPanel({
       </span>
     </span>
   )
-  const headerClassName = 'flex w-full items-start px-2.5 py-2 text-left transition-colors ' + (collapsed ? 'border-b border-border/70 ' : '') + (onToggleCollapsed ? 'hover:bg-elevated/40' : '')
+  const headerClassName = 'flex w-full items-start justify-between gap-2 px-2.5 py-2 text-left transition-colors ' + (collapsed ? 'border-b border-border/70 ' : '') + (onToggleCollapsed ? 'hover:bg-elevated/40' : '')
 
   return (
     <section>
@@ -261,6 +259,7 @@ export function StockElliottPanel({
           aria-expanded={!collapsed}
         >
           {headerContent}
+          <ChevronDown className={'mt-0.5 h-3.5 w-3.5 shrink-0 text-muted transition-transform ' + (collapsed ? '-rotate-90' : '')} />
         </button>
       ) : (
         <div className={headerClassName}>{headerContent}</div>

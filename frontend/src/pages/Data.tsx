@@ -318,6 +318,7 @@ export function Data() {
   const isRunning = job.data?.status === 'running' || job.data?.status === 'pending'
   const isStarting = startSync.isPending
   const hasData = !!(s?.instruments?.rows || s?.daily?.rows)
+  const hasEtfData = !!(s?.etf_instruments?.rows || s?.etf_daily?.trading_days || s?.etf_enriched?.trading_days)
   // none 档(无 key / 无效 key) → 禁用立即同步 (同步依赖付费档的批量端点)
   const isNoKey = settings.data?.mode === 'none'
   const indexOverviewStats = s ? {
@@ -353,6 +354,7 @@ export function Data() {
     sync_instruments: 'instruments',
     sync_daily: 'daily',
     extend_history: 'daily',
+    extend_etf_history: 'etf',
     sync_adj: 'adj_factor',
     compute_enriched: 'enriched',
     rebuild_enriched: 'enriched',
@@ -511,6 +513,10 @@ export function Data() {
             hint="场内基金 · 独立存储"
             stats={etfOverviewStats}
             loading={isLoading}
+            active={activeCard === 'etf'}
+            done={doneStages.has('etf')}
+            skipped={skippedCards.has('etf')}
+            stagePct={activeCard === 'etf' ? (job.data?.stage_pct ?? 0) : 0}
             tierKey="etf"
             capLimits={mergedCaps}
             customProvider={routeProviderDisplay(matrix.data, 'daily')}
@@ -522,6 +528,8 @@ export function Data() {
               { label: '指标', table: 'etf_enriched' },
             ] as FieldTab[]}
             onShowFields={(t) => setSchemaTable(t ?? 'etf_daily')}
+            onSettings={hasEtfData ? () => setOpenSettings(v => v === 'etf' ? null : 'etf') : undefined}
+            settingsOpen={openSettings === 'etf'}
           />
         )
       case 'minute':
@@ -1001,6 +1009,17 @@ export function Data() {
               hasCap={hasDailyBatchCap}
               isRunning={!!activeJobId}
               earliestDate={s?.daily?.earliest_date ?? null}
+              onStart={() => setOpenSettings(null)}
+            />
+          </SettingsModal>
+        )}
+        {openSettings === 'etf' && (
+          <SettingsModal title="ETF · 向前扩展历史" onClose={() => setOpenSettings(null)}>
+            <ExtendHistoryPanel
+              assetType="etf"
+              hasCap={hasDailyBatchCap}
+              isRunning={!!activeJobId}
+              earliestDate={s?.etf_daily?.earliest_date ?? s?.etf_enriched?.earliest_date ?? null}
               onStart={() => setOpenSettings(null)}
             />
           </SettingsModal>

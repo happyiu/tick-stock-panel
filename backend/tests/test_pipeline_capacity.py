@@ -150,6 +150,8 @@ def test_in_process_backtests_share_capacity(capacity, monkeypatch, kind):
     ("/api/pipeline/run", {}, "app.jobs.daily_pipeline", "run_now", {}),
     ("/api/kline/extend_history", {"value": 1, "unit": "month"},
      "app.services.extend_history", "run_extend_history", {}),
+    ("/api/kline/extend_etf_history", {"value": 1, "unit": "year"},
+     "app.services.extend_etf_history", "run_extend_etf_history", {}),
     ("/api/kline/repair_daily", {"start_date": "2026-01-01"},
      "app.services.repair_daily", "run_repair_daily", {}),
     ("/api/kline/rebuild_enriched", {}, "app.indicators.pipeline", "run_pipeline", 3),

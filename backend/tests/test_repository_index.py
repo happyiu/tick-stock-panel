@@ -157,6 +157,20 @@ def _merge_row(symbol, close):
     }
 
 
+def test_earliest_daily_date_by_asset(repo):
+    rows = pl.DataFrame([
+        _merge_row("600000.SH", 10.0) | {"date": _dt.date(2025, 1, 2)},
+        _merge_row("600000.SH", 11.0) | {"date": _dt.date(2025, 1, 3)},
+    ])
+    repo.append_daily(rows)
+    repo.append_etf_daily(rows.with_columns(pl.lit("510300.SH").alias("symbol")))
+    repo.rebuild_views()
+
+    assert repo.earliest_daily_date() == _dt.date(2025, 1, 2)
+    assert repo.earliest_daily_date("etf") == _dt.date(2025, 1, 2)
+    assert repo.earliest_daily_date("unknown") is None
+
+
 def test_merge_live_enriched_asset_index_merges_cache(repo):
     """merge 路径: 两次合并缓存取并集 (不 NameError, 不丢已有缓存)。"""
     repo.merge_live_enriched_asset("index", pl.DataFrame([_merge_row("000001.SH", 3000.0)]))
@@ -164,4 +178,3 @@ def test_merge_live_enriched_asset_index_merges_cache(repo):
     cached, dt = repo.get_enriched_latest_asset("index", refresh=False)
     assert str(dt) == "2026-07-25"
     assert set(cached["symbol"].to_list()) == {"000001.SH", "000300.SH"}
-

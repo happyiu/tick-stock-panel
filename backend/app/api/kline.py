@@ -19,7 +19,6 @@ from app.price_limits import is_risk_warning_name, price_limit_pct
 from app.services import kline_sync
 from app.services.chart_data import ChartSnapshot
 from app.services.kline_periods import aggregate_daily_period, aggregate_minute_30m
-from app.services.short_term_scoring import short_term_analysis_payload
 from app.services.technical_scoring import (
     TECHNICAL_SCORE_COLUMNS,
     TECHNICAL_SCORE_INTERNAL_COLUMNS,
@@ -57,11 +56,6 @@ def _normalize_include_technical_scores(value: object) -> bool:
     return value if isinstance(value, bool) else False
 
 
-def _normalize_include_short_term_analysis(value: object) -> bool:
-    """Keep direct route calls compatible with FastAPI's Query wrapper objects."""
-    return value if isinstance(value, bool) else False
-
-
 def _date_text(value: object) -> str:
     """Normalize date-like values before mixing historical and live rows."""
     text = value.isoformat() if hasattr(value, "isoformat") else str(value)
@@ -81,76 +75,6 @@ def _rows_and_score_payload(frame, include_technical_scores: bool):
     visible = _clean_technical_columns(frame)
     payload = technical_score_payload(frame) if include_technical_scores else None
     return visible.to_dicts(), payload
-
-
-def _short_term_payload(
-    frame,
-    include: bool,
-    *,
-    symbol: str,
-    asset_type: str,
-    period: str,
-    stock_name: str | None,
-    start: date | None = None,
-    end: date | None = None,
-    visible_keys: set[str] | None = None,
-):
-    if not include:
-        return None
-    payload = short_term_analysis_payload(
-        frame,
-        symbol=symbol,
-        asset_type=asset_type,
-        period=period,
-        risk_warning=is_risk_warning_name(stock_name),
-    )
-    if start is None or end is None:
-        return payload
-    keys = visible_keys
-    if keys is None:
-        keys = set()
-        for record in frame.to_dicts():
-            if period in {"1w", "1mo"} and record.get("period_start") is not None and record.get("period_end") is not None:
-                period_start = str(record["period_start"])[:10]
-                period_end = str(record["period_end"])[:10]
-                in_range = period_start <= end.isoformat() and period_end >= start.isoformat()
-            else:
-                raw_date = record.get("date") or record.get("period_end")
-                key = str(raw_date).replace("T", " ")
-                in_range = start.isoformat() <= key[:10] <= end.isoformat()
-            if in_range:
-                raw_date = record.get("date") or record.get("period_end")
-                keys.add(str(raw_date).replace("T", " ")[:16 if period == "30m" else 10])
-
-    def visible(as_of: object) -> bool:
-        key = str(as_of or "").replace("T", " ")[:16 if period == "30m" else 10]
-        return key in keys
-
-    payload["rows"] = [
-        row for row in payload.get("rows", [])
-        if visible(row.get("as_of"))
-    ]
-    payload["signals"] = {
-        key: [
-            item for item in values
-            if visible(item.get("as_of"))
-        ]
-        for key, values in payload.get("signals", {}).items()
-    }
-    return payload
-
-
-def _empty_short_term_payload(*, period: str, reason: str = "当前周期没有可计算的K线"):
-    return {
-        "version": "short-term-score-v2",
-        "period": period,
-        "bar_semantics": "native-bars",
-        "rows": [],
-        "zones": {"support": [], "resistance": []},
-        "signals": {},
-        "as_of": None,
-        "limitations": [reason],
-    }
 
 
 def _annotate_bar_closure(rows: list[dict], period: str, requested_end: date) -> list[dict]:
@@ -543,14 +467,12 @@ def get_daily(
     end_date: Optional[str] = Query(None, description="截止日期 YYYY-MM-DD, 默认今天"),
     ext_columns: Optional[str] = Query(None, description="逗号分隔的 ext 列: config_id.field_name"),
     include_technical_scores: bool = Query(False, description="是否附带 technical-score-v8 评分序列"),
-    include_short_term_analysis: bool = Query(False, description="是否附带 short-term-score-v2 短线分析"),
 ):
     """优先读取展示行情快照, 不可用时回退本地 enriched 和当日行情。"""
     import polars as pl
 
     include_technical_scores = _normalize_include_technical_scores(include_technical_scores)
-    include_short_term_analysis = _normalize_include_short_term_analysis(include_short_term_analysis)
-    include_analysis = include_technical_scores or include_short_term_analysis
+    include_analysis = include_technical_scores
     repo = request.app.state.repo
     try:
         end = date.fromisoformat(end_date) if end_date else cn_today()
@@ -582,31 +504,18 @@ def get_daily(
             if not include_technical_scores:
                 visible = chart_frame.filter(pl.col("date").is_between(pl.lit(start.isoformat()), pl.lit(end.isoformat())))
             rows, score_payload = _rows_and_score_payload(visible, include_technical_scores)
-            short_payload = _short_term_payload(
-                chart_frame,
-                include_short_term_analysis,
-                symbol=symbol,
-                asset_type=asset_type,
-                period="1d",
-                stock_name=stock_name,
-                start=start,
-                end=end,
-            )
         else:
             visible = snapshot.frame.filter(pl.col("date").is_between(start, end))
             rows = visible.to_dicts()
             if start <= cn_today() <= end and in_continuous_session():
                 rows = _maybe_inject_live_candle(request, symbol, rows, asset_type)
             score_payload = None
-            short_payload = None
         rows = _annotate_bar_closure(rows, "1d", end)
         resp = {"symbol": symbol, "name": stock_name, "asset_type": asset_type,
                 "stock_info": stock_info, "rows": rows, "source": "chart",
                 "data_status": snapshot.metadata()}
         if score_payload is not None:
             resp["technical_scores"] = score_payload
-        if short_payload is not None:
-            resp["short_term_analysis"] = short_payload
         return _gzip_payload(
             request,
             _attach_ext(resp, repo, symbol, ext_columns),
@@ -645,8 +554,6 @@ def get_daily(
                 "data_status": snapshot.metadata()}
         if include_technical_scores:
             resp["technical_scores"] = {"version": TECHNICAL_SCORE_VERSION, "rows": []}
-        if include_short_term_analysis:
-            resp["short_term_analysis"] = _empty_short_term_payload(period="1d")
         return _gzip_payload(
             request,
             _attach_ext(resp, repo, symbol, ext_columns),
@@ -668,16 +575,6 @@ def get_daily(
         scored = _score_frame_if_requested(frame, include_technical_scores)
         visible = scored.filter(pl.col("date").is_between(pl.lit(start.isoformat()), pl.lit(end.isoformat()))) if include_technical_scores else frame.filter(pl.col("date").is_between(pl.lit(start.isoformat()), pl.lit(end.isoformat())))
         rows, score_payload = _rows_and_score_payload(visible, include_technical_scores)
-        short_payload = _short_term_payload(
-            frame,
-            include_short_term_analysis,
-            symbol=symbol,
-            asset_type=asset_type,
-            period="1d",
-            stock_name=stock_name,
-            start=start,
-            end=end,
-        )
     else:
         rows, score_payload = raw_rows, None
         if source == "live":
@@ -685,7 +582,6 @@ def get_daily(
                 row for row in rows
                 if start.isoformat() <= _date_text(row.get("date")) <= end.isoformat()
             ]
-        short_payload = None
 
     rows = _annotate_bar_closure(rows, "1d", end)
 
@@ -694,8 +590,6 @@ def get_daily(
             "data_status": snapshot.metadata()}
     if score_payload is not None:
         resp["technical_scores"] = score_payload
-    if short_payload is not None:
-        resp["short_term_analysis"] = short_payload
     return _gzip_payload(
         request,
         _attach_ext(resp, repo, symbol, ext_columns),
@@ -712,14 +606,12 @@ def get_period_kline(
     end_date: Optional[str] = Query(None, description="展示截止日期 YYYY-MM-DD,默认今天"),
     days: int = Query(20, ge=1, le=120, description="30分钟K最近交易日数量"),
     include_technical_scores: bool = Query(False, description="是否附带 technical-score-v8 评分序列"),
-    include_short_term_analysis: bool = Query(False, description="是否附带 short-term-score-v2 短线分析"),
 ):
     """优先原生30分钟K和展示日线, 周/月聚合后重算指标, 不落库。"""
     import polars as pl
 
     include_technical_scores = _normalize_include_technical_scores(include_technical_scores)
-    include_short_term_analysis = _normalize_include_short_term_analysis(include_short_term_analysis)
-    include_analysis = include_technical_scores or include_short_term_analysis
+    include_analysis = include_technical_scores
     repo = request.app.state.repo
     asset_type = repo.resolve_asset_type(symbol)
     if asset_type == "index":
@@ -783,28 +675,14 @@ def get_period_kline(
                 scored = score_technical_frame(bars) if include_technical_scores else bars
                 visible = scored.filter(pl.col("date").str.slice(0, 10).is_in([str(value) for value in trade_dates]))
                 rows, score_payload = _rows_and_score_payload(visible, include_technical_scores)
-                short_payload = _short_term_payload(
-                    bars,
-                    include_short_term_analysis,
-                    symbol=symbol,
-                    asset_type=asset_type,
-                    period="30m",
-                    stock_name=stock_info.get("name"),
-                    start=start,
-                    end=end,
-                    visible_keys={str(value).replace("T", " ")[:16] for value in visible["date"].to_list()},
-                )
             else:
                 native = native.filter(pl.col("datetime").dt.date().is_in(trade_dates))
                 rows, score_payload = _rows_and_score_payload(prepare_native_30m(native), False)
-                short_payload = None
             rows = _annotate_bar_closure(rows, "30m", end)
             response = {**base, "rows": rows, "source": source,
                         "requested_days": days, "available_days": len(trade_dates)}
             if score_payload is not None:
                 response["technical_scores"] = score_payload
-            if short_payload is not None:
-                response["short_term_analysis"] = short_payload
             return response
         # 多取自然日覆盖节假日，最终严格裁成最近 N 个实际交易日。
         scan_start = min(start, end - timedelta(days=days * 3 + 20))
@@ -831,8 +709,6 @@ def get_period_kline(
             response = {**base, "rows": [], "source": source, "requested_days": days, "available_days": 0}
             if include_technical_scores:
                 response["technical_scores"] = {"version": TECHNICAL_SCORE_VERSION, "rows": []}
-            if include_short_term_analysis:
-                response["short_term_analysis"] = _empty_short_term_payload(period="30m")
             return response
         minute = minute.with_columns(pl.col("datetime").dt.date().alias("_trade_date"))
         trade_dates = sorted(minute["_trade_date"].unique().to_list())[-days:]
@@ -842,21 +718,9 @@ def get_period_kline(
             scored = score_technical_frame(bars) if include_technical_scores else bars
             visible = scored.filter(pl.col("date").str.slice(0, 10).is_in([str(value) for value in trade_dates]))
             rows, score_payload = _rows_and_score_payload(visible, include_technical_scores)
-            short_payload = _short_term_payload(
-                bars,
-                include_short_term_analysis,
-                symbol=symbol,
-                asset_type=asset_type,
-                period="30m",
-                stock_name=stock_info.get("name"),
-                start=start,
-                end=end,
-                visible_keys={str(value).replace("T", " ")[:16] for value in visible["date"].to_list()},
-            )
         else:
             minute = minute.filter(pl.col("_trade_date").is_in(trade_dates)).drop("_trade_date")
             rows, score_payload = _rows_and_score_payload(aggregate_minute_30m(minute), False)
-            short_payload = None
         rows = _annotate_bar_closure(rows, "30m", end)
         response = {
             **base,
@@ -867,16 +731,10 @@ def get_period_kline(
         }
         if score_payload is not None:
             response["technical_scores"] = score_payload
-        if short_payload is not None:
-            response["short_term_analysis"] = short_payload
         return response
 
-    # 指标和反陷阱区按目标周期重算，因此额外读取至少 120 根目标周期K的预热数据；
-    # 只扫描单标的基础列，不触发日线全指标热路径。
-    # 短线区扫描最多 120 根目标周期K; 日线聚合时至少预取对应根数。
-    warmup_days = (
-        120 * 7 + 90 if period == "1w" else 120 * 31 + 366
-    ) if include_short_term_analysis else (500 if period == "1w" else 6 * 366)
+    # 周/月聚合和技术评分需要额外读取预热数据; 只扫描单标的基础列。
+    warmup_days = 500 if period == "1w" else 6 * 366
     warmup_start = start - timedelta(days=warmup_days)
     base_columns = ["symbol", "date", "open", "high", "low", "close", "volume", "amount"]
     source = "enriched"
@@ -896,15 +754,12 @@ def get_period_kline(
             end_date=end.isoformat(),
             ext_columns=None,
             include_technical_scores=include_technical_scores,
-            include_short_term_analysis=include_short_term_analysis,
         )
         fallback_rows = fallback.get("rows", []) if isinstance(fallback, dict) else []
         if not fallback_rows:
             response = {**base, "rows": [], "source": "none"}
             if include_technical_scores:
                 response["technical_scores"] = {"version": TECHNICAL_SCORE_VERSION, "rows": []}
-            if include_short_term_analysis:
-                response["short_term_analysis"] = _empty_short_term_payload(period=period)
             return response
         daily = pl.DataFrame(fallback_rows, infer_schema_length=None)
         source = str(fallback.get("source") or "live")
@@ -919,16 +774,6 @@ def get_period_kline(
         ], infer_schema_length=None)
 
     bars = aggregate_daily_period(daily, period)
-    short_payload = _short_term_payload(
-        bars,
-        include_short_term_analysis,
-        symbol=symbol,
-        asset_type=asset_type,
-        period=period,
-        stock_name=stock_info.get("name"),
-        start=start,
-        end=end,
-    )
     scored = _score_frame_if_requested(bars, include_technical_scores)
     if not scored.is_empty():
         scored = scored.filter(
@@ -939,8 +784,6 @@ def get_period_kline(
     response = {**base, "rows": rows, "source": source}
     if score_payload is not None:
         response["technical_scores"] = score_payload
-    if short_payload is not None:
-        response["short_term_analysis"] = short_payload
     return response
 
 
@@ -1940,6 +1783,135 @@ async def extend_history(request: Request):
         raise
     except Exception as e:
         logger.error("extend_history error: %s\n%s", e, _tb.format_exc())
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post("/extend_etf_history")
+async def extend_etf_history(request: Request):
+    """向前扩展或按区间回补 ETF 历史日K数据 — 独立于盘后管道。
+
+    body: { "value": int, "unit": "day"|"month"|"year" }
+    或 { "start_date": "YYYY-MM-DD", "end_date": "YYYY-MM-DD" }
+    返回 job_id,可轮询 /api/pipeline/jobs 查看进度。
+    """
+    import asyncio
+    import traceback as _tb
+
+    try:
+        body = await request.json()
+        value = body.get("value")
+        unit = body.get("unit", "month")
+        if unit not in ("day", "month", "year"):
+            raise HTTPException(status_code=400, detail="unit 只支持 day/month/year")
+
+        raw_start = body.get("start_date")
+        raw_end = body.get("end_date")
+        range_requested = raw_start is not None or raw_end is not None
+        range_start = range_end = None
+        if range_requested:
+            if raw_start is None or raw_end is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="指定区间必须同时提供 start_date 和 end_date",
+                )
+            try:
+                range_start = date.fromisoformat(str(raw_start))
+                range_end = date.fromisoformat(str(raw_end))
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="日期格式错误 (应为 YYYY-MM-DD)",
+                ) from exc
+            if range_start > range_end:
+                raise HTTPException(
+                    status_code=400,
+                    detail="指定区间无效,start_date 不能晚于 end_date",
+                )
+        elif not value or value <= 0:
+            raise HTTPException(status_code=400, detail="value 必须为正整数")
+
+        repo = request.app.state.repo
+        capset = request.app.state.capabilities
+
+        from app.api.data import invalidate_storage_cache
+        from app.services.extend_etf_history import run_extend_etf_history
+        from app.services.pipeline_jobs import (
+            JobCancelledError,
+            job_store,
+            release_run_slot,
+            run_with_capacity,
+            try_acquire_run_slot,
+        )
+        from app.tickflow.capabilities import Cap
+        if not capset.has(Cap.KLINE_DAILY_BATCH):
+            raise HTTPException(status_code=403, detail="需要 Pro+ 权限 (batch K-line)")
+
+        # ETF 全市场标的数较多,用长任务停滞阈值。
+        job_id, is_new = job_store.create(long_running=True)
+        if not is_new:
+            return {"status": "reused", "job_id": job_id}
+
+        async def task() -> None:
+            if not try_acquire_run_slot(job_id):
+                job_store.fail(job_id, "已有数据任务在运行(或上一次任务卡死未结束),请稍后再试")
+                return
+            loop = asyncio.get_event_loop()
+            qs = getattr(request.app.state, "quote_service", None)
+
+            def progress(stage: str, pct: int, msg: str,
+                         stage_pct: int | None = None, skip_log: bool = False) -> None:
+                job_store.progress(job_id, stage, pct, msg,
+                                   stage_pct=stage_pct, skip_log=skip_log)
+
+            def _run() -> dict:
+                # 回补期间暂停实时行情,避免同时写 ETF 日K parquet 产生竞态。
+                try:
+                    if qs:
+                        with qs.paused():
+                            return run_extend_etf_history(
+                                repo,
+                                capset,
+                                value,
+                                unit,
+                                start_date=range_start,
+                                end_date=range_end,
+                                on_progress=progress,
+                            )
+                    return run_extend_etf_history(
+                        repo,
+                        capset,
+                        value,
+                        unit,
+                        start_date=range_start,
+                        end_date=range_end,
+                        on_progress=progress,
+                    )
+                finally:
+                    repo.refresh_cache()
+
+            try:
+                result = await loop.run_in_executor(_long_task_executor, run_with_capacity, job_id, _run)
+                if "error" in result:
+                    job_store.fail(job_id, result["error"])
+                else:
+                    job_store.succeed(job_id, result)
+                invalidate_storage_cache()
+            except JobCancelledError:
+                # 已由 terminate() 标记失败,拉取线程在分块回调处自行退出。
+                invalidate_storage_cache()
+            except Exception as e:
+                logger.exception("extend_etf_history failed: job_id=%s", job_id)
+                job_store.fail(job_id, str(e))
+                invalidate_storage_cache()
+            finally:
+                release_run_slot(job_id)
+
+        asyncio.create_task(task())  # noqa: RUF006
+        return {"status": "started", "job_id": job_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("extend_etf_history error: %s\n%s", e, _tb.format_exc())
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
