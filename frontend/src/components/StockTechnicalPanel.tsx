@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Check, ChevronDown, ChevronLeft, Settings2 } from 'lucide-react'
+import { Check, ChevronDown, ChevronLeft, Info, Settings2 } from 'lucide-react'
 import type {
   KlinePeriod,
   KlineRow,
@@ -7,6 +7,7 @@ import type {
   ShortTermAnalysisRow,
   TechnicalScoreCategory,
   TechnicalScoreIndicator,
+  TechnicalRocPeriod,
   TechnicalScoreRow,
   TechnicalScores,
 } from '@/lib/api'
@@ -57,7 +58,7 @@ const INDICATOR_DEFS: TechnicalIndicatorDef[] = [
   { key: 'macd', label: 'MACD', description: '趋势动能与交叉状态' },
   { key: 'rsi', label: 'RSI', description: '相对强弱与超买超卖' },
   { key: 'kdj', label: 'KDJ', description: '摆动指标与交叉状态' },
-  { key: 'roc', label: 'ROC', description: '5/20/60 周期收益方向' },
+  { key: 'roc', label: 'ROC', description: '5/20/60 周期方向、斜率与反转预警' },
   { key: 'volume_price', label: '量价共振', description: '价格方向与量比是否同步' },
   { key: 'atr', label: 'ATR / ATR%', description: '真实波幅与价格归一化波动' },
   { key: 'boll_width', label: 'BOLL带宽', description: '布林通道宽度的收缩与扩张' },
@@ -118,7 +119,7 @@ const EMPTY_METRIC_LABELS: Record<StockTechnicalIndicatorKey, string[]> = {
   macd: ['DIF', 'DEA', 'MACD', '零轴'],
   rsi: ['RSI6', 'RSI14', 'RSI24', '方向'],
   kdj: ['K', 'D', 'J', '交叉'],
-  roc: ['5周期', '20周期', '60周期', '方向'],
+  roc: ['ROC5', 'ROC20', 'ROC60', '状态'],
   volume_price: ['量比', '成交方向', '同步性', '本周期'],
   atr: ['ATR14', 'ATR/价', '相对中位', '状态'],
   boll_width: ['上轨', '中轨', '下轨', '带宽'],
@@ -182,6 +183,12 @@ function fmtIndicator(value: number | null, digits = 2): string {
   return value == null ? '—' : value.toFixed(digits)
 }
 
+function fmtRocPeriod(period: TechnicalRocPeriod | undefined): string {
+  const value = period?.value_pct ?? (period?.value != null ? period.value * 100 : null)
+  if (value == null) return '—'
+  return `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
+}
+
 function fmtUnsignedPct(value: number | null, digits = 2): string {
   return value == null ? '—' : `${(value * 100).toFixed(digits)}%`
 }
@@ -193,6 +200,12 @@ function fmtRatio(value: number | null): string {
 function toneForChange(value: number | null): Tone {
   if (value == null || Math.abs(value) < 1e-12) return 'neutral'
   return value > 0 ? 'bull' : 'bear'
+}
+
+function toneForRocState(state?: string): Tone {
+  if (state === 'STRONG_BULL_ACCEL' || state === 'BULL_RUN' || state === 'TURNING_BULLISH') return 'bull'
+  if (state === 'STRONG_BEAR_ACCEL' || state === 'BEAR_RUN' || state === 'TURNING_BEARISH') return 'bear'
+  return 'neutral'
 }
 
 function averageVolumeAt(bars: TechnicalBar[], index: number, window: number): number | null {
@@ -259,6 +272,7 @@ function buildIndicator(
   bars: TechnicalBar[],
   index: number,
   assetType?: 'stock' | 'etf' | 'index',
+  scoreIndicator?: TechnicalScoreIndicator,
 ): TechnicalIndicatorModel {
   const current = bars[index]
   if (!current) return emptyIndicator(def)
@@ -406,6 +420,27 @@ function buildIndicator(
     }
 
     case 'roc': {
+      const scoredIndicator = scoreIndicator
+      const scoredPeriods = scoredIndicator?.periods
+      if (scoredIndicator && scoredPeriods?.length) {
+        const period5 = scoredPeriods.find(period => period.period === 5)
+        const period20 = scoredPeriods.find(period => period.period === 20)
+        const period60 = scoredPeriods.find(period => period.period === 60)
+        const summary = scoredIndicator.summary ?? scoredIndicator.status
+        return {
+          ...def,
+          status: scoredIndicator.status,
+          tone: toneForRocState(scoredIndicator.state),
+          summary,
+          metrics: [
+            { label: 'ROC5', value: fmtRocPeriod(period5), tone: toneForChange(period5?.value ?? null) },
+            { label: 'ROC20', value: fmtRocPeriod(period20), tone: toneForChange(period20?.value ?? null) },
+            { label: 'ROC60', value: fmtRocPeriod(period60), tone: toneForChange(period60?.value ?? null) },
+            { label: '状态', value: summary },
+          ],
+          detail: scoredIndicator.detail,
+        }
+      }
       const values = [
         get('momentum_5d') ?? momentumAt(bars, index, 5),
         get('momentum_20d') ?? momentumAt(bars, index, 20),
@@ -730,12 +765,14 @@ function scoreLabel(value: number | null | undefined): string {
   return value == null ? '—' : `${Math.round(value)}分`
 }
 
-function scoreBadgeClasses(value: number | null | undefined, kind: ScoreKind): string {
+function scoreBadgeClasses(value: number | null | undefined, kind: ScoreKind, status?: string): string {
   if (value == null) return 'border-border bg-elevated text-secondary'
   if (kind === 'direction') {
-    return value >= 60
+    const isBullish = status ? ['弱多', '偏多', '强多'].some(label => status.startsWith(label)) : value >= 60
+    const isBearish = status ? ['强空', '偏空', '弱空'].some(label => status.startsWith(label)) : value <= 40
+    return isBullish
       ? 'border-bull/30 bg-bull/10 text-bull'
-      : value <= 40 ? 'border-bear/30 bg-bear/10 text-bear' : 'border-border bg-elevated text-secondary'
+      : isBearish ? 'border-bear/30 bg-bear/10 text-bear' : 'border-border bg-elevated text-secondary'
   }
   return kind === 'risk'
     ? 'border-warning/30 bg-warning/10 text-warning'
@@ -791,9 +828,13 @@ export function StockTechnicalPanel({
     () => previousScoreForDate(technicalScores, selectedDate, period),
     [period, selectedDate, technicalScores],
   )
+  const scoreIndicators = useMemo(() => {
+    const entries = score?.categories?.flatMap(category => category.indicators.map(indicator => [indicator.id, indicator] as const)) ?? []
+    return new Map(entries)
+  }, [score])
   const indicators = useMemo(
-    () => INDICATOR_DEFS.map(def => buildIndicator(def, bars, selectedIndex, assetType)),
-    [assetType, bars, selectedIndex],
+    () => INDICATOR_DEFS.map(def => buildIndicator(def, bars, selectedIndex, assetType, scoreIndicators.get(def.key))),
+    [assetType, bars, scoreIndicators, selectedIndex],
   )
   const indicatorsByKey = useMemo(() => new Map(indicators.map(indicator => [indicator.key, indicator])), [indicators])
   const isLatest = selectedIndex >= 0 && selectedIndex === bars.length - 1
@@ -999,7 +1040,7 @@ export function StockTechnicalPanel({
               <details className="rounded-card border border-border bg-base/20">
                 <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-2.5 py-2 text-[12px] text-secondary">
                   <span>展开指标详情</span>
-                  <span className="truncate text-muted">MA · MACD · RSI · KDJ · ATR · BOLL</span>
+                  <span className="truncate text-muted">MA · MACD · RSI · KDJ · ROC · ATR · BOLL</span>
                 </summary>
                 <div className="divide-y divide-border/70 border-t border-border/70">
                   {GROUP_DEFS.map(group => {
@@ -1150,22 +1191,75 @@ function categoryScoreText(kind: ScoreKind, score: number | null | undefined): s
   return `${prefix}${Math.round(score)}/100`
 }
 
+function trendCategoryScoreText(score: number | null | undefined, status?: string): string {
+  if (score == null) return status === '数据不足' ? '数据不足' : '—'
+  return `${status ?? '趋势'} ${Math.round(score)}/100`
+}
+
 function categoryKindLabel(kind: ScoreKind): string {
   return kind === 'risk' ? '独立风险' : kind === 'activity' ? '独立活跃度' : '方向'
 }
 
 function categoryRawLabel(key: string): string {
   const labels: Record<string, string> = {
+    close: '价格',
     change_pct: '涨跌幅',
     volume_ratio: '量比',
     sample_count: '样本数',
     above_count: '站上MA20',
+    ma20: 'MA20',
+    ma60: 'MA60',
     momentum_5: '5周期ROC',
     momentum_20: '20周期ROC',
     momentum_60: '60周期ROC',
     rsi14: 'RSI14',
+    rsi14_effective: '有效RSI14',
+    previous_rsi14: '前RSI14',
+    rsi14_change: 'RSI14变化',
+    rsi_window_min: '区间最低RSI',
+    rsi_window_max: '区间最高RSI',
+    rsi_window_count: '区间样本数',
+    rsi_below_40_count: '低于40次数',
+    rsi_above_60_count: '高于60次数',
+    k: 'K',
+    d: 'D',
+    j: 'J',
+    previous_k: '前K',
+    previous_d: '前D',
+    previous_j: '前J',
+    k_change: 'K变化',
+    d_change: 'D变化',
+    j_change: 'J变化',
+    j_turn_age: 'J拐点距今',
+    improvement_bars: 'J连续改善周期',
+    weakening_bars: 'J连续走弱周期',
+    divergence_left_j: '背离前J',
+    divergence_right_j: '背离后J',
+    divergence_j_change: '背离J变化',
+    divergence_left_rsi: '背离前RSI',
+    divergence_right_rsi: '背离后RSI',
+    divergence_rsi_change: '背离RSI变化',
+    failure_first_value: '失败摆动前值',
+    failure_second_value: '失败摆动后值',
+    failure_trigger_level: '失败摆动触发线',
+    failure_pivot_age: '失败摆动距今',
+    failure_trigger_age: '失败摆动触发后',
+    stagnation_bars: '钝化连续周期',
+    previous_dif: '前DIF',
+    previous_dea: '前DEA',
     previous_hist: '前柱体',
+    dif_pct: 'DIF/价格(%)',
+    dea_pct: 'DEA/价格(%)',
+    hist_pct: '柱体/价格(%)',
+    previous_dif_pct: '前DIF/价格(%)',
+    previous_dea_pct: '前DEA/价格(%)',
+    previous_hist_pct: '前柱体/价格(%)',
+    hist_change_pct: '柱体变化(百分点)',
     hist: 'MACD柱体',
+    divergence_price_change_pct: '背离价格变化(%)',
+    divergence_dif_change_pct: '背离DIF变化(百分点)',
+    divergence_pivot_age: '背离拐点距今',
+    divergence_confirmation_lag: '背离确认等待',
     ma120: 'MA120',
     ma5_slope_pct: 'MA5当前斜率',
     ma20_slope_pct: 'MA20当前斜率',
@@ -1173,6 +1267,23 @@ function categoryRawLabel(key: string): string {
     previous_ma5_slope_pct: 'MA5上一段斜率',
     previous_ma20_slope_pct: 'MA20上一段斜率',
     previous_ma60_slope_pct: 'MA60上一段斜率',
+    distance_ma20_pct: '距MA20(比例)',
+    distance_ma60_pct: '距MA60(比例)',
+    distance_ma120_pct: '距MA120(比例)',
+    distance_ma20_atr: '距MA20/ATR',
+    short_spread_pct: '短期离散度(比例)',
+    long_spread_pct: '中长期离散度(比例)',
+    baseline_short_spread_pct: '短期离散度3周期前',
+    baseline_long_spread_pct: '中长期离散度3周期前',
+    medium_spread_pct: '中期离散度(比例)',
+    baseline_medium_spread_pct: '中期离散度3周期前',
+    short_spread_change_3_pct: '短期离散3周期均变',
+    long_spread_change_3_pct: '中长期离散3周期均变',
+    medium_spread_change_3_pct: '中期离散3周期均变',
+    structure_score: '结构分(-4~+4)',
+    short_structure_score: '短期结构分',
+    long_structure_score: '中长期结构分',
+    medium_structure_score: '中期结构分',
     atr14: 'ATR14',
     atr_pct: 'ATR/价格',
     realized_volatility: '实现波动率',
@@ -1182,6 +1293,19 @@ function categoryRawLabel(key: string): string {
     amount_ma5: '成交额MA5',
     amount_ma20: '成交额MA20',
     nonzero_count: '非零成交数',
+  }
+  for (const period of [5, 20, 60]) {
+    labels[`roc_${period}_pct`] = `ROC${period}(%)`
+    labels[`previous_roc_${period}_pct`] = `前ROC${period}(%)`
+    labels[`roc_${period}_change_pct_points`] = `ROC${period}变化(百分点)`
+    labels[`roc_${period}_percentile`] = `ROC${period}历史分位`
+    labels[`roc_${period}_history_count`] = `ROC${period}历史样本`
+    labels[`roc_${period}_history_q05_pct`] = `ROC${period}历史5%分位`
+    labels[`roc_${period}_history_q95_pct`] = `ROC${period}历史95%分位`
+    labels[`roc_${period}_divergence_price_change_pct`] = `ROC${period}背离价格变化(%)`
+    labels[`roc_${period}_divergence_change_pct_points`] = `ROC${period}背离变化(百分点)`
+    labels[`roc_${period}_divergence_pivot_age`] = `ROC${period}背离拐点距今`
+    labels[`roc_${period}_divergence_confirmation_lag`] = `ROC${period}背离确认等待`
   }
   return labels[key] ?? key.replace(/_/g, ' ')
 }
@@ -1195,7 +1319,15 @@ function categoryRawValueTone(kind: ScoreKind, score: number | null): string {
   return score >= 60 ? 'text-bull' : score <= 40 ? 'text-bear' : 'text-secondary'
 }
 
-function categoryIndicatorStatusTone(kind: ScoreKind, score: number | null): string {
+function categoryIndicatorStatusTone(kind: ScoreKind, score: number | null, indicator?: TechnicalScoreIndicator): string {
+  if (indicator?.id === 'kdj') {
+    if (indicator.divergence === 'BOTTOM_DIVERGENCE') return 'text-bull'
+    if (indicator.divergence === 'TOP_DIVERGENCE') return 'text-bear'
+    if (['OVERSOLD_REVERSAL', 'LOW_GOLDEN_CROSS', 'MOMENTUM_STRENGTHENING', 'WEAK_RECOVERY'].includes(indicator.state ?? '')) return 'text-bull'
+    if (['HIGH_DEATH_CROSS', 'MOMENTUM_WEAKENING'].includes(indicator.state ?? '')) return 'text-bear'
+    if (['HIGH_STAGNATION', 'HIGH_STRENGTH', 'OVERBOUGHT'].includes(indicator.state ?? '')) return 'text-warning'
+    return 'text-muted'
+  }
   if (score == null) return 'text-muted'
   if (kind === 'direction') return score >= 60 ? 'text-bull' : score <= 40 ? 'text-bear' : 'text-muted'
   return kind === 'risk' ? 'text-warning' : 'text-sky-300'
@@ -1204,20 +1336,37 @@ function categoryIndicatorStatusTone(kind: ScoreKind, score: number | null): str
 function ETFCategoryIndicator({ category, indicator }: { category: TechnicalScoreCategory; indicator: TechnicalScoreIndicator }) {
   const score = indicator.score
   const [description, ...meaningLines] = indicator.detail.split('\n')
-  const meaning = meaningLines.join('\n')
+  const detailText = meaningLines.join('\n')
+  const isRoc = indicator.id === 'roc'
+  const meaning = isRoc ? indicator.summary ?? detailText : detailText
+  const [descriptionOpen, setDescriptionOpen] = useState(false)
   const [rawExpanded, setRawExpanded] = useState(false)
   const hasRawValues = Object.keys(indicator.raw_values).length > 0
   return (
     <div className="rounded border border-border/70 bg-base/20 p-2">
       <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="truncate text-[12px] font-medium text-foreground">{indicator.name}</div>
-          <div className="mt-0.5 truncate text-[11px] text-muted" title={description}>{description}</div>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-1">
+            <div className="min-w-0 truncate text-[12px] font-medium text-foreground">{indicator.name}</div>
+            {description && (
+              <button
+                type="button"
+                className="shrink-0 rounded p-0.5 text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                title={descriptionOpen ? `收起${indicator.name}说明` : `查看${indicator.name}说明`}
+                aria-label={descriptionOpen ? `收起${indicator.name}说明` : `查看${indicator.name}说明`}
+                aria-expanded={descriptionOpen}
+                onClick={() => setDescriptionOpen(open => !open)}
+              >
+                <Info className="h-3 w-3" />
+              </button>
+            )}
+          </div>
         </div>
         <span className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[11px] font-semibold tabular-nums ${scoreBadgeClasses(score, category.kind)}`}>
           {categoryScoreText(category.kind, score)}
         </span>
       </div>
+      {descriptionOpen && <div className="mt-1 break-words text-[11px] leading-relaxed text-muted">{description}</div>}
       {hasRawValues ? (
         <>
           <button
@@ -1228,7 +1377,7 @@ function ETFCategoryIndicator({ category, indicator }: { category: TechnicalScor
             aria-expanded={rawExpanded}
             onClick={() => setRawExpanded(expanded => !expanded)}
           >
-            <span className={categoryIndicatorStatusTone(category.kind, score)}>{indicator.status}</span>
+            <span className={categoryIndicatorStatusTone(category.kind, score, indicator)}>{indicator.status}</span>
             <span className="flex items-center gap-1">
               <span>权重 {Math.round(indicator.weight * 100)}%</span>
               <ChevronDown className={`h-3 w-3 transition-transform ${rawExpanded ? 'rotate-180' : ''}`} />
@@ -1249,7 +1398,7 @@ function ETFCategoryIndicator({ category, indicator }: { category: TechnicalScor
       ) : (
         <>
           <div className="mt-1.5 flex items-center justify-between gap-2 border-t border-border/50 pt-1 text-[10px] text-muted">
-            <span className={categoryIndicatorStatusTone(category.kind, score)}>{indicator.status}</span>
+            <span className={categoryIndicatorStatusTone(category.kind, score, indicator)}>{indicator.status}</span>
             <span>权重 {Math.round(indicator.weight * 100)}%</span>
           </div>
           {meaning && <div className="mt-1 break-words whitespace-pre-line text-[11px] leading-relaxed text-muted">{meaning}</div>}
@@ -1296,8 +1445,8 @@ function ETFIndicatorScores({ score, amountEstimated }: { score: TechnicalScoreR
                   <span className="text-[10px] text-muted">{categoryKindLabel(category.kind)}</span>
                   <span className="text-[10px] text-muted">覆盖 {category.coverage}%</span>
                 </span>
-                <span className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[11px] font-semibold tabular-nums ${scoreBadgeClasses(category.score, category.kind)}`}>
-                  {categoryScoreText(category.kind, category.score)}
+                <span className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[11px] font-semibold tabular-nums ${scoreBadgeClasses(category.score, category.kind, category.status)}`}>
+                  {category.id === 'trend' ? trendCategoryScoreText(category.score, category.status) : categoryScoreText(category.kind, category.score)}
                 </span>
               </summary>
               <div className="grid gap-1.5 border-t border-border/70 p-1.5 sm:grid-cols-2">

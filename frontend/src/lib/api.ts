@@ -299,6 +299,137 @@ export interface KlineRow {
 
 export type TechnicalScoreKind = 'direction' | 'risk' | 'activity'
 
+export type TechnicalMacdState =
+  | 'STRONG_BULL'
+  | 'TURNING_BULLISH'
+  | 'RECOVERY'
+  | 'RANGE'
+  | 'TURNING_BEARISH'
+  | 'STRONG_BEAR'
+  | 'INSUFFICIENT'
+
+export type TechnicalMacdEvent =
+  | 'GOLDEN_CROSS'
+  | 'DEATH_CROSS'
+  | 'DIF_CROSS_ZERO_UP'
+  | 'DIF_CROSS_ZERO_DOWN'
+  | 'DEA_CROSS_ZERO_UP'
+  | 'DEA_CROSS_ZERO_DOWN'
+
+export type TechnicalMacdZeroAxis = 'ABOVE' | 'BELOW' | 'NEAR' | 'CROSSING' | 'UNKNOWN'
+
+export type TechnicalMacdMomentum =
+  | 'BULL_EXPANDING'
+  | 'BULL_SHRINKING'
+  | 'BEAR_EXPANDING'
+  | 'BEAR_SHRINKING'
+  | 'FLAT'
+  | 'INSUFFICIENT'
+
+export type TechnicalMacdDivergence = 'BOTTOM_DIVERGENCE' | 'TOP_DIVERGENCE'
+
+export type TechnicalRsiState =
+  | 'EXTREME_OVERBOUGHT'
+  | 'OVERBOUGHT'
+  | 'BULLISH'
+  | 'NEUTRAL_BULL'
+  | 'NEUTRAL_BEAR'
+  | 'BEARISH'
+  | 'OVERSOLD'
+  | 'EXTREME_OVERSOLD'
+  | 'INSUFFICIENT'
+
+export type TechnicalRsiEvent =
+  | 'RSI_CROSS_50_UP'
+  | 'RSI_CROSS_50_DOWN'
+  | 'RSI_CROSS_30_UP'
+  | 'RSI_CROSS_70_DOWN'
+
+export type TechnicalRsiDirection = 'RISING' | 'FALLING' | 'FLAT' | 'INSUFFICIENT'
+export type TechnicalRsiZone = 'STRONG' | 'WEAK' | 'NORMAL' | 'INSUFFICIENT'
+export type TechnicalRsiDivergence =
+  | 'BOTTOM_DIVERGENCE'
+  | 'TOP_DIVERGENCE'
+  | 'HIDDEN_BOTTOM_DIVERGENCE'
+  | 'HIDDEN_TOP_DIVERGENCE'
+export type TechnicalRsiFailureSwing = 'BULLISH_FAILURE_SWING' | 'BEARISH_FAILURE_SWING'
+export type TechnicalRsiStagnation = 'HIGH_STAGNATION' | 'LOW_STAGNATION'
+
+export type TechnicalKdjState =
+  | 'OVERSOLD_REVERSAL'
+  | 'LOW_GOLDEN_CROSS'
+  | 'MOMENTUM_STRENGTHENING'
+  | 'WEAK_RECOVERY'
+  | 'NEUTRAL_OSCILLATION'
+  | 'HIGH_STRENGTH'
+  | 'HIGH_STAGNATION'
+  | 'HIGH_DEATH_CROSS'
+  | 'MOMENTUM_WEAKENING'
+  | 'LOW_STAGNATION'
+  | 'OVERBOUGHT'
+  | 'OVERSOLD'
+  | 'INSUFFICIENT'
+export type TechnicalKdjEvent =
+  | 'LOW_GOLDEN_CROSS'
+  | 'MIDDLE_GOLDEN_CROSS'
+  | 'HIGH_GOLDEN_CROSS'
+  | 'LOW_DEATH_CROSS'
+  | 'MIDDLE_DEATH_CROSS'
+  | 'HIGH_DEATH_CROSS'
+  | 'J_TURN_UP'
+  | 'J_TURN_DOWN'
+export type TechnicalKdjZone = 'OVERSOLD' | 'MID_LOW' | 'MID_HIGH' | 'OVERBOUGHT' | 'INSUFFICIENT'
+export type TechnicalKdjTurn = 'UP' | 'DOWN'
+export type TechnicalKdjDivergence = 'BOTTOM_DIVERGENCE' | 'TOP_DIVERGENCE'
+
+export type TechnicalRocState =
+  | 'STRONG_BULL_ACCEL'
+  | 'BULL_RUN'
+  | 'BULL_DECAY'
+  | 'TURNING_BEARISH'
+  | 'STRONG_BEAR_ACCEL'
+  | 'BEAR_RUN'
+  | 'BEAR_DECAY'
+  | 'TURNING_BULLISH'
+  | 'NEUTRAL'
+  | 'MIXED'
+  | 'INSUFFICIENT'
+export type TechnicalRocEvent = 'ROC_CROSS_ZERO_UP' | 'ROC_CROSS_ZERO_DOWN'
+export type TechnicalRocDirection = 'POSITIVE' | 'NEGATIVE' | 'MIXED' | 'NEUTRAL' | 'INSUFFICIENT'
+export type TechnicalRocExtreme = 'EXTREME_OVERBOUGHT' | 'EXTREME_OVERSOLD'
+export type TechnicalRocDivergence = 'BOTTOM_DIVERGENCE' | 'TOP_DIVERGENCE'
+
+export interface TechnicalRocPeriod {
+  period: 5 | 20 | 60
+  weight: number
+  value: number | null
+  previous_value: number | null
+  change: number | null
+  value_pct: number | null
+  previous_value_pct: number | null
+  change_pct_points: number | null
+  state: TechnicalRocState
+  status: string
+  event: TechnicalRocEvent | null
+  percentile: number | null
+  history_count: number
+  history_q05_pct: number | null
+  history_q95_pct: number | null
+  extreme: TechnicalRocExtreme | null
+  divergence: TechnicalRocDivergence | null
+  recent_divergence: TechnicalRocDivergence | null
+  recent_divergence_as_of: string | null
+  divergence_confirmation_index: number | null
+  recent_divergence_confirmation_index: number | null
+  divergence_price_change_pct: number | null
+  divergence_roc_change_pct_points: number | null
+  divergence_pivot_age: number | null
+  divergence_confirmation_lag: number | null
+  tags: string[]
+  score: number | null
+  summary: string
+}
+
 export interface TechnicalScoreIndicator {
   id: string
   name: string
@@ -307,6 +438,33 @@ export interface TechnicalScoreIndicator {
   status: string
   detail: string
   raw_values: Record<string, number | null>
+  state?: TechnicalMacdState | TechnicalRsiState | TechnicalKdjState | TechnicalRocState
+  event?: TechnicalMacdEvent | TechnicalRsiEvent | TechnicalKdjEvent | TechnicalRocEvent | null
+  events?: Array<TechnicalMacdEvent | TechnicalRsiEvent | TechnicalKdjEvent | TechnicalRocEvent>
+  crossover?: 'GOLDEN_CROSS' | 'DEATH_CROSS' | null
+  zero_axis?: TechnicalMacdZeroAxis
+  momentum?: TechnicalMacdMomentum
+  divergence?: TechnicalMacdDivergence | TechnicalRsiDivergence | TechnicalKdjDivergence | TechnicalRocDivergence | null
+  recent_divergence?: TechnicalMacdDivergence | TechnicalRsiDivergence | TechnicalKdjDivergence | TechnicalRocDivergence | null
+  recent_divergence_as_of?: string | null
+  direction?: TechnicalRsiDirection | TechnicalRocDirection
+  zone?: TechnicalRsiZone | TechnicalKdjZone
+  zone_label?: string
+  failure_swing?: TechnicalRsiFailureSwing | null
+  recent_failure_swing?: TechnicalRsiFailureSwing | null
+  recent_failure_swing_as_of?: string | null
+  stagnation?: TechnicalRsiStagnation | null
+  j_turn?: TechnicalKdjTurn | null
+  phase?: string
+  tags?: string[]
+  confidence?: number | null
+  summary?: string
+  direction_label?: string
+  event_period?: number | null
+  extreme?: TechnicalRocExtreme | null
+  extreme_periods?: number[]
+  divergence_period?: number | null
+  periods?: TechnicalRocPeriod[]
 }
 
 export interface TechnicalScoreCategory {
@@ -315,6 +473,7 @@ export interface TechnicalScoreCategory {
   kind: TechnicalScoreKind
   weight: number | null
   score: number | null
+  status?: string
   coverage: number
   available: boolean
   indicators: TechnicalScoreIndicator[]

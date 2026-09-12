@@ -19,13 +19,14 @@ from app.price_limits import is_risk_warning_name, price_limit_pct
 from app.services import kline_sync
 from app.services.chart_data import ChartSnapshot
 from app.services.kline_periods import aggregate_daily_period, aggregate_minute_30m
+from app.services.short_term_scoring import short_term_analysis_payload
 from app.services.technical_scoring import (
     TECHNICAL_SCORE_COLUMNS,
+    TECHNICAL_SCORE_INTERNAL_COLUMNS,
     TECHNICAL_SCORE_VERSION,
     score_technical_frame,
     technical_score_payload,
 )
-from app.services.short_term_scoring import short_term_analysis_payload
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,11 @@ def _date_text(value: object) -> str:
 
 
 def _clean_technical_columns(frame):
-    columns = [column for column in TECHNICAL_SCORE_COLUMNS if column in frame.columns]
+    columns = [
+        column
+        for column in (*TECHNICAL_SCORE_COLUMNS, *TECHNICAL_SCORE_INTERNAL_COLUMNS)
+        if column in frame.columns
+    ]
     return frame.drop(columns) if columns else frame
 
 
