@@ -297,7 +297,7 @@ export interface KlineRow {
   [key: string]: any
 }
 
-export type TechnicalScoreKind = 'direction' | 'risk' | 'activity'
+export type TechnicalScoreKind = 'direction' | 'risk' | 'activity' | 'position'
 
 export type TechnicalMacdState =
   | 'STRONG_BULL'
@@ -398,6 +398,16 @@ export type TechnicalRocEvent = 'ROC_CROSS_ZERO_UP' | 'ROC_CROSS_ZERO_DOWN'
 export type TechnicalRocDirection = 'POSITIVE' | 'NEGATIVE' | 'MIXED' | 'NEUTRAL' | 'INSUFFICIENT'
 export type TechnicalRocExtreme = 'EXTREME_OVERBOUGHT' | 'EXTREME_OVERSOLD'
 export type TechnicalRocDivergence = 'BOTTOM_DIVERGENCE' | 'TOP_DIVERGENCE'
+export type TechnicalObvState =
+  | 'STRONG_INFLOW'
+  | 'INFLOW'
+  | 'INFLOW_IMPROVING'
+  | 'DIVERGING'
+  | 'RANGE'
+  | 'OUTFLOW_WORSENING'
+  | 'OUTFLOW'
+  | 'STRONG_OUTFLOW'
+  | 'INSUFFICIENT'
 
 export interface TechnicalRocPeriod {
   period: 5 | 20 | 60
@@ -434,11 +444,15 @@ export interface TechnicalScoreIndicator {
   id: string
   name: string
   score: number | null
-  weight: number
+  group?: 'volatility' | 'downside' | 'extreme' | string
+  score_label?: string
+  value?: number | null
+  weight: number | null
   status: string
   detail: string
   raw_values: Record<string, number | null>
   state?: TechnicalMacdState | TechnicalRsiState | TechnicalKdjState | TechnicalRocState
+    | TechnicalObvState
   event?: TechnicalMacdEvent | TechnicalRsiEvent | TechnicalKdjEvent | TechnicalRocEvent | null
   events?: Array<TechnicalMacdEvent | TechnicalRsiEvent | TechnicalKdjEvent | TechnicalRocEvent>
   crossover?: 'GOLDEN_CROSS' | 'DEATH_CROSS' | null
@@ -465,6 +479,9 @@ export interface TechnicalScoreIndicator {
   extreme_periods?: number[]
   divergence_period?: number | null
   periods?: TechnicalRocPeriod[]
+  coverage?: number
+  breakout?: string | null
+  persistence?: string | null
 }
 
 export interface TechnicalScoreCategory {
@@ -476,6 +493,20 @@ export interface TechnicalScoreCategory {
   status?: string
   coverage: number
   available: boolean
+  direction_status?: string
+  phase?: string
+  alert?: string | null
+  conclusion?: string
+  oversold_score?: number | null
+  overheat_score?: number | null
+  volatility_score?: number | null
+  volatility_coverage?: number
+  downside_score?: number | null
+  downside_coverage?: number
+  volatility_weight?: number
+  downside_weight?: number
+  risk_change_5?: number | null
+  risk_trend?: string | null
   indicators: TechnicalScoreIndicator[]
 }
 
@@ -502,7 +533,7 @@ export interface TechnicalScoreRow {
 }
 
 export interface TechnicalScores {
-  version: 'technical-score-v1' | 'technical-score-v2' | string
+  version: 'technical-score-v1' | 'technical-score-v2' | 'technical-score-v3' | 'technical-score-v4' | 'technical-score-v5' | 'technical-score-v6' | 'technical-score-v7' | 'technical-score-v8' | string
   rows: TechnicalScoreRow[]
 }
 
@@ -545,7 +576,7 @@ export interface ShortTermAnalysisRow {
 }
 
 export interface ShortTermAnalysis {
-  version: 'short-term-score-v1' | string
+  version: 'short-term-score-v1' | 'short-term-score-v2' | string
   period: KlinePeriod
   bar_semantics: 'native-bars' | string
   rows: ShortTermAnalysisRow[]

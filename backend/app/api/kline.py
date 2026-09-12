@@ -32,6 +32,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/kline", tags=["kline"])
 
+# 风险评分需要此前最多250根日K的历史分位; 400个自然日为周末和节假日留出余量.
+_TECHNICAL_SCORE_WARMUP_DAYS = 400
+
 
 def _chart_snapshot(request, symbol, asset_type, period, start, end):
     from app.services import preferences
@@ -139,7 +142,7 @@ def _short_term_payload(
 
 def _empty_short_term_payload(*, period: str, reason: str = "当前周期没有可计算的K线"):
     return {
-        "version": "short-term-score-v1",
+        "version": "short-term-score-v2",
         "period": period,
         "bar_semantics": "native-bars",
         "rows": [],
@@ -539,8 +542,8 @@ def get_daily(
     start_date: Optional[str] = Query(None, description="起始日期 YYYY-MM-DD, 优先于 days"),
     end_date: Optional[str] = Query(None, description="截止日期 YYYY-MM-DD, 默认今天"),
     ext_columns: Optional[str] = Query(None, description="逗号分隔的 ext 列: config_id.field_name"),
-    include_technical_scores: bool = Query(False, description="是否附带 technical-score-v3 评分序列"),
-    include_short_term_analysis: bool = Query(False, description="是否附带 short-term-score-v1 短线分析"),
+    include_technical_scores: bool = Query(False, description="是否附带 technical-score-v8 评分序列"),
+    include_short_term_analysis: bool = Query(False, description="是否附带 short-term-score-v2 短线分析"),
 ):
     """优先读取展示行情快照, 不可用时回退本地 enriched 和当日行情。"""
     import polars as pl
@@ -561,7 +564,10 @@ def get_daily(
     stock_info = _get_stock_info(repo, symbol) if asset_type == "stock" else _get_asset_info(repo, symbol, asset_type)
     stock_name = stock_info.get("name")
 
-    snapshot = _chart_snapshot(request, symbol, asset_type, "1d", start - timedelta(days=180), end)
+    score_start = start - timedelta(
+        days=_TECHNICAL_SCORE_WARMUP_DAYS if include_technical_scores else 180,
+    )
+    snapshot = _chart_snapshot(request, symbol, asset_type, "1d", score_start, end)
     if not snapshot.frame.is_empty():
         if include_analysis:
             chart_rows = snapshot.frame.to_dicts()
@@ -608,13 +614,16 @@ def get_daily(
         )
 
     # 从 enriched 表读取 (已含前复权 OHLCV + 技术指标 + 信号); ETF/指数走独立存储
-    data_start = start - timedelta(days=180) if include_analysis else start
+    data_start = score_start if include_analysis else start
     df = repo.get_daily_asset(asset_type, symbol, data_start, end)
 
     source = "enriched"
     if df.is_empty() and asset_type == "stock":
         try:
-            raw = kline_sync.sync_daily_batch([symbol], count=days + 30)
+            raw = kline_sync.sync_daily_batch(
+                [symbol],
+                count=days + (_TECHNICAL_SCORE_WARMUP_DAYS if include_technical_scores else 30),
+            )
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"TickFlow fetch failed: {exc}") from exc
         if not raw.is_empty():
@@ -702,8 +711,8 @@ def get_period_kline(
     start_date: Optional[str] = Query(None, description="展示起始日期 YYYY-MM-DD"),
     end_date: Optional[str] = Query(None, description="展示截止日期 YYYY-MM-DD,默认今天"),
     days: int = Query(20, ge=1, le=120, description="30分钟K最近交易日数量"),
-    include_technical_scores: bool = Query(False, description="是否附带 technical-score-v3 评分序列"),
-    include_short_term_analysis: bool = Query(False, description="是否附带 short-term-score-v1 短线分析"),
+    include_technical_scores: bool = Query(False, description="是否附带 technical-score-v8 评分序列"),
+    include_short_term_analysis: bool = Query(False, description="是否附带 short-term-score-v2 短线分析"),
 ):
     """优先原生30分钟K和展示日线, 周/月聚合后重算指标, 不落库。"""
     import polars as pl

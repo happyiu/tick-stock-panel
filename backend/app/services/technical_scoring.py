@@ -4,8 +4,8 @@
 引擎的截面评分. 模块只生成运行时列, 不修改持久化数据.
 
 评分只使用已有图表指标: MA, MACD, RSI, KDJ, momentum/ROC, 量比,
-ATR, BOLL 和 K 线成交额. 旧版顶层字段保持兼容; v3 另外输出 ETF 优先的
-类别/子指标评分, 方向、波动风险和成交活跃度彼此独立.
+ATR, BOLL 和 K 线成交额. 旧版顶层字段形状保持兼容; v8 另外输出 ETF 优先的
+类别/子指标评分, 方向、市场风险和成交活跃度彼此独立.
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ import polars as pl
 
 from app.indicators.pipeline import compute_indicators
 
-TECHNICAL_SCORE_VERSION = "technical-score-v3"
+TECHNICAL_SCORE_VERSION = "technical-score-v8"
 
 # 供 API/前端使用的运行时列. 列名带 technical_ 前缀, 避免与策略 score 混淆.
 TECHNICAL_SCORE_COLUMNS = (
@@ -54,13 +54,12 @@ _DIRECTION_WEIGHTS = {
     "state_confirmation": 0.10,
 }
 
-# v3 分类评分权重。旧 _DIRECTION_WEIGHTS 保留给兼容字段, 避免改变已有
-# technical_direction_score 的历史语义; ETF 页面消费 category_* 字段。
+# v8 分类评分权重。旧 _DIRECTION_WEIGHTS 保留给兼容字段, 避免改变已有
+# technical_direction_score 的历史语义; 价格位置只描述所处位置, 不参与方向分。
 _CATEGORY_DIRECTION_WEIGHTS = {
     "trend": 0.35,
     "momentum": 0.30,
     "volume_price": 0.20,
-    "price_position": 0.15,
 }
 
 _CATEGORY_INDICATOR_WEIGHTS = {
@@ -78,28 +77,22 @@ _CATEGORY_INDICATOR_WEIGHTS = {
         "kdj": 0.20,
     },
     "volume_price": {
+        "rvol": 0.30,
         "price_volume": 0.40,
-        "volume_consistency": 0.30,
-        "vwma_support": 0.30,
-    },
-    "price_position": {
-        "range_position_20": 0.35,
-        "range_position_60": 0.30,
-        "boll_position": 0.20,
-        "ma20_atr_position": 0.15,
+        "obv": 0.30,
     },
     "volatility_risk": {
-        "atr_relative": 0.30,
-        "realized_volatility": 0.25,
+        # 波动风险组内部权重 40/40/20; 下行风险组内部权重 60/40.
+        "atr_relative": 0.40,
+        "realized_volatility": 0.40,
         "boll_width_relative": 0.20,
-        "ma20_deviation_risk": 0.15,
-        "rolling_drawdown": 0.10,
+        "ma20_deviation_risk": None,
+        "downside_volatility": 0.60,
+        "rolling_drawdown": 0.40,
     },
     "activity": {
-        "amount_ratio_20": 0.40,
-        "amount_ma5_ma20": 0.30,
-        "volume_ratio_5": 0.20,
-        "trade_continuity": 0.10,
+        "amount_ratio_20": 0.60,
+        "amount_ma5_ma20": 0.40,
     },
 }
 
@@ -107,8 +100,8 @@ _CATEGORY_META = {
     "trend": {"name": "趋势", "kind": "direction", "weight": 0.35},
     "momentum": {"name": "动能", "kind": "direction", "weight": 0.30},
     "volume_price": {"name": "量价确认", "kind": "direction", "weight": 0.20},
-    "price_position": {"name": "位置强度", "kind": "direction", "weight": 0.15},
-    "volatility_risk": {"name": "波动与过热风险", "kind": "risk", "weight": None},
+    "price_position": {"name": "价格位置", "kind": "position", "weight": None},
+    "volatility_risk": {"name": "市场风险", "kind": "risk", "weight": None},
     "activity": {"name": "成交活跃度", "kind": "activity", "weight": None},
 }
 
@@ -131,6 +124,52 @@ _MACD_DIVERGENCE_PIVOT_RADIUS = 2
 _MACD_DIVERGENCE_PRICE_CHANGE_PCT = 1.0
 _MACD_DIVERGENCE_DIF_CHANGE_PCT = 0.05
 _MACD_DIVERGENCE_ACTIVE_BARS = 5
+
+_RVOL_WINDOW = 20
+_RVOL_PRICE_CHANGE_THRESHOLD = 0.003
+_RVOL_INCREASE_THRESHOLD = 1.10
+_RVOL_SHRINK_THRESHOLD = 0.80
+_RVOL_WEIGHTS = {
+    "rvol": 0.30,
+    "price_volume": 0.40,
+    "obv": 0.30,
+}
+_OBV_TREND_SCORES = {
+    "STRONG_INFLOW": 90.0,
+    "INFLOW": 75.0,
+    "INFLOW_IMPROVING": 65.0,
+    "RANGE": 50.0,
+    "OUTFLOW_WORSENING": 35.0,
+    "OUTFLOW": 25.0,
+    "STRONG_OUTFLOW": 10.0,
+}
+
+_RISK_HISTORY_WINDOW = 250
+_RISK_MIN_HISTORY = 20
+_BOLL_CHANGE_WINDOW = 5
+_DOWNSIDE_VOLATILITY_WINDOW = 20
+_DRAWDOWN_SHORT_WINDOW = 20
+_DRAWDOWN_MEDIUM_WINDOW = 60
+_RISK_GROUP_WEIGHTS = {
+    "volatility": 0.45,
+    "downside": 0.55,
+}
+_RISK_GROUP_INDICATOR_IDS = {
+    "volatility": ("atr_relative", "realized_volatility", "boll_width_relative"),
+    "downside": ("downside_volatility", "rolling_drawdown"),
+}
+_RISK_PERCENTILE_ANCHORS = (
+    (0.0, 10.0),
+    (50.0, 10.0),
+    (60.0, 20.0),
+    (70.0, 30.0),
+    (80.0, 45.0),
+    (85.0, 55.0),
+    (90.0, 68.0),
+    (95.0, 82.0),
+    (98.0, 92.0),
+    (100.0, 100.0),
+)
 
 _MACD_STATE_LABELS = {
     "STRONG_BULL": "强多",
@@ -394,6 +433,23 @@ def _weighted_score(
     score = sum(value * weight for value, weight in available) / score_weight
     coverage = sum(weight * coverage for value, weight, coverage in values if value is not None) / expected
     return score, coverage
+
+
+def _weighted_partial_score(
+    parts: Iterable[tuple[float | None, float, float]],
+) -> tuple[float | None, float]:
+    """Combine scores while letting partial evidence reduce its effective weight."""
+    values = list(parts)
+    expected = sum(weight for _, weight, _ in values)
+    effective = [
+        (value, weight * _clamp(coverage, 0.0, 1.0))
+        for value, weight, coverage in values
+        if value is not None and coverage > 0
+    ]
+    total = sum(weight for _, weight in effective)
+    if expected <= 0 or total <= 0:
+        return None, 0.0
+    return sum(value * weight for value, weight in effective) / total, total / expected
 
 
 def _consistency_score(values: Iterable[float | None]) -> float:
@@ -1308,6 +1364,522 @@ def _change_pct(records: list[dict], index: int) -> float | None:
     return current / previous - 1.0
 
 
+def _rvol20(records: list[dict], index: int) -> float | None:
+    """Return current volume relative to the previous 20 bars, excluding today."""
+    current = _number(records[index].get("volume"))
+    if current is None or current <= 0 or index < _RVOL_WINDOW:
+        return None
+    previous = [_number(row.get("volume")) for row in records[index - _RVOL_WINDOW:index]]
+    if any(value is None or value < 0 for value in previous):
+        return None
+    average = sum(value for value in previous if value is not None) / _RVOL_WINDOW
+    return current / average if average > 0 else None
+
+
+def _rvol_level(value: float | None) -> tuple[float | None, str, float | None]:
+    if value is None:
+        return None, "数据不足", None
+    if value < 0.60:
+        return 25.0, "极度缩量", 0.75
+    if value < 0.80:
+        return 40.0, "明显缩量", 0.85
+    if value < 1.20:
+        return 60.0, "正常量能", 1.00
+    if value < 1.50:
+        return 75.0, "温和放量", 1.08
+    if value <= 2.00:
+        return 90.0, "明显放量", 1.15
+    return 95.0, "巨量", 1.20
+
+
+def _rvol_directional_score(rvol_score: float | None, change: float | None) -> float | None:
+    """Turn volume confirmation into a direction-aware component, not a bullish bonus."""
+    if rvol_score is None or change is None:
+        return None
+    if abs(change) < _RVOL_PRICE_CHANGE_THRESHOLD:
+        return 50.0
+    direction = 1.0 if change > 0 else -1.0
+    if rvol_score >= 60.0:
+        return _clamp(50.0 + direction * (rvol_score - 50.0))
+    # 缩量只能降低上涨确认或减轻下跌确认, 不应把弱势直接翻成看多.
+    relief_or_penalty = (60.0 - rvol_score) * 0.20
+    return _clamp(50.0 - direction * relief_or_penalty)
+
+
+def _volume_ratio_for_relation(records: list[dict], index: int) -> float | None:
+    """Use RVOL20 for the relation and retain the existing 5-bar proxy as a warm-up."""
+    return _rvol20(records, index) or _volume_ratio(records, index)
+
+
+def _price_volume_status(change: float | None, ratio: float | None) -> str:
+    if change is None or ratio is None:
+        return "数据不足"
+    if abs(change) < _RVOL_PRICE_CHANGE_THRESHOLD:
+        if ratio > _RVOL_INCREASE_THRESHOLD:
+            return "价平放量"
+        if ratio < _RVOL_SHRINK_THRESHOLD:
+            return "价平缩量"
+        return "价格震荡"
+    if change > 0:
+        return "价涨量增" if ratio > _RVOL_INCREASE_THRESHOLD else "价涨量缩" if ratio < _RVOL_SHRINK_THRESHOLD else "价涨量平"
+    return "价跌量增" if ratio > _RVOL_INCREASE_THRESHOLD else "价跌量缩" if ratio < _RVOL_SHRINK_THRESHOLD else "价跌量平"
+
+
+def _price_volume_current_score(change: float | None, ratio: float | None) -> float | None:
+    if change is None or ratio is None:
+        return None
+    if abs(change) < _RVOL_PRICE_CHANGE_THRESHOLD:
+        if ratio > _RVOL_INCREASE_THRESHOLD:
+            return 47.0
+        if ratio < _RVOL_SHRINK_THRESHOLD:
+            return 53.0
+        return 50.0
+
+    change_strength = _clamp(
+        (abs(change) - _RVOL_PRICE_CHANGE_THRESHOLD) / 0.02,
+        0.0,
+        1.0,
+    )
+    volume_strength = _clamp(
+        (ratio - _RVOL_INCREASE_THRESHOLD) / 0.90,
+        0.0,
+        1.0,
+    )
+    if change > 0:
+        if ratio > _RVOL_INCREASE_THRESHOLD:
+            return _clamp(80.0 + 8.0 * change_strength + 12.0 * volume_strength)
+        if ratio < _RVOL_SHRINK_THRESHOLD:
+            return 55.0 + 15.0 * _clamp(abs(change) / 0.03, 0.0, 1.0)
+        return 68.0 + 10.0 * change_strength
+    if ratio > _RVOL_INCREASE_THRESHOLD:
+        return _clamp(25.0 - 8.0 * change_strength - 12.0 * volume_strength)
+    if ratio < _RVOL_SHRINK_THRESHOLD:
+        return 35.0 + 15.0 * _clamp(abs(change) / 0.03, 0.0, 1.0)
+    return _clamp(35.0 - 5.0 * change_strength)
+
+
+def _price_volume_signal(change: float | None, ratio: float | None) -> int | None:
+    if change is None or ratio is None:
+        return None
+    if abs(change) < _RVOL_PRICE_CHANGE_THRESHOLD:
+        return 0
+    if change > 0:
+        return 2 if ratio > _RVOL_INCREASE_THRESHOLD else 0 if ratio < _RVOL_SHRINK_THRESHOLD else 1
+    return -2 if ratio > _RVOL_INCREASE_THRESHOLD else 0 if ratio < _RVOL_SHRINK_THRESHOLD else -1
+
+
+def _price_volume_persistence(records: list[dict], index: int) -> dict:
+    weights = (0.40, 0.25, 0.15, 0.12, 0.08)
+    signals: list[tuple[int, float, int]] = []
+    for offset, weight in enumerate(weights):
+        position = index - offset
+        if position <= 0:
+            continue
+        signal = _price_volume_signal(
+            _change_pct(records, position),
+            _volume_ratio_for_relation(records, position),
+        )
+        if signal is not None:
+            signals.append((signal, weight, position))
+    available_weight = sum(weight for _, weight, _ in signals)
+    if available_weight <= 0:
+        return {
+            "score": None,
+            "coverage": 0.0,
+            "signal": None,
+            "status": "数据不足",
+            "sample_count": 0,
+            "shrink_weight": 0.0,
+        }
+
+    signal = sum(value * weight for value, weight, _ in signals) / available_weight
+    score = _clamp(50.0 + 25.0 * signal)
+    shrink_weight = sum(
+        weight
+        for value, weight, position in signals
+        if value == 0
+        and (_change_pct(records, position) or 0.0) < -_RVOL_PRICE_CHANGE_THRESHOLD
+    ) / available_weight
+    if signal >= 0.75:
+        status = "持续偏多"
+    elif signal >= 0.20:
+        status = "持续改善"
+    elif signal <= -0.75:
+        status = "持续偏空"
+    elif signal <= -0.20:
+        status = "持续转弱"
+    elif shrink_weight >= 0.40:
+        status = "卖压持续减弱"
+    else:
+        status = "多空均衡"
+    return {
+        "score": score,
+        "coverage": available_weight,
+        "signal": signal,
+        "status": status,
+        "sample_count": len(signals),
+        "shrink_weight": shrink_weight,
+    }
+
+
+def _obv_series(records: list[dict], index: int) -> list[float | None]:
+    values: list[float | None] = [0.0]
+    for position in range(1, index + 1):
+        previous = records[position - 1]
+        current = records[position]
+        previous_obv = values[-1]
+        previous_close = _number(previous.get("close"))
+        close = _number(current.get("close"))
+        volume = _number(current.get("volume"))
+        if (
+            previous_obv is None
+            or previous_close is None
+            or close is None
+            or previous_close <= 0
+            or volume is None
+            or volume < 0
+        ):
+            values.append(None)
+            continue
+        direction = 1.0 if close > previous_close else -1.0 if close < previous_close else 0.0
+        values.append(previous_obv + direction * volume)
+    return values
+
+
+def _obv_slope(
+    records: list[dict],
+    values: list[float | None],
+    index: int,
+    window: int,
+) -> tuple[float | None, float]:
+    effective_window = min(window, index)
+    if effective_window < 1 or values[index] is None or values[index - effective_window] is None:
+        return None, 0.0
+    volumes = [
+        _number(row.get("volume"))
+        for row in records[index - effective_window + 1:index + 1]
+    ]
+    if any(volume is None or volume < 0 for volume in volumes):
+        return None, 0.0
+    denominator = sum(volume for volume in volumes if volume is not None)
+    if denominator <= 0:
+        return None, 0.0
+    return (values[index] - values[index - effective_window]) / denominator, effective_window / window
+
+
+def _obv_direction(slope: float | None) -> int | None:
+    if slope is None:
+        return None
+    if slope > 0.05:
+        return 1
+    if slope < -0.05:
+        return -1
+    return 0
+
+
+def _obv_direction_label(direction: int | None) -> str:
+    return {1: "上行", 0: "走平", -1: "下行", None: "数据不足"}[direction]
+
+
+def _obv_trend_state(short_direction: int | None, medium_direction: int | None) -> tuple[str, str, float | None]:
+    if short_direction is None and medium_direction is None:
+        return "INSUFFICIENT", "数据不足", None
+    if short_direction == 1 and medium_direction == 1:
+        state = "STRONG_INFLOW"
+    elif short_direction == 0 and medium_direction == 1:
+        state = "INFLOW"
+    elif short_direction == 1 and medium_direction == 0:
+        state = "INFLOW_IMPROVING"
+    elif short_direction == -1 and medium_direction == -1:
+        state = "STRONG_OUTFLOW"
+    elif short_direction == 0 and medium_direction == -1:
+        state = "OUTFLOW"
+    elif short_direction == -1 and medium_direction == 0:
+        state = "OUTFLOW_WORSENING"
+    elif short_direction in {-1, 1} and medium_direction in {-1, 1}:
+        return "DIVERGING", "资金分歧", 50.0
+    elif medium_direction == 1:
+        state = "INFLOW"
+    elif medium_direction == -1:
+        state = "OUTFLOW"
+    elif short_direction == 1:
+        state = "INFLOW_IMPROVING"
+    elif short_direction == -1:
+        state = "OUTFLOW_WORSENING"
+    else:
+        state = "RANGE"
+    labels = {
+        "STRONG_INFLOW": "强流入",
+        "INFLOW": "流入",
+        "INFLOW_IMPROVING": "流入改善",
+        "RANGE": "震荡",
+        "OUTFLOW_WORSENING": "流出加剧",
+        "OUTFLOW": "流出",
+        "STRONG_OUTFLOW": "强流出",
+    }
+    return state, labels[state], _OBV_TREND_SCORES[state]
+
+
+def _obv_breakout(values: list[float | None], index: int) -> dict:
+    previous = [
+        value
+        for value in values[max(0, index - _RVOL_WINDOW):index]
+        if value is not None and math.isfinite(value)
+    ]
+    coverage = min(1.0, len(previous) / _RVOL_WINDOW)
+    if len(previous) < 5 or values[index] is None:
+        return {"score": None, "coverage": coverage, "status": "数据不足"}
+    if values[index] > max(previous):
+        return {"score": 70.0, "coverage": coverage, "status": "向上突破"}
+    if values[index] < min(previous):
+        return {"score": 30.0, "coverage": coverage, "status": "向下突破"}
+    return {"score": 50.0, "coverage": coverage, "status": "未突破"}
+
+
+def _obv_divergence(records: list[dict], values: list[float | None], index: int) -> dict:
+    previous: list[tuple[float, float]] = []
+    for position in range(max(0, index - _RVOL_WINDOW), index):
+        close = _number(records[position].get("close"))
+        obv = values[position] if position < len(values) else None
+        if close is not None and close > 0 and obv is not None and math.isfinite(obv):
+            previous.append((close, obv))
+    if len(previous) < 5 or values[index] is None:
+        return {
+            "score": None,
+            "coverage": min(1.0, len(previous) / _RVOL_WINDOW),
+            "divergence": None,
+            "status": "样本不足",
+            "price_change_pct": None,
+        }
+    close = _number(records[index].get("close"))
+    if close is None or close <= 0:
+        return {"score": None, "coverage": 0.0, "divergence": None, "status": "样本不足", "price_change_pct": None}
+    previous_low_close = min(close for close, _ in previous)
+    previous_high_close = max(close for close, _ in previous)
+    previous_low_obv = min(obv for _, obv in previous)
+    previous_high_obv = max(obv for _, obv in previous)
+    current_obv = values[index]
+    if close < previous_low_close and current_obv >= previous_low_obv:
+        return {
+            "score": 65.0,
+            "coverage": 1.0,
+            "divergence": "BOTTOM_DIVERGENCE",
+            "status": "底背离",
+            "price_change_pct": (close / previous_low_close - 1.0) * 100.0,
+        }
+    if close > previous_high_close and current_obv <= previous_high_obv:
+        return {
+            "score": 35.0,
+            "coverage": 1.0,
+            "divergence": "TOP_DIVERGENCE",
+            "status": "顶背离",
+            "price_change_pct": (close / previous_high_close - 1.0) * 100.0,
+        }
+    return {"score": 50.0, "coverage": 1.0, "divergence": None, "status": "当前无有效背离", "price_change_pct": None}
+
+
+def _obv_analysis(
+    records: list[dict],
+    index: int,
+    values: list[float | None] | None = None,
+) -> dict:
+    values = values if values is not None else _obv_series(records, index)
+    short_slope, short_coverage = _obv_slope(records, values, index, 5)
+    medium_slope, medium_coverage = _obv_slope(records, values, index, _RVOL_WINDOW)
+    short_direction = _obv_direction(short_slope)
+    medium_direction = _obv_direction(medium_slope)
+    trend_state, trend_status, trend_score = _obv_trend_state(short_direction, medium_direction)
+    trend_coverage = (short_coverage + medium_coverage) / 2.0 if trend_score is not None else 0.0
+    breakout = _obv_breakout(values, index)
+    divergence = _obv_divergence(records, values, index)
+    score, coverage = _weighted_partial_score((
+        (trend_score, 0.50, trend_coverage),
+        (breakout["score"], 0.25, breakout["coverage"]),
+        (divergence["score"], 0.25, divergence["coverage"]),
+    ))
+    direction_summary = (
+        f"短期{_obv_direction_label(short_direction)}, 中期{_obv_direction_label(medium_direction)}"
+    )
+    detail_lines = [
+        f"趋势: {trend_status} · {direction_summary}",
+        f"突破: {breakout['status']}",
+        f"背离: {divergence['status']}",
+    ]
+    summary_parts = [trend_status, direction_summary]
+    if divergence["divergence"] == "BOTTOM_DIVERGENCE":
+        summary_parts.append("出现底背离")
+    elif divergence["divergence"] == "TOP_DIVERGENCE":
+        summary_parts.append("出现顶背离")
+    obv_values = values[index] if values[index] is not None else None
+    obv_ma5 = sum(values[index - 4:index + 1]) / 5.0 if index >= 4 and all(value is not None for value in values[index - 4:index + 1]) else None
+    obv_ma20 = sum(values[index - 19:index + 1]) / _RVOL_WINDOW if index >= _RVOL_WINDOW - 1 and all(value is not None for value in values[index - 19:index + 1]) else None
+    return {
+        "score": score,
+        "coverage": coverage,
+        "status": trend_status,
+        "trend_state": trend_state,
+        "trend_score": trend_score,
+        "trend_coverage": trend_coverage,
+        "breakout": breakout["status"],
+        "breakout_score": breakout["score"],
+        "divergence": divergence["divergence"],
+        "divergence_status": divergence["status"],
+        "divergence_score": divergence["score"],
+        "summary": " · ".join(summary_parts),
+        "detail": "\n".join(detail_lines),
+        "raw_values": _raw_values(
+            obv=obv_values,
+            obv_ma5=obv_ma5,
+            obv_ma20=obv_ma20,
+            obv_short_slope=short_slope,
+            obv_medium_slope=medium_slope,
+            obv_trend_score=trend_score,
+            obv_breakout_score=breakout["score"],
+            obv_divergence_score=divergence["score"],
+            divergence_price_change_pct=divergence["price_change_pct"],
+        ),
+    }
+
+
+def _volume_price_direction_status(score: float | None) -> str:
+    if score is None:
+        return "数据不足"
+    if score >= 85:
+        return "强多头确认"
+    if score >= 70:
+        return "多头确认"
+    if score >= 55:
+        return "偏多"
+    if score >= 45:
+        return "中性"
+    if score >= 30:
+        return "偏空"
+    if score >= 15:
+        return "空头确认"
+    return "强空头确认"
+
+
+def _volume_price_phase(
+    score: float | None,
+    relation_status: str,
+    obv: dict,
+    divergence: str | None,
+) -> tuple[str, str | None]:
+    if score is None:
+        return "数据不足", None
+    if divergence == "BOTTOM_DIVERGENCE":
+        return ("空头衰减" if relation_status.startswith("价跌") or score <= 54 else "多头增强"), "反转预警"
+    if divergence == "TOP_DIVERGENCE":
+        return ("多头衰减" if relation_status.startswith("价涨") or score >= 46 else "空头增强"), "反转预警"
+    obv_score = obv.get("score")
+    if score >= 55:
+        if relation_status == "价涨量缩" or (obv_score is not None and obv_score < 45):
+            return "多头衰减", None
+        return "多头增强", None
+    if score <= 44:
+        if relation_status == "价跌量缩" or (obv_score is not None and obv_score >= 50):
+            return "空头衰减", None
+        return "空头增强", None
+    return "震荡", None
+
+
+def _volume_price_conclusion(
+    relation_status: str,
+    relation_persistence: str,
+    obv: dict,
+    divergence: str | None,
+) -> str:
+    obv_status = obv.get("status", "数据不足")
+    if relation_status == "价涨量增":
+        if obv_status in {"强流入", "流入"}:
+            return "上涨获得量能支持, OBV同步走强, 量价确认较强。"
+        return "上涨获得量能支持, 但资金趋势仍在改善, 需观察持续性。"
+    if relation_status == "价涨量缩":
+        return "价格仍在上涨, 但成交量不足, 上行确认度下降。"
+    if relation_status == "价涨量平":
+        return "价格仍在上涨, 但量能未明显放大, 当前多头确认有限, 需观察后续持续性。"
+    if relation_status == "价跌量增":
+        return "下跌伴随明显放量, OBV同步走弱, 当前卖压较强, 尚未出现止跌迹象。"
+    if relation_status == "价跌量平":
+        return f"价格仍在下跌, 但量能未明显放大, {relation_persistence}, 当前空头确认有限, 需观察后续量能方向。"
+    if relation_status == "价跌量缩":
+        if divergence == "BOTTOM_DIVERGENCE":
+            return "价格仍处弱势, 但成交量持续萎缩, OBV出现底背离, 卖压正在衰减, 进入潜在反转观察阶段。"
+        return f"价格仍处弱势, 但成交量持续萎缩, {relation_persistence}, 卖压正在衰减。"
+    if relation_status == "价平放量":
+        return "价格波动有限但量能放大, 多空分歧加剧, 暂未形成方向确认。"
+    if relation_status == "价格震荡":
+        return "价格波动有限且量能正常, 多空暂未形成方向确认。"
+    if relation_status == "价平缩量":
+        return "价格波动有限且成交量收缩, 市场处于观望和变盘前收敛阶段。"
+    return "当前量价证据不足, 暂不形成方向结论。"
+
+
+def _volume_price_analysis(
+    records: list[dict],
+    index: int,
+    obv_values: list[float | None] | None = None,
+) -> dict:
+    change = _change_pct(records, index)
+    rvol = _rvol20(records, index)
+    rvol_score, rvol_status, confirmation_factor = _rvol_level(rvol)
+    relation_ratio = _volume_ratio_for_relation(records, index)
+    relation_status = _price_volume_status(change, relation_ratio)
+    rvol_directional_score = _rvol_directional_score(rvol_score, change)
+    current_relation_score = _price_volume_current_score(change, relation_ratio)
+    persistence = _price_volume_persistence(records, index)
+    relation_score, relation_coverage = _weighted_partial_score((
+        (current_relation_score, 0.60, 1.0 if current_relation_score is not None else 0.0),
+        (persistence["score"], 0.40, persistence["coverage"]),
+    ))
+    if relation_score is not None and confirmation_factor is not None:
+        relation_score = _clamp(50.0 + (relation_score - 50.0) * confirmation_factor)
+    obv = _obv_analysis(records, index, obv_values)
+    score, coverage = _weighted_partial_score((
+        (rvol_directional_score, _RVOL_WEIGHTS["rvol"], 1.0 if rvol_directional_score is not None else 0.0),
+        (relation_score, _RVOL_WEIGHTS["price_volume"], relation_coverage),
+        (obv["score"], _RVOL_WEIGHTS["obv"], obv["coverage"]),
+    ))
+    if score is not None:
+        score = {
+            "价跌量增": min(score, 29.0),
+            "价跌量平": min(score, 44.0),
+            "价跌量缩": min(score, 54.0),
+            "价涨量缩": min(score, 69.0),
+        }.get(relation_status, score)
+    if coverage < 0.60:
+        score = None
+    direction_status = _volume_price_direction_status(score)
+    phase, alert = _volume_price_phase(score, relation_status, obv, obv["divergence"])
+    conclusion = _volume_price_conclusion(
+        relation_status,
+        persistence["status"],
+        obv,
+        obv["divergence"],
+    )
+    return {
+        "score": score,
+        "coverage": coverage,
+        "rvol": rvol,
+        "rvol_score": rvol_score,
+        "rvol_directional_score": rvol_directional_score,
+        "rvol_status": rvol_status,
+        "confirmation_factor": confirmation_factor,
+        "change": change,
+        "relation_ratio": relation_ratio,
+        "relation_status": relation_status,
+        "current_relation_score": current_relation_score,
+        "relation_score": relation_score,
+        "relation_coverage": relation_coverage,
+        "persistence": persistence,
+        "obv": obv,
+        "direction_status": direction_status,
+        "phase": phase,
+        "alert": alert,
+        "conclusion": conclusion,
+    }
+
+
 def _trend_score(records: list[dict], index: int) -> tuple[float | None, float]:
     row = records[index]
     previous = records[index - 1] if index > 0 else {}
@@ -1376,78 +1948,61 @@ def _momentum_score(
 
 
 def _volume_price_score(records: list[dict], index: int) -> tuple[float | None, float]:
-    change = _change_pct(records, index)
-    ratio = _volume_ratio(records, index)
-    price_score = None
-    if change is not None and ratio is not None:
-        if abs(change) < 1e-12:
-            price_score = 50.0
-        else:
-            conviction = _clamp(ratio / 2.0, 0.25, 1.0)
-            price_score = _clamp(50.0 + 50.0 * (1.0 if change > 0 else -1.0) * conviction)
-
-    vol5 = _number(records[index].get("vol_ma5"))
-    vol10 = _number(records[index].get("vol_ma10"))
-    sustained_ratio = vol5 / vol10 if vol5 is not None and vol10 is not None and vol10 > 0 else None
-    sustained_score = _activity_level_score(sustained_ratio)
-    if price_score is None:
-        return None, 0.0
-    if sustained_score is not None and price_score < 50.0:
-        sustained_score = 100.0 - sustained_score
-    return _weighted_score(((price_score, 0.7, 1.0), (sustained_score, 0.3, 1.0)))
+    analysis = _volume_price_analysis(records, index)
+    return analysis["score"], analysis["coverage"]
 
 
 def _volatility_risk(records: list[dict], index: int) -> float | None:
-    row = records[index]
-    close = _number(row.get("close"))
-    atr = _number(row.get("atr_14"))
-    atr_pct = atr / close if atr is not None and close is not None and close > 0 else None
+    return _risk_category_score(records, index)
 
-    upper = _number(row.get("boll_upper"))
-    lower = _number(row.get("boll_lower"))
-    middle = _number(row.get("ma20"))
-    boll_width = ((upper - lower) / middle
-                  if upper is not None and lower is not None and middle is not None and middle > 0
-                  else None)
-    parts: list[float] = []
-    for value, field in ((atr_pct, "_atr_pct"), (boll_width, "_boll_width")):
-        if value is None:
-            continue
-        history: list[float] = []
-        for prior in records[max(0, index - 20):index]:
-            prior_close = _number(prior.get("close"))
-            if field == "_atr_pct":
-                prior_atr = _number(prior.get("atr_14"))
-                prior_value = prior_atr / prior_close if prior_atr is not None and prior_close and prior_close > 0 else None
-            else:
-                prior_upper = _number(prior.get("boll_upper"))
-                prior_lower = _number(prior.get("boll_lower"))
-                prior_middle = _number(prior.get("ma20"))
-                prior_value = ((prior_upper - prior_lower) / prior_middle
-                               if prior_upper is not None and prior_lower is not None
-                               and prior_middle is not None and prior_middle > 0 else None)
-            if prior_value is not None and math.isfinite(prior_value) and prior_value >= 0:
-                history.append(prior_value)
-        if len(history) < 20:
-            continue
-        history.sort()
-        middle_index = len(history) // 2
-        baseline = history[middle_index]
-        if len(history) % 2 == 0:
-            baseline = (history[middle_index - 1] + history[middle_index]) / 2.0
-        if baseline > 0:
-            parts.append(_relative_level_score(value / baseline) or 50.0)
-    return sum(parts) / len(parts) if parts else None
+
+def _activity_metrics(records: list[dict], index: int) -> dict[str, float | None]:
+    """Return the two amount-based activity ratios used by every score surface."""
+    amount = _number(records[index].get("amount"))
+    previous_amounts = [_number(item.get("amount")) for item in records[max(0, index - 20):index]]
+    amount_average = (
+        sum(value for value in previous_amounts if value is not None) / len(previous_amounts)
+        if len(previous_amounts) == 20 and all(value is not None for value in previous_amounts)
+        else None
+    )
+    amount_ratio = (
+        amount / amount_average
+        if amount is not None and amount > 0 and amount_average is not None and amount_average > 0
+        else None
+    )
+
+    amount_values_5 = [_number(item.get("amount")) for item in records[max(0, index - 4):index + 1]]
+    amount_values_20 = [_number(item.get("amount")) for item in records[max(0, index - 19):index + 1]]
+    amount_ma5 = (
+        sum(value for value in amount_values_5 if value is not None) / len(amount_values_5)
+        if len(amount_values_5) == 5 and all(value is not None for value in amount_values_5)
+        else None
+    )
+    amount_ma20 = (
+        sum(value for value in amount_values_20 if value is not None) / len(amount_values_20)
+        if len(amount_values_20) == 20 and all(value is not None for value in amount_values_20)
+        else None
+    )
+    amount_ma_ratio = (
+        amount_ma5 / amount_ma20
+        if amount_ma5 is not None and amount_ma20 is not None and amount_ma20 > 0
+        else None
+    )
+    return {
+        "amount": amount,
+        "amount_average": amount_average,
+        "amount_ratio": amount_ratio,
+        "amount_ma5": amount_ma5,
+        "amount_ma20": amount_ma20,
+        "amount_ma_ratio": amount_ma_ratio,
+    }
 
 
 def _activity_score(records: list[dict], index: int) -> float | None:
-    ratio = _volume_ratio(records, index)
-    ratio_score = _activity_level_score(ratio)
-    vol5 = _number(records[index].get("vol_ma5"))
-    vol10 = _number(records[index].get("vol_ma10"))
-    trend_ratio = vol5 / vol10 if vol5 is not None and vol10 is not None and vol10 > 0 else None
-    trend_score = _activity_level_score(trend_ratio)
-    score, _ = _weighted_mean(((ratio_score, 0.7), (trend_score, 0.3)))
+    metrics = _activity_metrics(records, index)
+    amount_score = _activity_level_score(metrics["amount_ratio"])
+    amount_ma_score = _activity_level_score(metrics["amount_ma_ratio"])
+    score, _ = _weighted_mean(((amount_score, 0.60), (amount_ma_score, 0.40)))
     return score
 
 
@@ -1480,6 +2035,22 @@ def _score_status(score: float | None, *, high: str = "偏强", low: str = "偏�
     if score <= 40:
         return low
     return "中性"
+
+
+def _activity_indicator_status(
+    score: float | None,
+    *,
+    high: str,
+    low: str,
+    middle: str,
+) -> str:
+    if score is None:
+        return "数据不足"
+    if score >= 60:
+        return high
+    if score <= 40:
+        return low
+    return middle
 
 
 def _trend_score_status(score: float | None) -> str:
@@ -2236,16 +2807,150 @@ def _trend_scope_note(scope: str) -> str:
     }.get(scope, "")
 
 
+def _price_position_category_status(
+    range20: float | None,
+    range60: float | None,
+    boll_position: float | None,
+    ma20_atr_position: float | None,
+) -> str:
+    range_values = [value for value in (range20, range60) if value is not None]
+    if len(range_values) == 2:
+        if all(value <= 10.0 for value in range_values):
+            return "极低位"
+        if all(value >= 90.0 for value in range_values):
+            return "极高位"
+        if all(value <= 30.0 for value in range_values):
+            return "低位"
+        if all(value >= 70.0 for value in range_values):
+            return "高位"
+        return "位置分化"
+    if range_values:
+        return _position_percentile_status(range_values[0])
+    other_values = [value for value in (boll_position, ma20_atr_position) if value is not None]
+    return _position_percentile_status(sum(other_values) / len(other_values)) if other_values else "数据不足"
+
+
+def _price_position_category_conclusion(
+    range20: float | None,
+    range60: float | None,
+    boll_position: float | None,
+    ma20_atr_distance: float | None,
+) -> str:
+    parts: list[str] = []
+    range_values = [value for value in (range20, range60) if value is not None]
+    low_context = False
+    high_context = False
+    if len(range_values) == 2:
+        if all(value <= 10.0 for value in range_values):
+            parts.append("短中期均处于极低位置")
+            low_context = True
+        elif all(value <= 30.0 for value in range_values):
+            parts.append("短中期均处于低位区域")
+            low_context = True
+        elif all(value >= 90.0 for value in range_values):
+            parts.append("短中期均处于极高位置")
+            high_context = True
+        elif all(value >= 70.0 for value in range_values):
+            parts.append("短中期均处于高位区域")
+            high_context = True
+        else:
+            parts.append("短中期位置存在分化")
+            low_context = any(value <= 30.0 for value in range_values)
+            high_context = any(value >= 70.0 for value in range_values)
+    elif range20 is not None:
+        range20_status = _position_percentile_status(range20)
+        parts.append(f"近20周期处于{range20_status}")
+        low_context = range20 <= 30.0
+        high_context = range20 >= 70.0
+    elif range60 is not None:
+        range60_status = _position_percentile_status(range60)
+        parts.append(f"近60周期处于{range60_status}")
+        low_context = range60 <= 30.0
+        high_context = range60 >= 70.0
+
+    if boll_position is not None:
+        boll_status = _boll_position_status(boll_position)
+        boll_phrases = {
+            "接近下轨": "价格接近BOLL下轨",
+            "通道偏下": "BOLL位置偏下",
+            "通道中部": "BOLL位于通道中部",
+            "通道偏上": "BOLL位置偏上",
+            "接近上轨": "价格接近BOLL上轨",
+        }
+        parts.append(boll_phrases[boll_status])
+        low_context = low_context or boll_position <= 30.0
+        high_context = high_context or boll_position >= 70.0
+
+    if ma20_atr_distance is not None:
+        distance = abs(ma20_atr_distance)
+        if ma20_atr_distance <= -0.25:
+            parts.append(f"MA20下方约{distance:.1f}ATR")
+            low_context = True
+        elif ma20_atr_distance >= 0.25:
+            parts.append(f"MA20上方约{distance:.1f}ATR")
+            high_context = True
+        else:
+            parts.append("价格接近MA20")
+
+    if not parts:
+        return "位置数据不足, 暂无法形成价格位置结论."
+    if low_context and not high_context:
+        parts.extend(("当前属于低位偏离状态", "低位本身不代表反转, 仍需等待动能与量价确认"))
+    elif high_context and not low_context:
+        parts.extend(("当前属于高位运行状态", "高位本身不代表继续上涨, 需结合趋势与动能观察"))
+    else:
+        parts.append("位置只描述价格所处区间, 不单独形成多空结论")
+    return ", ".join(parts) + "."
+
+
+def _price_position_category(indicators: list[dict]) -> dict:
+    values = {str(indicator["id"]): indicator.get("value") for indicator in indicators}
+    observed_count = sum(value is not None for value in values.values())
+    range20 = values.get("range_position_20")
+    range60 = values.get("range_position_60")
+    boll_position = values.get("boll_position")
+    ma20_atr_position = values.get("ma20_atr_position")
+    distance = next(
+        (
+            indicator.get("raw_values", {}).get("distance_atr")
+            for indicator in indicators
+            if indicator.get("id") == "ma20_atr_position"
+        ),
+        None,
+    )
+    return {
+        "id": "price_position",
+        "name": "价格位置",
+        "kind": "position",
+        "weight": None,
+        "score": None,
+        "status": _price_position_category_status(range20, range60, boll_position, ma20_atr_position),
+        "coverage": round(observed_count / len(indicators) * 100.0) if indicators else 0,
+        "available": observed_count >= 2,
+        "conclusion": _price_position_category_conclusion(range20, range60, boll_position, distance),
+        "indicators": indicators,
+    }
+
+
 def _weighted_category(category_id: str, indicators: list[dict]) -> dict:
     expected = sum(float(item["weight"]) for item in indicators)
-    available = [item for item in indicators if item.get("score") is not None]
-    available_weight = sum(float(item["weight"]) for item in available)
+    available = [
+        item
+        for item in indicators
+        if item.get("score") is not None and float(item.get("coverage", 1.0)) > 0
+    ]
+    effective_weights = {
+        id(item): float(item["weight"]) * _clamp(float(item.get("coverage", 1.0)), 0.0, 1.0)
+        for item in available
+    }
+    available_weight = sum(effective_weights.values())
     coverage = available_weight / expected if expected > 0 else 0.0
     score = (
-        sum(float(item["score"]) * float(item["weight"]) for item in available) / available_weight
+        sum(float(item["score"]) * effective_weights[id(item)] for item in available) / available_weight
         if available_weight > 0 else None
     )
-    category_available = score is not None and coverage >= 0.60
+    minimum_coverage = 0.60
+    category_available = score is not None and coverage >= minimum_coverage
     meta = _CATEGORY_META[category_id]
     category_score = round(score) if category_available and score is not None else None
     return {
@@ -2261,6 +2966,180 @@ def _weighted_category(category_id: str, indicators: list[dict]) -> dict:
     }
 
 
+def _category_conclusion_evidence(
+    category: dict,
+    labels: tuple[tuple[str, str], ...],
+) -> str:
+    statuses = {
+        str(indicator.get("id")): indicator.get("status")
+        for indicator in category.get("indicators", [])
+    }
+    return ", ".join(
+        f"{label}{statuses[indicator_id]}"
+        for indicator_id, label in labels
+        if statuses.get(indicator_id) not in {None, "数据不足"}
+    )
+
+
+def _trend_category_conclusion(category: dict) -> str:
+    score = _number(category.get("score"))
+    if score is None:
+        return "趋势数据不足, 暂无法形成趋势结论。"
+
+    evidence = _category_conclusion_evidence(
+        category,
+        (("ma_alignment", "均线"), ("ma_slope", "斜率"), ("trend_persistence", "持续性")),
+    )
+    if score <= 40:
+        summary = "当前趋势偏空, 需观察均线是否止跌收敛。"
+    elif score >= 60:
+        summary = "当前趋势偏多, 需观察均线能否继续发散。"
+    else:
+        summary = "当前趋势处于中性区间, 需观察均线排列与斜率是否形成一致方向。"
+    return f"{evidence}, {summary}" if evidence else summary
+
+
+def _momentum_category_conclusion(category: dict) -> str:
+    score = _number(category.get("score"))
+    if score is None:
+        return "动能数据不足, 暂无法形成动能结论。"
+
+    evidence = _category_conclusion_evidence(
+        category,
+        (("macd", "MACD"), ("rsi", "RSI"), ("kdj", "KDJ"), ("roc", "ROC")),
+    )
+    if score <= 40:
+        summary = "当前动能偏弱, 需观察后续是否出现修复信号。"
+    elif score >= 60:
+        summary = "当前动能偏强, 需观察动能能否延续。"
+    else:
+        summary = "当前动能处于中性区间, 需观察各指标是否形成一致方向。"
+    return f"{evidence}, {summary}" if evidence else summary
+
+
+def _activity_category_status(score: float | None) -> str:
+    if score is None:
+        return "数据不足"
+    if score >= 60:
+        return "市场参与度较高"
+    if score <= 40:
+        return "市场参与度较低"
+    return "市场参与度中等"
+
+
+def _activity_category_conclusion(category: dict) -> str:
+    score = _number(category.get("score"))
+    if score is None:
+        return "成交活跃度数据不足, 暂无法形成市场参与度结论。"
+
+    statuses = {
+        str(indicator.get("id")): indicator.get("status")
+        for indicator in category.get("indicators", [])
+    }
+    evidence = []
+    amount_status = statuses.get("amount_ratio_20")
+    trend_status = statuses.get("amount_ma5_ma20")
+    if amount_status not in {None, "数据不足"}:
+        evidence.append(f"近期{amount_status}")
+    if trend_status not in {None, "数据不足"}:
+        evidence.append(str(trend_status))
+    evidence.append(_activity_category_status(score))
+    return ", ".join(evidence) + "。成交活跃度只反映市场参与程度, 不代表涨跌方向。"
+
+
+def _risk_category_status(score: float | None) -> str:
+    if score is None:
+        return "数据不足"
+    if score >= 75.0:
+        return "风险偏高"
+    if score >= 60.0:
+        return "风险中等偏高"
+    if score >= 40.0:
+        return "风险中性"
+    if score >= 25.0:
+        return "风险中等偏低"
+    return "风险偏低"
+
+
+def _risk_category_conclusion(category: dict, analysis: dict) -> str:
+    score = _number(category.get("score"))
+    if score is None:
+        return "市场风险数据不足, 暂无法形成波动与下行风险结论。"
+
+    volatility_score = _number(category.get("volatility_score"))
+    if volatility_score is None:
+        percentile_scores = [
+            _percentile_to_risk_score(value)
+            for value in (analysis.get("atr_percentile"), analysis.get("realized_vol_percentile"))
+        ]
+        available_scores = [value for value in percentile_scores if value is not None]
+        volatility_score = sum(available_scores) / len(available_scores) if available_scores else None
+    volatility = (
+        "整体波动明显偏高" if volatility_score is not None and volatility_score >= 70.0
+        else "整体波动偏高但未失控" if volatility_score is not None and volatility_score >= 55.0
+        else "整体波动略高但未失控" if volatility_score is not None and volatility_score >= 35.0
+        else "整体波动处于正常范围" if volatility_score is not None
+        else "波动数据不足"
+    )
+
+    boll_status = (analysis.get("boll") or {}).get("status")
+    if boll_status and ("扩张" in boll_status or "收缩" in boll_status):
+        volatility += f", {boll_status}"
+
+    distance = analysis.get("distance_atr")
+    if distance is None:
+        deviation = "价格乖离数据不足"
+    elif distance <= -1.0:
+        deviation = f"价格已偏离 MA20 约 {distance:+.2f} ATR, 处于明显超跌区, 需关注超跌修复"
+    elif distance < -0.25:
+        deviation = f"价格位于 MA20 下方, 乖离 {distance:+.2f} ATR, 存在向下偏离"
+    elif distance >= 1.0:
+        deviation = f"价格已向上偏离 MA20 约 {distance:+.2f} ATR, 处于明显过热区, 需关注过热回归"
+    elif distance > 0.25:
+        deviation = f"价格位于 MA20 上方, 乖离 {distance:+.2f} ATR, 存在向上偏离"
+    else:
+        deviation = "价格接近 MA20"
+
+    downside_score = _number(category.get("downside_score"))
+    if downside_score is None:
+        downside_score = _percentile_to_risk_score(analysis.get("downside_percentile"))
+    downside_text = (
+        "下行波动明显偏高" if downside_score is not None and downside_score >= 80.0
+        else "下行波动偏高" if downside_score is not None and downside_score >= 70.0
+        else "下行波动有所升高" if downside_score is not None and downside_score >= 45.0
+        else "下行波动处于低位" if downside_score is not None and downside_score < 25.0
+        else "下行波动尚未显著升高" if downside_score is not None
+        else "下行波动数据不足"
+    )
+
+    drawdown = analysis.get("drawdown_score")
+    damage = (
+        "趋势损伤较深" if drawdown is not None and drawdown >= 70.0
+        else "已有一定趋势损伤" if drawdown is not None and drawdown >= 40.0
+        else "趋势损伤有限" if drawdown is not None
+        else "趋势损伤数据不足"
+    )
+
+    if downside_score is not None and downside_score >= 70.0 and drawdown is not None and drawdown >= 70.0:
+        dominant = "近期风险主要来自较高的下行波动和较深的趋势损伤"
+    elif downside_score is not None and downside_score >= 70.0:
+        dominant = "近期风险主要来自较高的下行波动"
+    elif drawdown is not None and drawdown >= 70.0:
+        dominant = "近期风险主要来自较深的趋势损伤"
+    elif (volatility_score is not None and volatility_score >= 70.0) or (boll_status and "扩张" in boll_status):
+        dominant = "近期风险主要来自波动扩张"
+    else:
+        dominant = "当前未见单一风险因子显著占优"
+
+    risk_change = _number(category.get("risk_change_5"))
+    risk_trend = category.get("risk_trend")
+    trend_text = f"近5周期风险{risk_trend}" if risk_change is not None and risk_trend else None
+    conclusion_parts = [volatility, downside_text, damage, dominant, deviation]
+    if trend_text:
+        conclusion_parts.append(trend_text)
+    return "; ".join(conclusion_parts) + "."
+
+
 def _history_relative_score(
     current: float | None,
     history: Iterable[float | None],
@@ -2273,6 +3152,48 @@ def _history_relative_score(
         return None, None
     relative = current / baseline
     return _relative_level_score(relative), relative
+
+
+def _historical_percentile(
+    current: float | None,
+    history: Iterable[float | None],
+    *,
+    minimum: int = _RISK_MIN_HISTORY,
+) -> tuple[float | None, int]:
+    """Return a point-in-time empirical percentile from prior observations only."""
+    values = sorted(
+        value
+        for value in history
+        if value is not None and math.isfinite(value) and value >= 0
+    )
+    if current is None or current < 0 or not math.isfinite(current) or len(values) < minimum:
+        return None, len(values)
+    if values[-1] == values[0] and current == values[0]:
+        return 50.0, len(values)
+    return bisect_right(values, current) / len(values) * 100.0, len(values)
+
+
+def _percentile_to_risk_score(percentile: float | None) -> float | None:
+    """Map a historical percentile to a tail-sensitive risk score."""
+    if percentile is None or not math.isfinite(percentile):
+        return None
+    value = _clamp(percentile, 0.0, 100.0)
+    for (left_percentile, left_score), (right_percentile, right_score) in pairwise(_RISK_PERCENTILE_ANCHORS):
+        if value <= right_percentile:
+            span = right_percentile - left_percentile
+            if span <= 0:
+                return right_score
+            ratio = (value - left_percentile) / span
+            return left_score + ratio * (right_score - left_score)
+    return _RISK_PERCENTILE_ANCHORS[-1][1]
+
+
+def _prior_metric_values(
+    records: list[dict],
+    index: int,
+    metric,
+) -> list[float | None]:
+    return [metric(records, position) for position in range(max(0, index - _RISK_HISTORY_WINDOW), index)]
 
 
 def _atr_pct(records: list[dict], index: int) -> float | None:
@@ -2290,7 +3211,7 @@ def _boll_width(records: list[dict], index: int) -> float | None:
             if upper is not None and lower is not None and middle is not None and middle > 0 else None)
 
 
-def _realized_volatility(records: list[dict], index: int, window: int = 20) -> float | None:
+def _return_window(records: list[dict], index: int, window: int) -> list[float] | None:
     if index < window:
         return None
     returns: list[float] = []
@@ -2300,10 +3221,406 @@ def _realized_volatility(records: list[dict], index: int, window: int = 20) -> f
         if current is None or previous is None or previous <= 0:
             return None
         returns.append(current / previous - 1.0)
-    if len(returns) < window:
+    return returns
+
+
+def _realized_volatility(records: list[dict], index: int, window: int = 20) -> float | None:
+    returns = _return_window(records, index, window)
+    if returns is None:
         return None
     average = sum(returns) / len(returns)
     return math.sqrt(sum((value - average) ** 2 for value in returns) / len(returns))
+
+
+def _downside_volatility(records: list[dict], index: int, window: int = _DOWNSIDE_VOLATILITY_WINDOW) -> float | None:
+    """Return downside deviation, with positive returns contributing zero."""
+    returns = _return_window(records, index, window)
+    if returns is None:
+        return None
+    negative = [value for value in returns if value < 0]
+    return math.sqrt(sum(value * value for value in negative) / len(returns))
+
+
+def _rolling_drawdown_pct(records: list[dict], index: int, window: int) -> float | None:
+    if index < window - 1:
+        return None
+    closes = [_number(item.get("close")) for item in records[index - window + 1:index + 1]]
+    if any(value is None or value <= 0 for value in closes):
+        return None
+    current = closes[-1]
+    peak = max(value for value in closes if value is not None)
+    return current / peak - 1.0 if peak > 0 else None
+
+
+def _drawdown_magnitude(records: list[dict], index: int, window: int) -> float | None:
+    value = _rolling_drawdown_pct(records, index, window)
+    return -value if value is not None else None
+
+
+def _drawdown_history_percentile(
+    records: list[dict],
+    index: int,
+    window: int,
+) -> tuple[float | None, int]:
+    current = _drawdown_magnitude(records, index, window)
+    history = _prior_metric_values(
+        records,
+        index,
+        lambda rows, position: _drawdown_magnitude(rows, position, window),
+    )
+    return _historical_percentile(current, history)
+
+
+def _drawdown_score(percentile: float | None) -> float | None:
+    """Map current drawdown percentile to damage severity, not absolute loss."""
+    return _percentile_to_risk_score(percentile)
+
+
+def _format_drawdown_detail(value: float | None, percentile: float | None) -> str:
+    if value is None:
+        return "数据不足"
+    if percentile is None:
+        return f"{value:.1%} (历史分位数据不足)"
+    return f"{value:.1%} (历史分位 {percentile:.0f}%)"
+
+
+def _risk_trend_label(change: float | None) -> str | None:
+    if change is None or not math.isfinite(change):
+        return None
+    if change <= -8.0:
+        return "快速回落"
+    if change < -1.5:
+        return "正在下降"
+    if change <= 1.5:
+        return "基本稳定"
+    if change < 8.0:
+        return "正在上升"
+    return "快速上升"
+
+
+def _risk_percentile_status(
+    percentile: float | None,
+    *,
+    high: str,
+    low: str,
+) -> str:
+    if percentile is None:
+        return "数据不足"
+    if percentile >= 75.0:
+        return high
+    if percentile <= 25.0:
+        return low
+    if percentile >= 60.0:
+        return "略高"
+    if percentile <= 40.0:
+        return "略低"
+    return "中性"
+
+
+def _risk_change_score(change: float | None) -> float | None:
+    if change is None or not math.isfinite(change):
+        return None
+    return _clamp(50.0 + change * 100.0)
+
+
+def _boll_width_analysis(records: list[dict], index: int) -> dict:
+    current = _boll_width(records, index)
+    percentile, history_count = _historical_percentile(
+        current,
+        _prior_metric_values(records, index, _boll_width),
+    )
+    previous = (
+        _boll_width(records, index - _BOLL_CHANGE_WINDOW)
+        if index >= _BOLL_CHANGE_WINDOW
+        else None
+    )
+    change = current / previous - 1.0 if current is not None and previous is not None and previous > 0 else None
+    change_score = _risk_change_score(change)
+    percentile_score = _percentile_to_risk_score(percentile)
+    score, coverage = _weighted_mean(((percentile_score, 0.70), (change_score, 0.30)))
+    if change is not None and change >= 0.15:
+        status = "波动明显扩张"
+    elif change is not None and change >= 0.03:
+        status = "波动温和扩张"
+    elif change is not None and change <= -0.15:
+        status = "波动明显收缩"
+    elif change is not None and change <= -0.03:
+        status = "波动温和收缩"
+    else:
+        status = _risk_percentile_status(percentile, high="波动水平偏高", low="波动水平偏低")
+    return {
+        "score": score,
+        "coverage": coverage,
+        "current": current,
+        "percentile": percentile,
+        "percentile_score": percentile_score,
+        "history_count": history_count,
+        "change": change,
+        "change_score": change_score,
+        "status": status,
+    }
+
+
+def _ma20_deviation_score(distance: float | None) -> float | None:
+    if distance is None or not math.isfinite(distance):
+        return None
+    magnitude = abs(distance)
+    if magnitude <= 1.0:
+        return magnitude * 50.0
+    if magnitude <= 2.0:
+        return 50.0 + (magnitude - 1.0) * 35.0
+    return _clamp(85.0 + (magnitude - 2.0) * 15.0)
+
+
+def _ma20_deviation_status(distance: float | None) -> str:
+    if distance is None:
+        return "数据不足"
+    if distance <= -1.0:
+        return "下方明显偏离"
+    if distance < -0.25:
+        return "下方偏离"
+    if distance <= 0.25:
+        return "MA20附近"
+    if distance < 1.0:
+        return "上方偏离"
+    return "上方明显偏离"
+
+
+def _risk_analysis(records: list[dict], index: int) -> dict:
+    current_atr_pct = _atr_pct(records, index)
+    atr_percentile, atr_history_count = _historical_percentile(
+        current_atr_pct,
+        _prior_metric_values(records, index, _atr_pct),
+    )
+
+    current_realized_vol = _realized_volatility(records, index)
+    realized_vol_percentile, realized_vol_history_count = _historical_percentile(
+        current_realized_vol,
+        _prior_metric_values(records, index, _realized_volatility),
+    )
+
+    boll = _boll_width_analysis(records, index)
+    distance = _ma20_atr_distance(records, index)
+    deviation_score = _ma20_deviation_score(distance)
+    if distance is None:
+        oversold_score = None
+        overheat_score = None
+    else:
+        oversold_score = deviation_score if distance < -0.25 else 0.0
+        overheat_score = deviation_score if distance > 0.25 else 0.0
+
+    current_downside = _downside_volatility(records, index)
+    downside_percentile, downside_history_count = _historical_percentile(
+        current_downside,
+        _prior_metric_values(records, index, _downside_volatility),
+    )
+
+    drawdown_20 = _rolling_drawdown_pct(records, index, _DRAWDOWN_SHORT_WINDOW)
+    drawdown_60 = _rolling_drawdown_pct(records, index, _DRAWDOWN_MEDIUM_WINDOW)
+    drawdown_20_percentile, drawdown_20_history_count = _drawdown_history_percentile(
+        records, index, _DRAWDOWN_SHORT_WINDOW,
+    )
+    drawdown_60_percentile, drawdown_60_history_count = _drawdown_history_percentile(
+        records, index, _DRAWDOWN_MEDIUM_WINDOW,
+    )
+    drawdown_20_score = _drawdown_score(drawdown_20_percentile)
+    drawdown_60_score = _drawdown_score(drawdown_60_percentile)
+    drawdown_score, drawdown_coverage = _weighted_mean((
+        (drawdown_20_score, 0.50),
+        (drawdown_60_score, 0.50),
+    ))
+    atr_risk_score = _percentile_to_risk_score(atr_percentile)
+    realized_vol_risk_score = _percentile_to_risk_score(realized_vol_percentile)
+    downside_risk_score = _percentile_to_risk_score(downside_percentile)
+    deviation_label = (
+        "超跌程度" if distance is not None and distance < -0.25
+        else "过热程度" if distance is not None and distance > 0.25
+        else "乖离程度"
+    )
+
+    risk_indicators = [
+        {
+            "id": "atr_relative", "name": "ATR波动分位", "score": round(atr_risk_score) if atr_risk_score is not None else None,
+            "weight": _CATEGORY_INDICATOR_WEIGHTS["volatility_risk"]["atr_relative"],
+            "group": "volatility", "score_label": "风险",
+            "status": _risk_percentile_status(atr_percentile, high="波动明显偏高", low="波动明显偏低"),
+            "detail": "ATR/价格在此前250周期中的历史分位\n"
+            + (f"历史分位 {atr_percentile:.0f}% / {atr_history_count}个样本; 当前波动状态可比历史" if atr_percentile is not None else f"历史有效样本 {atr_history_count}个, 数据不足"),
+            "coverage": 1.0 if atr_percentile is not None else 0.0,
+            "raw_values": _raw_values(
+                atr14=_number(records[index].get("atr_14")),
+                atr_pct=current_atr_pct,
+                percentile=atr_percentile,
+                risk_score=atr_risk_score,
+                history_count=atr_history_count,
+                history_window=_RISK_HISTORY_WINDOW,
+            ),
+        },
+        {
+            "id": "realized_volatility", "name": "20周期实现波动率", "score": round(realized_vol_risk_score) if realized_vol_risk_score is not None else None,
+            "weight": _CATEGORY_INDICATOR_WEIGHTS["volatility_risk"]["realized_volatility"],
+            "group": "volatility", "score_label": "风险",
+            "status": _risk_percentile_status(realized_vol_percentile, high="波动明显偏高", low="波动明显偏低"),
+            "detail": "最近20周期收益率标准差的历史分位\n"
+            + (f"历史分位 {realized_vol_percentile:.0f}% / {realized_vol_history_count}个样本; 关注收益率变化的实际波动" if realized_vol_percentile is not None else f"历史有效样本 {realized_vol_history_count}个, 数据不足"),
+            "coverage": 1.0 if realized_vol_percentile is not None else 0.0,
+            "raw_values": _raw_values(
+                realized_volatility=current_realized_vol,
+                percentile=realized_vol_percentile,
+                risk_score=realized_vol_risk_score,
+                history_count=realized_vol_history_count,
+                history_window=_RISK_HISTORY_WINDOW,
+            ),
+        },
+        {
+            "id": "boll_width_relative", "name": "BOLL带宽状态", "score": round(boll["score"]) if boll["score"] is not None else None,
+            "weight": _CATEGORY_INDICATOR_WEIGHTS["volatility_risk"]["boll_width_relative"],
+            "group": "volatility", "score_label": "风险",
+            "status": boll["status"],
+            "detail": "BOLL带宽历史分位与近5周期变化率\n"
+            + (f"历史分位 {boll['percentile']:.0f}%" if boll["percentile"] is not None else "历史分位数据不足")
+            + (f"; 近5周期 {boll['change']:+.1%}; {boll['status']}" if boll["change"] is not None else f"; 近5周期变化数据不足; {boll['status']}"),
+            "coverage": boll["coverage"],
+            "raw_values": _raw_values(
+                boll_width=boll["current"],
+                percentile=boll["percentile"],
+                percentile_score=boll["percentile_score"],
+                change_5_pct=boll["change"],
+                change_score=boll["change_score"],
+                risk_score=boll["score"],
+                history_count=boll["history_count"],
+                history_window=_RISK_HISTORY_WINDOW,
+            ),
+        },
+        {
+            "id": "ma20_deviation_risk", "name": "MA20乖离", "score": round(deviation_score) if deviation_score is not None else None,
+            "weight": _CATEGORY_INDICATOR_WEIGHTS["volatility_risk"]["ma20_deviation_risk"],
+            "group": "extreme", "score_label": deviation_label,
+            "status": _ma20_deviation_status(distance),
+            "detail": "价格相对MA20的偏离按ATR归一化\n"
+            + (f"MA20乖离 {distance:+.2f} ATR; {_ma20_deviation_status(distance)}"
+               if distance is not None else "当前缺少价格, MA20或ATR数据"),
+            "coverage": 1.0 if deviation_score is not None else 0.0,
+            "raw_values": _raw_values(
+                close=_number(records[index].get("close")),
+                ma20=_number(records[index].get("ma20")),
+                atr14=_number(records[index].get("atr_14")),
+                distance_atr=distance,
+                deviation_score=deviation_score,
+                oversold_score=oversold_score,
+                overheat_score=overheat_score,
+            ),
+        },
+        {
+            "id": "downside_volatility", "name": "下行波动率", "score": round(downside_risk_score) if downside_risk_score is not None else None,
+            "weight": _CATEGORY_INDICATOR_WEIGHTS["volatility_risk"]["downside_volatility"],
+            "group": "downside", "score_label": "风险",
+            "status": _risk_percentile_status(downside_percentile, high="下行波动偏高", low="下行波动偏低"),
+            "detail": "仅使用负收益计算20周期下行波动率\n"
+            + (f"历史分位 {downside_percentile:.0f}% / {downside_history_count}个样本; 负收益 {sum(1 for value in (_return_window(records, index, _DOWNSIDE_VOLATILITY_WINDOW) or []) if value < 0)}个"
+               if downside_percentile is not None else f"历史有效样本 {downside_history_count}个, 数据不足"),
+            "coverage": 1.0 if downside_percentile is not None else 0.0,
+            "raw_values": _raw_values(
+                downside_volatility=current_downside,
+                percentile=downside_percentile,
+                risk_score=downside_risk_score,
+                negative_count=sum(1 for value in (_return_window(records, index, _DOWNSIDE_VOLATILITY_WINDOW) or []) if value < 0),
+                history_count=downside_history_count,
+                history_window=_RISK_HISTORY_WINDOW,
+            ),
+        },
+        {
+            "id": "rolling_drawdown", "name": "回撤损伤", "score": round(drawdown_score) if drawdown_score is not None else None,
+            "weight": _CATEGORY_INDICATOR_WEIGHTS["volatility_risk"]["rolling_drawdown"],
+            "group": "downside", "score_label": "损伤",
+            "status": _score_status(drawdown_score, high="回撤损伤较深", low="回撤损伤有限"),
+            "detail": "20/60周期当前回撤的历史分位组合, 表示市场损伤而非未来下跌风险\n"
+            + (f"20周期 {_format_drawdown_detail(drawdown_20, drawdown_20_percentile)}; "
+               f"60周期 {_format_drawdown_detail(drawdown_60, drawdown_60_percentile)}; "
+               f"{'市场损伤状态' if drawdown_score is not None else '历史回撤分位样本不足'}"
+               if drawdown_20 is not None or drawdown_60 is not None else "回撤窗口数据不足"),
+            "coverage": drawdown_coverage,
+            "raw_values": _raw_values(
+                drawdown_20_pct=drawdown_20,
+                drawdown_60_pct=drawdown_60,
+                drawdown_20_percentile=drawdown_20_percentile,
+                drawdown_60_percentile=drawdown_60_percentile,
+                drawdown_20_history_count=drawdown_20_history_count,
+                drawdown_60_history_count=drawdown_60_history_count,
+                drawdown_20_score=drawdown_20_score,
+                drawdown_60_score=drawdown_60_score,
+                drawdown_pct=drawdown_20,
+            ),
+        },
+    ]
+    return {
+        "indicators": risk_indicators,
+        "atr_percentile": atr_percentile,
+        "realized_vol_percentile": realized_vol_percentile,
+        "boll": boll,
+        "distance_atr": distance,
+        "deviation_score": deviation_score,
+        "oversold_score": oversold_score,
+        "overheat_score": overheat_score,
+        "downside_percentile": downside_percentile,
+        "drawdown_20_percentile": drawdown_20_percentile,
+        "drawdown_60_percentile": drawdown_60_percentile,
+        "drawdown_score": drawdown_score,
+    }
+
+
+def _risk_group_score(indicators: list[dict], group: str) -> tuple[float | None, float]:
+    by_id = {str(indicator.get("id")): indicator for indicator in indicators}
+    weights = _CATEGORY_INDICATOR_WEIGHTS["volatility_risk"]
+    parts = [
+        (
+            by_id.get(indicator_id, {}).get("score"),
+            float(weights[indicator_id]),
+            float(by_id.get(indicator_id, {}).get("coverage", 0.0)),
+        )
+        for indicator_id in _RISK_GROUP_INDICATOR_IDS[group]
+    ]
+    return _weighted_partial_score(parts)
+
+
+def _risk_category(analysis: dict, *, risk_change_5: float | None = None) -> dict:
+    indicators = analysis["indicators"]
+    volatility_score, volatility_coverage = _risk_group_score(indicators, "volatility")
+    downside_score, downside_coverage = _risk_group_score(indicators, "downside")
+    total_score, total_coverage = _weighted_partial_score((
+        (volatility_score, _RISK_GROUP_WEIGHTS["volatility"], volatility_coverage),
+        (downside_score, _RISK_GROUP_WEIGHTS["downside"], downside_coverage),
+    ))
+    minimum_coverage = 0.60
+    category_available = total_score is not None and total_coverage >= minimum_coverage
+    meta = _CATEGORY_META["volatility_risk"]
+    category = {
+        "id": "volatility_risk",
+        "name": meta["name"],
+        "kind": meta["kind"],
+        "weight": meta["weight"],
+        "score": round(total_score) if category_available and total_score is not None else None,
+        "status": _risk_category_status(round(total_score) if category_available and total_score is not None else None),
+        "coverage": round(total_coverage * 100.0),
+        "available": category_available,
+        "volatility_score": round(volatility_score) if volatility_score is not None and volatility_coverage >= minimum_coverage else None,
+        "volatility_coverage": round(volatility_coverage * 100.0),
+        "downside_score": round(downside_score) if downside_score is not None and downside_coverage >= minimum_coverage else None,
+        "downside_coverage": round(downside_coverage * 100.0),
+        "volatility_weight": _RISK_GROUP_WEIGHTS["volatility"],
+        "downside_weight": _RISK_GROUP_WEIGHTS["downside"],
+        "risk_change_5": round(risk_change_5) if risk_change_5 is not None else None,
+        "risk_trend": _risk_trend_label(risk_change_5),
+        "indicators": indicators,
+        "oversold_score": round(analysis["oversold_score"]) if analysis["oversold_score"] is not None else None,
+        "overheat_score": round(analysis["overheat_score"]) if analysis["overheat_score"] is not None else None,
+    }
+    category["conclusion"] = _risk_category_conclusion(category, analysis)
+    return category
+
+
+def _risk_category_score(records: list[dict], index: int) -> float | None:
+    return _risk_category(_risk_analysis(records, index))["score"]
 
 
 def _vwma(records: list[dict], index: int, window: int) -> float | None:
@@ -2322,17 +3639,39 @@ def _vwma(records: list[dict], index: int, window: int) -> float | None:
     return sum(close * volume for close, volume in zip(closes, volumes, strict=True)) / total_volume if total_volume > 0 else None
 
 
-def _range_position(records: list[dict], index: int, window: int) -> float | None:
+def _range_bounds(records: list[dict], index: int, window: int) -> tuple[float | None, float | None]:
     if index < window - 1:
-        return None
+        return None, None
     highs = [_number(row.get("high")) for row in records[index - window + 1:index + 1]]
     lows = [_number(row.get("low")) for row in records[index - window + 1:index + 1]]
+    if any(value is None for value in (*highs, *lows)):
+        return None, None
+    return (
+        min(value for value in lows if value is not None),
+        max(value for value in highs if value is not None),
+    )
+
+
+def _range_position(records: list[dict], index: int, window: int) -> float | None:
+    low, high = _range_bounds(records, index, window)
     close = _number(records[index].get("close"))
-    if close is None or any(value is None for value in (*highs, *lows)):
+    if close is None or low is None or high is None:
         return None
-    low = min(value for value in lows if value is not None)
-    high = max(value for value in highs if value is not None)
     return _clamp((close - low) / (high - low) * 100.0) if high > low else 50.0
+
+
+def _position_percentile_status(value: float | None) -> str:
+    if value is None:
+        return "数据不足"
+    if value <= 10.0:
+        return "极低位"
+    if value <= 30.0:
+        return "低位"
+    if value < 70.0:
+        return "中位"
+    if value < 90.0:
+        return "高位"
+    return "极高位"
 
 
 def _boll_position(records: list[dict], index: int) -> float | None:
@@ -2345,14 +3684,53 @@ def _boll_position(records: list[dict], index: int) -> float | None:
     return _clamp((close - lower) / (upper - lower) * 100.0)
 
 
-def _ma20_atr_position(records: list[dict], index: int) -> float | None:
+def _boll_position_status(value: float | None) -> str:
+    if value is None:
+        return "数据不足"
+    if value <= 10.0:
+        return "接近下轨"
+    if value <= 30.0:
+        return "通道偏下"
+    if value < 70.0:
+        return "通道中部"
+    if value < 90.0:
+        return "通道偏上"
+    return "接近上轨"
+
+
+def _ma20_atr_distance(records: list[dict], index: int) -> float | None:
     row = records[index]
     close = _number(row.get("close"))
     ma20 = _number(row.get("ma20"))
     atr = _number(row.get("atr_14"))
     if close is None or ma20 is None or atr is None or atr <= 0:
         return None
-    return _clamp(50.0 + 50.0 * math.tanh((close - ma20) / (2.0 * atr)))
+    return (close - ma20) / atr
+
+
+def _ma20_atr_position_status(distance: float | None) -> str:
+    if distance is None:
+        return "数据不足"
+    if distance <= -2.0:
+        return "极端偏低"
+    if distance <= -1.0:
+        return "明显偏低"
+    if distance < -0.25:
+        return "偏低"
+    if distance <= 0.25:
+        return "MA20附近"
+    if distance < 1.0:
+        return "偏高"
+    if distance < 2.0:
+        return "明显偏高"
+    return "极端偏高"
+
+
+def _ma20_atr_position(records: list[dict], index: int) -> float | None:
+    distance = _ma20_atr_distance(records, index)
+    if distance is None:
+        return None
+    return _clamp(50.0 + 50.0 * math.tanh(distance / 2.0))
 
 
 def _macd_normalized(value: float | None, close: float | None) -> float | None:
@@ -3301,9 +4679,12 @@ def _category_scores(
     records: list[dict],
     index: int,
     roc_context: _RocContext | None = None,
+    volume_price_analysis: dict | None = None,
+    obv_values: list[float | None] | None = None,
 ) -> dict:
     row = records[index]
     previous = records[index - 1] if index > 0 else {}
+    volume_price_analysis = volume_price_analysis or _volume_price_analysis(records, index, obv_values)
 
     trend_mode = _trend_data_mode(records, index)
     indicator_scope = trend_mode if trend_mode != _TREND_DATA_MODE_INSUFFICIENT else _ma_indicator_scope(row)
@@ -3694,208 +5075,154 @@ def _category_scores(
         },
     ]
 
-    change = _change_pct(records, index)
-    ratio = _volume_ratio(records, index)
-    price_volume = None
-    if change is not None and ratio is not None:
-        if abs(change) < 1e-12:
-            price_volume = 50.0
-        else:
-            conviction = _clamp(ratio / 2.0, 0.25, 1.0)
-            price_volume = _clamp(50.0 + 50.0 * (1.0 if change > 0 else -1.0) * conviction)
-
-    consistency_values: list[float] = []
-    for position in range(max(1, index - 2), index + 1):
-        current_close = _number(records[position].get("close"))
-        prior_close = _number(records[position - 1].get("close"))
-        current_volume = _number(records[position].get("volume"))
-        prior_volume = _number(records[position - 1].get("volume"))
-        if None in (current_close, prior_close, current_volume, prior_volume) or prior_close <= 0:
-            continue
-        price_change = current_close / prior_close - 1.0
-        volume_change = current_volume - prior_volume
-        if abs(price_change) < 1e-12:
-            consistency_values.append(50.0)
-        elif price_change > 0 and volume_change > 0:
-            consistency_values.append(100.0)
-        elif price_change < 0 and volume_change > 0:
-            consistency_values.append(0.0)
-        elif price_change > 0:
-            consistency_values.append(65.0)
-        else:
-            consistency_values.append(35.0)
-    volume_consistency = sum(consistency_values) / len(consistency_values) if consistency_values else None
-
-    vwma5 = _vwma(records, index, 5)
-    vwma20 = _vwma(records, index, 20)
-    vwma_support_parts = [
-        _sign_score(close - vwma5) if close is not None and vwma5 is not None else None,
-        _sign_score(close - vwma20) if close is not None and vwma20 is not None else None,
-    ]
-    vwma_support = _weighted_mean([(value, 1.0) for value in vwma_support_parts])
+    volume_price = volume_price_analysis
+    rvol_score = volume_price["rvol_score"]
+    rvol_status = volume_price["rvol_status"]
+    persistence = volume_price["persistence"]
+    obv = volume_price["obv"]
     volume_price_indicators = [
         {
-            "id": "price_volume", "name": "当前价量共振", "score": round(price_volume) if price_volume is not None else None,
+            "id": "rvol", "name": "RVOL 相对量能", "score": round(volume_price["rvol_directional_score"]) if volume_price["rvol_directional_score"] is not None else None,
+            "weight": _CATEGORY_INDICATOR_WEIGHTS["volume_price"]["rvol"],
+            "status": rvol_status,
+            "detail": "当前成交量相对前20周期均量, 当前量不参与基准均值",
+            "summary": f"RVOL {volume_price['rvol']:.2f}x · {rvol_status}" if volume_price["rvol"] is not None else rvol_status,
+            "raw_values": _raw_values(
+                rvol=volume_price["rvol"],
+                confirmation_score=rvol_score,
+                directional_score=volume_price["rvol_directional_score"],
+                confirmation_factor=volume_price["confirmation_factor"],
+            ),
+        },
+        {
+            "id": "price_volume", "name": "量价关系", "score": round(volume_price["relation_score"]) if volume_price["relation_score"] is not None else None,
             "weight": _CATEGORY_INDICATOR_WEIGHTS["volume_price"]["price_volume"],
-            "status": _score_status(price_volume),
-            "detail": "当前价格方向结合当前量比, 判断价量是否同步",
-            "raw_values": _raw_values(change_pct=change, volume_ratio=ratio),
+            "coverage": volume_price["relation_coverage"],
+            "status": volume_price["relation_status"],
+            "detail": "当前周期占60%, 最近5周期按近高远低加权占40%\n"
+            + f"{volume_price['relation_status']} · {persistence['status']}",
+            "persistence": persistence["status"],
+            "summary": f"{volume_price['relation_status']} · {persistence['status']}",
+            "raw_values": _raw_values(
+                change_pct=volume_price["change"],
+                relation_ratio=volume_price["relation_ratio"],
+                current_score=volume_price["current_relation_score"],
+                persistence_score=persistence["score"],
+                persistence_signal=persistence["signal"],
+                persistence_sample_count=persistence["sample_count"],
+                shrink_weight=persistence["shrink_weight"],
+                confirmation_factor=volume_price["confirmation_factor"],
+            ),
         },
         {
-            "id": "volume_consistency", "name": "近3周期量价一致性", "score": round(volume_consistency) if volume_consistency is not None else None,
-            "weight": _CATEGORY_INDICATOR_WEIGHTS["volume_price"]["volume_consistency"],
-            "status": _score_status(volume_consistency),
-            "detail": "逐周期比较价格变化与成交量变化",
-            "raw_values": _raw_values(sample_count=len(consistency_values)),
-        },
-        {
-            "id": "vwma_support", "name": "VWMA支撑关系", "score": round(vwma_support[0]) if vwma_support[0] is not None else None,
-            "weight": _CATEGORY_INDICATOR_WEIGHTS["volume_price"]["vwma_support"],
-            "status": _score_status(vwma_support[0]),
-            "detail": "比较收盘价与5/20周期成交量加权均价",
-            "raw_values": _raw_values(close=close, vwma5=vwma5, vwma20=vwma20),
+            "id": "obv", "name": "OBV 资金趋势", "score": round(obv["score"]) if obv["score"] is not None else None,
+            "weight": _CATEGORY_INDICATOR_WEIGHTS["volume_price"]["obv"],
+            "coverage": obv["coverage"],
+            "status": obv["status"],
+            "detail": "OBV趋势、突破与价格背离\n" + obv["detail"],
+            "state": obv["trend_state"],
+            "breakout": obv["breakout"],
+            "divergence": obv["divergence"],
+            "summary": obv["summary"],
+            "raw_values": obv["raw_values"],
         },
     ]
 
     range20 = _range_position(records, index, 20)
     range60 = _range_position(records, index, 60)
+    range20_low, range20_high = _range_bounds(records, index, 20)
+    range60_low, range60_high = _range_bounds(records, index, 60)
     boll_position = _boll_position(records, index)
+    boll_status = _boll_position_status(boll_position)
+    ma20_atr_distance = _ma20_atr_distance(records, index)
     ma20_atr_position = _ma20_atr_position(records, index)
     position_indicators = [
         {
-            "id": "range_position_20", "name": "20周期区间位置", "score": round(range20) if range20 is not None else None,
-            "weight": _CATEGORY_INDICATOR_WEIGHTS["price_position"]["range_position_20"],
-            "status": _score_status(range20, high="高位运行", low="低位运行"),
-            "detail": "当前收盘价在最近20周期高低区间中的位置",
-            "raw_values": _raw_values(position=range20),
+            "id": "range_position_20", "name": "短期位置", "score": None,
+            "value": round(range20, 2) if range20 is not None else None,
+            "weight": None,
+            "status": _position_percentile_status(range20),
+            "detail": "近20周期价格区间的位置百分位\n"
+            + _position_percentile_status(range20),
+            "raw_values": _raw_values(
+                close=close,
+                period_low=range20_low,
+                period_high=range20_high,
+                position=range20,
+            ),
         },
         {
-            "id": "range_position_60", "name": "60周期区间位置", "score": round(range60) if range60 is not None else None,
-            "weight": _CATEGORY_INDICATOR_WEIGHTS["price_position"]["range_position_60"],
-            "status": _score_status(range60, high="高位运行", low="低位运行"),
-            "detail": "当前收盘价在最近60周期高低区间中的位置",
-            "raw_values": _raw_values(position=range60),
+            "id": "range_position_60", "name": "中期位置", "score": None,
+            "value": round(range60, 2) if range60 is not None else None,
+            "weight": None,
+            "status": _position_percentile_status(range60),
+            "detail": "近60周期价格区间的位置百分位\n"
+            + _position_percentile_status(range60),
+            "raw_values": _raw_values(
+                close=close,
+                period_low=range60_low,
+                period_high=range60_high,
+                position=range60,
+            ),
         },
         {
-            "id": "boll_position", "name": "BOLL通道位置", "score": round(boll_position) if boll_position is not None else None,
-            "weight": _CATEGORY_INDICATOR_WEIGHTS["price_position"]["boll_position"],
-            "status": _score_status(boll_position),
-            "detail": "当前收盘价在BOLL上下轨之间的位置",
-            "raw_values": _raw_values(close=close, upper=row.get("boll_upper"), lower=row.get("boll_lower"), position=boll_position),
+            "id": "boll_position", "name": "BOLL位置", "score": None,
+            "value": round(boll_position, 2) if boll_position is not None else None,
+            "weight": None,
+            "status": boll_status,
+            "detail": "价格在BOLL上下轨之间的通道百分位\n"
+            + boll_status,
+            "raw_values": _raw_values(
+                close=close,
+                upper=row.get("boll_upper"),
+                middle=ma20,
+                lower=row.get("boll_lower"),
+                position=boll_position,
+            ),
         },
         {
-            "id": "ma20_atr_position", "name": "MA20/ATR位置", "score": round(ma20_atr_position) if ma20_atr_position is not None else None,
-            "weight": _CATEGORY_INDICATOR_WEIGHTS["price_position"]["ma20_atr_position"],
-            "status": _score_status(ma20_atr_position),
-            "detail": "价格相对MA20的偏离按ATR归一化",
-            "raw_values": _raw_values(close=close, ma20=row.get("ma20"), atr14=row.get("atr_14"), position=ma20_atr_position),
+            "id": "ma20_atr_position", "name": "均值偏离", "score": None,
+            "value": round(ma20_atr_position, 2) if ma20_atr_position is not None else None,
+            "weight": None,
+            "status": _ma20_atr_position_status(ma20_atr_distance),
+            "detail": "价格相对MA20的偏离按ATR归一化\n"
+            + _ma20_atr_position_status(ma20_atr_distance),
+            "raw_values": _raw_values(
+                close=close,
+                ma20=ma20,
+                atr14=atr14,
+                distance_atr=ma20_atr_distance,
+                position=ma20_atr_position,
+            ),
         },
     ]
+    price_position_category = _price_position_category(position_indicators)
 
-    current_atr_pct = _atr_pct(records, index)
-    atr_risk, atr_relative = _history_relative_score(
-        current_atr_pct, [_atr_pct(records, position) for position in range(max(0, index - 20), index)]
-    )
-    current_realized_vol = _realized_volatility(records, index)
-    realized_vol_risk, realized_vol_relative = _history_relative_score(
-        current_realized_vol, [_realized_volatility(records, position) for position in range(max(0, index - 20), index)]
-    )
-    current_boll_width = _boll_width(records, index)
-    boll_width_risk, boll_width_relative = _history_relative_score(
-        current_boll_width, [_boll_width(records, position) for position in range(max(0, index - 20), index)]
-    )
-    atr = _number(row.get("atr_14"))
-    ma20 = _number(row.get("ma20"))
-    ma20_deviation = abs(close - ma20) / atr if close is not None and ma20 is not None and atr is not None and atr > 0 else None
-    ma20_deviation_risk = _clamp(ma20_deviation / 3.0 * 100.0) if ma20_deviation is not None else None
-    recent_highs = [_number(item.get("high")) for item in records[max(0, index - 19):index + 1]]
-    peak = max((value for value in recent_highs if value is not None), default=None)
-    drawdown = (max(0.0, (peak - close) / peak) if peak is not None and close is not None and peak > 0 else None)
-    drawdown_risk = _clamp(drawdown * 1000.0) if drawdown is not None else None
-    risk_indicators = [
-        {
-            "id": "atr_relative", "name": "ATR/价格相对历史", "score": round(atr_risk) if atr_risk is not None else None,
-            "weight": _CATEGORY_INDICATOR_WEIGHTS["volatility_risk"]["atr_relative"],
-            "status": _score_status(atr_risk, high="波动放大", low="波动收敛"),
-            "detail": "ATR/价格相对此前20周期中位数",
-            "raw_values": _raw_values(atr14=atr, atr_pct=current_atr_pct, relative=atr_relative),
-        },
-        {
-            "id": "realized_volatility", "name": "20周期实现波动率", "score": round(realized_vol_risk) if realized_vol_risk is not None else None,
-            "weight": _CATEGORY_INDICATOR_WEIGHTS["volatility_risk"]["realized_volatility"],
-            "status": _score_status(realized_vol_risk, high="波动放大", low="波动收敛"),
-            "detail": "20周期收益波动相对此前20个波动观测值中位数",
-            "raw_values": _raw_values(value=current_realized_vol, relative=realized_vol_relative),
-        },
-        {
-            "id": "boll_width_relative", "name": "BOLL带宽相对历史", "score": round(boll_width_risk) if boll_width_risk is not None else None,
-            "weight": _CATEGORY_INDICATOR_WEIGHTS["volatility_risk"]["boll_width_relative"],
-            "status": _score_status(boll_width_risk, high="带宽扩张", low="带宽收缩"),
-            "detail": "BOLL带宽相对此前20周期中位数",
-            "raw_values": _raw_values(boll_width=current_boll_width, relative=boll_width_relative),
-        },
-        {
-            "id": "ma20_deviation_risk", "name": "MA20偏离风险", "score": round(ma20_deviation_risk) if ma20_deviation_risk is not None else None,
-            "weight": _CATEGORY_INDICATOR_WEIGHTS["volatility_risk"]["ma20_deviation_risk"],
-            "status": _score_status(ma20_deviation_risk, high="偏离较大", low="偏离较小"),
-            "detail": "价格偏离MA20的幅度按ATR倍数计量",
-            "raw_values": _raw_values(deviation_atr=ma20_deviation),
-        },
-        {
-            "id": "rolling_drawdown", "name": "20周期滚动回撤", "score": round(drawdown_risk) if drawdown_risk is not None else None,
-            "weight": _CATEGORY_INDICATOR_WEIGHTS["volatility_risk"]["rolling_drawdown"],
-            "status": _score_status(drawdown_risk, high="回撤较大", low="回撤较小"),
-            "detail": "当前收盘价相对最近20周期高点的回撤风险",
-            "raw_values": _raw_values(drawdown_pct=drawdown),
-        },
-    ]
+    risk_analysis = _risk_analysis(records, index)
 
-    amount = _number(row.get("amount"))
-    previous_amounts = [_number(item.get("amount")) for item in records[max(0, index - 20):index]]
-    amount_history = [value for value in previous_amounts if value is not None and value > 0]
-    amount_average = sum(amount_history) / len(amount_history) if len(amount_history) >= 20 else None
-    amount_ratio = amount / amount_average if amount is not None and amount > 0 and amount_average and amount_average > 0 else None
+    activity_metrics = _activity_metrics(records, index)
+    amount = activity_metrics["amount"]
+    amount_average = activity_metrics["amount_average"]
+    amount_ratio = activity_metrics["amount_ratio"]
     amount_ratio_score = _activity_level_score(amount_ratio)
-    amount_values_5 = [_number(item.get("amount")) for item in records[max(0, index - 4):index + 1]]
-    amount_values_20 = [_number(item.get("amount")) for item in records[max(0, index - 19):index + 1]]
-    amount_ma5 = sum(value for value in amount_values_5 if value is not None) / len(amount_values_5) if len(amount_values_5) == 5 and all(value is not None for value in amount_values_5) else None
-    amount_ma20 = sum(value for value in amount_values_20 if value is not None) / len(amount_values_20) if len(amount_values_20) == 20 and all(value is not None for value in amount_values_20) else None
-    amount_ma_ratio = amount_ma5 / amount_ma20 if amount_ma5 is not None and amount_ma20 is not None and amount_ma20 > 0 else None
+    amount_ma5 = activity_metrics["amount_ma5"]
+    amount_ma20 = activity_metrics["amount_ma20"]
+    amount_ma_ratio = activity_metrics["amount_ma_ratio"]
     amount_ma_score = _activity_level_score(amount_ma_ratio)
-    volume_ratio_score = _activity_level_score(ratio)
-    continuity_values = [_number(item.get("volume")) for item in records[max(0, index - 19):index + 1]]
-    continuity_score = (
-        sum(value > 0 for value in continuity_values) / len(continuity_values) * 100.0
-        if len(continuity_values) == 20 and all(value is not None for value in continuity_values) else None
-    )
     activity_indicators = [
         {
-            "id": "amount_ratio_20", "name": "成交额/前20周期均额", "score": round(amount_ratio_score) if amount_ratio_score is not None else None,
+            "id": "amount_ratio_20", "name": "成交额 / 前20周期均额", "score": round(amount_ratio_score) if amount_ratio_score is not None else None,
             "weight": _CATEGORY_INDICATOR_WEIGHTS["activity"]["amount_ratio_20"],
-            "status": _score_status(amount_ratio_score, high="成交放大", low="成交收缩"),
+            "status": _activity_indicator_status(amount_ratio_score, high="成交放大", low="成交收缩", middle="成交一般"),
             "detail": "当前成交额相对前20周期平均成交额",
             "raw_values": _raw_values(amount=amount, average_amount=amount_average, ratio=amount_ratio),
         },
         {
-            "id": "amount_ma5_ma20", "name": "成交额MA5/MA20", "score": round(amount_ma_score) if amount_ma_score is not None else None,
+            "id": "amount_ma5_ma20", "name": "成交额 MA5 / MA20", "score": round(amount_ma_score) if amount_ma_score is not None else None,
             "weight": _CATEGORY_INDICATOR_WEIGHTS["activity"]["amount_ma5_ma20"],
-            "status": _score_status(amount_ma_score, high="短期活跃", low="短期降温"),
+            "status": _activity_indicator_status(amount_ma_score, high="短期有所升温", low="短期有所降温", middle="短期平稳"),
             "detail": "成交额短期均值相对20周期均值",
             "raw_values": _raw_values(amount_ma5=amount_ma5, amount_ma20=amount_ma20, ratio=amount_ma_ratio),
-        },
-        {
-            "id": "volume_ratio_5", "name": "成交量量比", "score": round(volume_ratio_score) if volume_ratio_score is not None else None,
-            "weight": _CATEGORY_INDICATOR_WEIGHTS["activity"]["volume_ratio_5"],
-            "status": _score_status(volume_ratio_score, high="量能放大", low="量能收缩"),
-            "detail": "当前成交量相对前5周期均量",
-            "raw_values": _raw_values(volume_ratio=ratio),
-        },
-        {
-            "id": "trade_continuity", "name": "非零成交连续性", "score": round(continuity_score) if continuity_score is not None else None,
-            "weight": _CATEGORY_INDICATOR_WEIGHTS["activity"]["trade_continuity"],
-            "status": _score_status(continuity_score, high="成交连续", low="成交间断"),
-            "detail": "最近20周期中有实际成交的周期占比",
-            "raw_values": _raw_values(nonzero_count=sum(value > 0 for value in continuity_values if value is not None), sample_count=len(continuity_values)),
         },
     ]
 
@@ -3904,32 +5231,60 @@ def _category_scores(
         trend_category.update(score=None, status="数据不足", coverage=0, available=False)
     else:
         trend_category["status"] = _trend_category_status(trend_category["score"], trend_mode)
+    trend_category["conclusion"] = _trend_category_conclusion(trend_category)
+
+    volume_price_category = _weighted_category("volume_price", volume_price_indicators)
+    volume_price_category.update({
+        "direction_status": volume_price["direction_status"],
+        "phase": volume_price["phase"],
+        "alert": volume_price["alert"],
+        "conclusion": volume_price["conclusion"],
+    })
+    if volume_price_category["score"] is None:
+        volume_price_category["status"] = "数据不足"
+        volume_price_category["phase"] = "数据不足"
+    else:
+        volume_price_category["status"] = _volume_price_direction_status(volume_price_category["score"])
+
+    momentum_category = _weighted_category("momentum", momentum_indicators)
+    momentum_category["conclusion"] = _momentum_category_conclusion(momentum_category)
+
+    risk_category = _risk_category(risk_analysis)
+    risk_change_5 = None
+    if index >= 5 and risk_category["score"] is not None:
+        previous_risk = _risk_category(_risk_analysis(records, index - 5))["score"]
+        if previous_risk is not None:
+            risk_change_5 = risk_category["score"] - previous_risk
+    if risk_change_5 is not None:
+        risk_category = _risk_category(risk_analysis, risk_change_5=risk_change_5)
 
     categories = [
         trend_category,
-        _weighted_category("momentum", momentum_indicators),
-        _weighted_category("volume_price", volume_price_indicators),
-        _weighted_category("price_position", position_indicators),
-        _weighted_category("volatility_risk", risk_indicators),
+        momentum_category,
+        volume_price_category,
+        price_position_category,
+        risk_category,
         _weighted_category("activity", activity_indicators),
     ]
     by_id = {category["id"]: category for category in categories}
+    direction_weight_total = sum(_CATEGORY_DIRECTION_WEIGHTS.values())
     direction_coverage = sum(
         _CATEGORY_DIRECTION_WEIGHTS[category_id] * by_id[category_id]["coverage"] / 100.0
         for category_id in _CATEGORY_DIRECTION_WEIGHTS
-    )
+    ) / direction_weight_total if direction_weight_total > 0 else 0.0
     direction_parts = [
         (by_id[category_id]["score"], weight, by_id[category_id]["coverage"] / 100.0)
         for category_id, weight in _CATEGORY_DIRECTION_WEIGHTS.items()
     ]
     direction_score, _ = _weighted_score(direction_parts)
     direction_available = (
-        sum(by_id[category_id]["available"] for category_id in _CATEGORY_DIRECTION_WEIGHTS) >= 3
+        sum(by_id[category_id]["available"] for category_id in _CATEGORY_DIRECTION_WEIGHTS) >= 2
         and direction_coverage >= 0.70
         and direction_score is not None
     )
-    risk_category = by_id["volatility_risk"]
     activity_category = by_id["activity"]
+    activity_category["status"] = _activity_category_status(activity_category["score"])
+    activity_category["conclusion"] = _activity_category_conclusion(activity_category)
     return {
         "categories": categories,
         "direction_score": round(direction_score) if direction_available and direction_score is not None else None,
@@ -3948,14 +5303,17 @@ def _score_records(
     result: list[dict[str, float | bool | None]] = []
     category_rows: list[dict] = []
     roc_context = _build_roc_context(records)
+    obv_values = _obv_series(records, len(records) - 1) if records else []
     for index in range(len(records)):
         trend, trend_coverage = _trend_score(records, index)
         momentum, momentum_coverage = _momentum_score(records, index, roc_context)
-        volume_price, volume_price_coverage = _volume_price_score(records, index)
+        volume_price_analysis = _volume_price_analysis(records, index, obv_values)
+        volume_price = volume_price_analysis["score"]
+        volume_price_coverage = volume_price_analysis["coverage"]
         state_confirmation, state_coverage = _state_confirmation_score((trend, momentum, volume_price))
-        volatility = _volatility_risk(records, index)
         activity = _activity_score(records, index)
-        category_scores = _category_scores(records, index, roc_context)
+        category_scores = _category_scores(records, index, roc_context, volume_price_analysis, obv_values)
+        volatility = category_scores["risk_score"]
         category_rows.append(category_scores)
 
         base_dimensions = (
@@ -4083,8 +5441,9 @@ def technical_score_payload(frame: pl.DataFrame) -> dict:
         for group in groups:
             records = group.to_dicts()
             roc_context = _build_roc_context(records)
+            obv_values = _obv_series(records, len(records) - 1) if records else []
             categories.extend(
-                _category_scores(records, index, roc_context)["categories"]
+                _category_scores(records, index, roc_context, obv_values=obv_values)["categories"]
                 for index in range(len(records))
             )
     rows = []

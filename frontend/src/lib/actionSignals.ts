@@ -27,7 +27,7 @@ export interface ActionScore {
   momentum: number | null
   volumePrice: number | null
   available: boolean
-  source?: 'technical-score-v2' | 'short-term-score-v1'
+  source?: 'technical-score-v1' | 'technical-score-v2' | 'technical-score-v3' | 'technical-score-v4' | 'technical-score-v5' | 'technical-score-v6' | 'technical-score-v7' | 'technical-score-v8' | 'short-term-score-v1' | 'short-term-score-v2'
 }
 
 export interface ActionSignalEvent {
@@ -166,7 +166,7 @@ function scoreFromRow(row: TechnicalScoreRow, period: KlinePeriod): ActionScore 
     momentum: finite(row.momentum) ? row.momentum : null,
     volumePrice: finite(row.volume_price) ? row.volume_price : null,
     available: row.available === true,
-    source: 'technical-score-v2',
+    source: 'technical-score-v8',
   }
 }
 
@@ -175,7 +175,7 @@ function rawDimension(row: ShortTermAnalysisRow, id: string): number | null {
   return finite(score) ? (score + 10) * 5 : null
 }
 
-function scoreFromShortTermRow(row: ShortTermAnalysisRow, period: KlinePeriod): ActionScore {
+function scoreFromShortTermRow(row: ShortTermAnalysisRow, period: KlinePeriod, version: string): ActionScore {
   return {
     date: normalizeKey(row.as_of, period),
     direction: finite(row.total) ? row.total : null,
@@ -183,8 +183,12 @@ function scoreFromShortTermRow(row: ShortTermAnalysisRow, period: KlinePeriod): 
     momentum: rawDimension(row, 'momentum'),
     volumePrice: rawDimension(row, 'volume_price'),
     available: row.available === true && finite(row.total),
-    source: 'short-term-score-v1',
+    source: version === 'short-term-score-v1' ? 'short-term-score-v1' : 'short-term-score-v2',
   }
+}
+
+function isShortTermScoreSource(source: ActionScore['source']): boolean {
+  return source === 'short-term-score-v1' || source === 'short-term-score-v2'
 }
 
 function buildScoreMap(
@@ -194,16 +198,16 @@ function buildScoreMap(
 ): Map<string, ActionScore> {
   const map = new Map<string, ActionScore>()
   for (const row of scores?.rows ?? []) map.set(normalizeKey(row.as_of, period), scoreFromRow(row, period))
-  for (const row of shortTermAnalysis?.rows ?? []) map.set(normalizeKey(row.as_of, period), scoreFromShortTermRow(row, period))
+  for (const row of shortTermAnalysis?.rows ?? []) map.set(normalizeKey(row.as_of, period), scoreFromShortTermRow(row, period, shortTermAnalysis?.version ?? 'short-term-score-v2'))
   return map
 }
 
 function strongBull(score: ActionScore, minimum: number): boolean {
   return score.available
     && score.direction != null && score.direction >= minimum
-    && score.trend != null && score.trend >= (score.source === 'short-term-score-v1' ? 50 : 60)
-    && score.momentum != null && score.momentum >= (score.source === 'short-term-score-v1' ? 50 : 60)
-    && score.volumePrice != null && score.volumePrice >= (score.source === 'short-term-score-v1' ? 50 : 60)
+    && score.trend != null && score.trend >= (isShortTermScoreSource(score.source) ? 50 : 60)
+    && score.momentum != null && score.momentum >= (isShortTermScoreSource(score.source) ? 50 : 60)
+    && score.volumePrice != null && score.volumePrice >= (isShortTermScoreSource(score.source) ? 50 : 60)
 }
 
 function scoreText(score: ActionScore): string {
@@ -536,7 +540,7 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
       state.phase = 'defensive'
       state.reducedInRound = true
       state.lastEventId = event.id
-    } else if (!stale && score.available && addCooldownReady && strongBull(score, score.source === 'short-term-score-v1' ? 63 : 65) && state.phase !== 'wait'
+    } else if (!stale && score.available && addCooldownReady && strongBull(score, isShortTermScoreSource(score.source) ? 63 : 65) && state.phase !== 'wait'
       && (breakoutTrigger || pullbackConfirmed || structureTrigger)) {
       const trigger: ActionSignalTrigger = pullbackConfirmed ? 'pullback' : structureTrigger ? 'structure' : 'breakout'
       const reference = pullbackConfirmed
@@ -553,7 +557,7 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
       state.lastEventId = event.id
       if (eventCandidate) state.usedStructureIds.add(eventCandidate.id)
       if (breakout) state.usedTriggerIds.add(breakout.id)
-    } else if (!stale && score.available && addCooldownReady && strongBull(score, score.source === 'short-term-score-v1' ? 78 : 60) && state.phase === 'wait'
+    } else if (!stale && score.available && addCooldownReady && strongBull(score, isShortTermScoreSource(score.source) ? 78 : 60) && state.phase === 'wait'
       && (breakoutTrigger || structureTrigger)) {
       const trigger: ActionSignalTrigger = structureTrigger ? 'structure' : 'breakout'
       const reference = breakout?.reference ?? structureCandidateValue?.price ?? null
@@ -636,7 +640,7 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
     events: state.events,
     history: state.history,
     pendingConfirmation: inputHasUnclosed || !!state.pendingPullback,
-    nextConditions: nextConditions(selected.state.phase, latestScore?.source === 'short-term-score-v1'),
+    nextConditions: nextConditions(selected.state.phase, isShortTermScoreSource(latestScore?.source)),
     riskConditions: riskConditions(selected.state.phase, selected.state.defensePrice),
   }
 }

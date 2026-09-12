@@ -1,8 +1,8 @@
-"""Deterministic short-term score, anti-trap zones and noisy-signal filters.
+"""Deterministic short-term score, anti-trap zones and signal filters.
 
 This is a dependency-free port of the executable rules in stock_analysis.
 The service deliberately owns a separate indicator namespace so the existing
-technical-score-v3 and structure calculations keep their current semantics.
+technical-score-v8 and structure calculations keep their current semantics.
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ import polars as pl
 
 from app.price_limits import board_limit_pct, price_limit_pct
 
-SHORT_TERM_SCORE_VERSION = "short-term-score-v1"
+SHORT_TERM_SCORE_VERSION = "short-term-score-v2"
 SHORT_TERM_BAR_SEMANTICS = "native-bars"
 
 _DIMENSIONS = (
@@ -24,7 +24,6 @@ _DIMENSIONS = (
     ("volume_price", "量价配合", 7),
     ("macd", "MACD动能", 5),
     ("smart_money", "主力行为", 9),
-    ("turnover", "换手率", 4),
     ("ma_trend", "MA趋势", 10),
     ("support_resistance", "支撑压力", 5),
     ("kdj", "KDJ状态", 3),
@@ -141,15 +140,12 @@ def _build_columns(frame: pl.DataFrame, period: str) -> dict[str, list[Any]]:
     volume = [max(0.0, _finite(row.get("volume")) or 0.0) for row in records]
     dates = [_date_text(row.get("date")) for row in records]
     pct: list[float] = []
-    turnover: list[float | None] = []
     raw_close: list[float | None] = []
     raw_high: list[float | None] = []
     raw_low: list[float | None] = []
     for index, row in enumerate(records):
         supplied = _finite(row.get("change_pct"))
         pct.append(supplied * 100.0 if supplied is not None else _close_pct(close, index))
-        turnover_value = row.get("turnover_rate")
-        turnover.append(_finite(turnover_value if turnover_value is not None else row.get("turnover")))
         raw_close.append(_finite(row.get("raw_close")))
         raw_high.append(_finite(row.get("raw_high")))
         raw_low.append(_finite(row.get("raw_low")))
@@ -163,7 +159,6 @@ def _build_columns(frame: pl.DataFrame, period: str) -> dict[str, list[Any]]:
         "low": low,
         "volume": volume,
         "pct_change": pct,
-        "turnover": turnover,
         "raw_close": raw_close,
         "raw_high": raw_high,
         "raw_low": raw_low,
@@ -889,82 +884,6 @@ def _score_smart_money(c: dict[str, list[Any]], n: int, trend: int, ctx: ShortTe
     return _clamp(score), "K线行为与量价异常"
 
 
-def _score_turnover(c: dict[str, list[Any]], n: int, trend: int, ctx: ShortTermContext) -> tuple[int | None, str]:
-    current = _safe(c, n - 1, "turnover")
-    if current is None:
-        return None, "换手率数据缺失"
-    high_volatility = ctx.high_volatility_board
-    super_high, high, mid, low = ((30, 15, 6, 3) if high_volatility else (20, 10, 4, 2))
-    big, medium, small = ((10, 6, 4) if high_volatility else (5, 3, 2))
-    pct = c["pct_change"][n - 1]
-    score = 0
-    details: list[str] = []
-    if current > super_high:
-        score += 5 if pct > big else -5 if pct < -big else 2 if pct > 0 else -2
-    elif current > high:
-        score += 4 if pct > medium and trend >= 1 else 2 if pct > medium else -4 if pct < -medium else 1 if pct > 0 else -2 if pct < 0 else 0
-    elif current > mid:
-        score += 2 if pct > small else -2 if pct < -small else 1
-    elif current > low:
-        score += 3 if pct > small and trend >= 1 else 1 if pct > small else -1 if pct < -small else 0
-    else:
-        score += 2 if pct > 0 else -1 if pct < -medium else 0
-    details.append(
-        "超高换手" if current > super_high else
-        "高换手" if current > high else
-        "适度换手" if current > mid else
-        "低换手" if current > low else "地量换手"
-    )
-    previous = [value for value in c["turnover"][max(0, n - 6):n - 1] if value is not None]
-    average = _mean(previous)
-    if average and average > 0:
-        ratio = current / average
-        if ratio > 3:
-            score += 3 if pct > 2 else -3 if pct < -2 else -1
-        elif ratio > 2:
-            score += 2 if pct > 1 else -2 if pct < -1 else 0
-        elif ratio < 0.5:
-            score += 1 if trend >= 1 and pct > 0 else -1 if trend <= -1 else 0
-    limit = _effective_limit(c, n - 1, ctx)
-    if limit is not None:
-        zt_low, zt_mid, zt_high, zt_very_high = ((8, 15, 30, 45) if high_volatility else (5, 10, 20, 30))
-        dt_high, dt_low = ((20, 5) if high_volatility else (15, 3))
-        if pct >= limit:
-            if current < zt_low:
-                score += 4
-            elif current < zt_mid:
-                score += 2
-            elif current < zt_high:
-                score += 1
-            elif current < zt_very_high:
-                score -= 1
-            else:
-                score -= 3
-        elif pct <= -limit:
-            if current > dt_high:
-                score -= 3
-            elif current < dt_low:
-                score -= 2
-        broken = _broken_limit(c, n, ctx)
-        if broken["today_broken"]:
-            score -= 4 if current > zt_high else 2 if current > zt_mid else 1
-    if n >= 3:
-        high_turn_days = sum(
-            1 for index in range(n - 3, n)
-            if (value := _safe(c, index, "turnover")) is not None and value > high
-        )
-        if high_turn_days >= 3:
-            score -= 2 if trend >= 1 else 3 if trend <= -1 else 0
-    if n >= 4:
-        values = [_safe(c, index, "turnover") for index in range(n - 4, n)]
-        if all(value is not None for value in values):
-            if values[0] < values[1] < values[2] < values[3]:
-                score += 3 if c["close"][n - 1] > c["close"][n - 4] and trend >= 1 else 1 if c["close"][n - 1] > c["close"][n - 4] else -2 if trend <= -1 else 0
-            elif values[0] > values[1] > values[2] > values[3]:
-                score += 2 if c["close"][n - 1] > c["close"][n - 4] and trend >= 1 else -2 if c["close"][n - 1] <= c["close"][n - 4] else 0
-    return _clamp(score), f"{'/'.join(details)} {current:.2f}%"
-
-
 def _zones_for_prefix(c: dict[str, list[Any]], n: int, ctx: ShortTermContext) -> dict[str, list[dict[str, Any]]]:
     """Build the source support/resistance candidates from ``c[:n]`` only."""
     empty = {"support": [], "resistance": []}
@@ -1603,15 +1522,13 @@ def _score_meta(c: dict[str, list[Any]], n: int, raw_scores: list[int], trend: i
     return _clamp(score), "; ".join(details)
 
 
-def _dimension_available(dimension: str, n: int, c: dict[str, list[Any]], ctx: ShortTermContext) -> bool:
+def _dimension_available(dimension: str, n: int) -> bool:
     minimum = {
         "price_position": 11, "momentum": 6, "volume_price": 6, "macd": 26,
-        "smart_money": 5, "turnover": 5, "ma_trend": 20, "support_resistance": 20,
+        "smart_money": 5, "ma_trend": 20, "support_resistance": 20,
         "kdj": 9, "squeeze": 20, "divergence": 20, "meta": 20,
     }[dimension]
     if n < max(20, minimum):
-        return False
-    if dimension == "turnover" and _safe(c, n - 1, "turnover") is None:
         return False
     return True
 
@@ -1620,7 +1537,7 @@ def _indicator_snapshot(c: dict[str, list[Any]], n: int) -> dict[str, float | No
     fields = (
         "close", "ma5", "ma7", "ma10", "ma20", "ma60", "vwma5", "vwma10", "vwma20",
         "macd_dif", "macd_dea", "macd_hist", "kdj_k", "kdj_d", "kdj_j", "bb_middle", "bb_upper", "bb_lower",
-        "bb_bandwidth", "volume", "vol_ma5", "vol_ma10", "vol_ratio_5d", "turnover",
+        "bb_bandwidth", "volume", "vol_ma5", "vol_ma10", "vol_ratio_5d",
     )
     values = {field: _safe(c, n - 1, field) for field in fields}
     values["change_pct"] = _safe(c, n - 1, "pct_change")
@@ -1683,7 +1600,7 @@ def calculate_short_term_analysis(frame: pl.DataFrame, context: ShortTermContext
         dimensions: list[dict[str, Any]] = []
         raw_scores: list[int] = []
         for dimension, name, weight in _DIMENSIONS[:-1]:
-            available = trend is not None and _dimension_available(dimension, n, columns, context)
+            available = trend is not None and _dimension_available(dimension, n)
             if available:
                 scorer = {
                     "price_position": _score_price_position,
@@ -1691,7 +1608,6 @@ def calculate_short_term_analysis(frame: pl.DataFrame, context: ShortTermContext
                     "volume_price": _score_volume,
                     "macd": _score_macd,
                     "smart_money": _score_smart_money,
-                    "turnover": _score_turnover,
                     "ma_trend": _score_ma_trend,
                     "support_resistance": _score_sr,
                     "kdj": _score_kdj,
@@ -1700,7 +1616,7 @@ def calculate_short_term_analysis(frame: pl.DataFrame, context: ShortTermContext
                 }[dimension]
                 if dimension == "price_position":
                     score, detail = scorer(columns, n, trend, context)
-                elif dimension in {"momentum", "volume_price", "smart_money", "turnover"}:
+                elif dimension in {"momentum", "volume_price", "smart_money"}:
                     score, detail = scorer(columns, n, trend, context)
                 elif dimension in {"support_resistance"}:
                     score, detail = scorer(columns, n, zones, trend)
@@ -1716,7 +1632,7 @@ def calculate_short_term_analysis(frame: pl.DataFrame, context: ShortTermContext
             if score is not None:
                 raw_scores.append(score)
 
-        meta_available = trend is not None and _dimension_available("meta", n, columns, context)
+        meta_available = trend is not None and _dimension_available("meta", n)
         if meta_available:
             meta_score, meta_detail = _score_meta(columns, n, raw_scores, trend, context)
         else:
@@ -1751,13 +1667,9 @@ def calculate_short_term_analysis(frame: pl.DataFrame, context: ShortTermContext
     limitations: list[str] = []
     if count < 120:
         limitations.append(f"当前仅有{count}根原生K线，120根窗口未完整覆盖")
-    if all(value is None for value in columns["turnover"]):
-        limitations.append("换手率数据缺失，换手率维度未参与归一化")
     if context.period == "1d" and context.asset_type == "stock" and all(value is None for value in columns["raw_close"]):
         limitations.append("缺少原始价，涨跌停/炸板规则未启用")
-    if context.asset_type == "etf":
-        limitations.append("ETF仅使用通用价量与技术规则，不套用股票板块涨跌停解释")
-    if context.period != "1d":
+    if context.asset_type == "stock" and context.period != "1d":
         limitations.append("非日线周期不启用日级涨跌停与炸板规则")
     return {
         "version": SHORT_TERM_SCORE_VERSION,
