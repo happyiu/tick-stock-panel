@@ -192,7 +192,7 @@ def _resolve_max_tokens(max_tokens: int | None) -> int | None:
     return max(1, min(int(max_tokens), cap))
 
 
-def _estimate_input_tokens(messages: Sequence[Message]) -> int:
+def estimate_input_tokens(messages: Sequence[Message]) -> int:
     """粗略估算输入 token 数: 中文按 1 字 1 token, 其余按 4 字符 1 token。"""
     total = 0
     for m in messages:
@@ -200,6 +200,11 @@ def _estimate_input_tokens(messages: Sequence[Message]) -> int:
         cjk = sum(1 for ch in text if "一" <= ch <= "鿿")
         total += cjk + (len(text) - cjk) // 4 + 1
     return max(1, total)
+
+
+def _estimate_input_tokens(messages: Sequence[Message]) -> int:
+    """Backward-compatible private alias for existing callers/tests."""
+    return estimate_input_tokens(messages)
 
 
 def _check_input_budget(messages: Sequence[Message], *, max_tokens: int | None) -> None:
@@ -213,7 +218,7 @@ def _check_input_budget(messages: Sequence[Message], *, max_tokens: int | None) 
     if context_window <= 0:
         return
     output_reserve = max_tokens if max_tokens is not None else current_ai_max_output_tokens()
-    est = _estimate_input_tokens(messages)
+    est = estimate_input_tokens(messages)
     if est + output_reserve > context_window:
         raise ValueError(
             f"输入过长: 估算输入约 {est} tokens, 加上输出预算 {max_tokens} tokens, "

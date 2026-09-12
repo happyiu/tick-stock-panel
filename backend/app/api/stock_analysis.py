@@ -5,6 +5,7 @@
 端点:
   GET  /levels?symbol=         11 类关键价位(图表 markLine 数据源)
   POST /analyze                AI 流式四维分析(NDJSON)
+  POST /chat/stream            Hermes-only 详情页多轮对话(NDJSON)
   POST /elliott/explain        详情页本地波浪结果的 AI 只读解释
   GET  /reports                历史报告列表
   POST /reports                保存一条报告
@@ -12,6 +13,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
 from datetime import date, timedelta
@@ -33,6 +35,12 @@ from app.services.elliott_wave_analyzer import (
     explain_elliott,
 )
 from app.services.stock_analyzer import analyze_stock_stream
+from app.services.stock_chat import (
+    StockChatError,
+    StockChatRequest,
+    prepare_stock_chat,
+    stream_stock_chat,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +65,7 @@ def _to_float_list(series: pl.Series) -> list:
 def _build_series(df: pl.DataFrame) -> dict:
     """提取带状指标(布林带 / Keltner通道 / ATR止损)的每日时间序列。
 
-    这些指标的本质是"每日一条线",随 MA/ATR/σ 漂移,画成曲线才能体现通道形态。
+    这些指标的本质是"每日一条线",随 MA/ATR/sigma 漂移,画成曲线才能体现通道形态。
     其余固定价位(枢轴/前高前低等)不在此,仍用水平 markLine。
 
     返回结构(每个 value 都是按日期对齐的数组):
@@ -103,7 +111,7 @@ def _build_series(df: pl.DataFrame) -> dict:
         if ma120 is not None:
             out["keltner_l"] = _channel(ma120, 3.0)
 
-        # ATR 止损/止盈: close ± 2×ATR(跟随行情漂移的动态止损线)
+        # ATR 止损/止盈: close ± 2xATR(跟随行情漂移的动态止损线)
         out["atr"] = {
             "stop_loss": _to_float_list(close - 2 * atr),
             "take_profit": _to_float_list(close + 2 * atr),
@@ -188,6 +196,31 @@ async def analyze_stock(request: Request, req: AnalyzeRequest):
     )
 
 
+@router.post("/chat/stream")
+async def stock_chat_stream(req: StockChatRequest):
+    """Hermes-only multi-turn detail-page chat (NDJSON with heartbeats)."""
+    try:
+        provider_messages, prepared = prepare_stock_chat(req)
+    except StockChatError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    async def stream_gen():
+        yield json.dumps(prepared["meta"], ensure_ascii=False) + "\n"
+        async for event in stream_stock_chat(
+            provider_messages,
+            gateway_url=prepared["gateway_url"],
+            api_key=prepared["api_key"],
+            model=prepared["model"],
+        ):
+            yield json.dumps(event, ensure_ascii=False) + "\n"
+
+    return StreamingResponse(
+        stream_gen(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.post("/elliott/analyze", response_model=ElliottAssessment)
 async def analyze_elliott_wave(req: ElliottAnalyzeRequest):
     """艾略特波浪 AI 增强评估。
@@ -208,7 +241,7 @@ async def analyze_elliott_wave(req: ElliottAnalyzeRequest):
 
 @router.post("/elliott/explain", response_model=ElliottExplanation)
 async def explain_elliott_wave(req: ElliottAnalyzeRequest):
-    """艾略特波浪 AI v2 解释；计数、排名、规则和价格事实必须来自详情页本地结果。"""
+    """艾略特波浪 AI v2 解释; 计数、排名、规则和价格事实必须来自详情页本地结果。"""
     if not ai_configured():
         raise HTTPException(status_code=503, detail="AI 未配置; 请在设置页配置 API Key 与接口地址")
     try:

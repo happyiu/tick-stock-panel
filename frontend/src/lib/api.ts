@@ -565,6 +565,45 @@ export interface KlineResponse {
   technical_scores?: TechnicalScores
 }
 
+/** 详情页 AI 对话首轮捕获的、固定到本次会话的页面快照。 */
+export interface StockChatSnapshotV1 {
+  version: 1
+  symbol: string
+  name?: string
+  asset_type?: 'stock' | 'etf' | 'index' | null
+  period: KlinePeriod
+  as_of?: string | null
+  captured_at?: string | null
+  source?: string | null
+  data_status?: ChartDataStatus | null
+  bars: Array<Record<string, any>>
+  technical_score?: Record<string, any> | null
+  structure: Record<string, any>
+  price_zones: Array<Record<string, any>>
+  signal_risk: Array<Record<string, any>>
+}
+
+export interface StockChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export type StockChatStreamEvent =
+  | {
+      type: 'meta'
+      provider?: string
+      model?: string
+      symbol?: string
+      period?: KlinePeriod
+      as_of?: string | null
+      history_truncated?: boolean
+      heartbeat_seconds?: number
+    }
+  | { type: 'delta'; content: string }
+  | { type: 'heartbeat'; ts?: number }
+  | { type: 'error'; message: string }
+  | { type: 'done' }
+
 /** 兼容日K增量刷新路径的别名；完整日K响应包含图表状态和技术评分字段。 */
 export type KlineDailyResponse = KlineResponse
 
@@ -3610,6 +3649,59 @@ export const api = {
     }
     if (buf.trim()) {
       try { yield JSON.parse(buf.trim()) } catch { /* ignore */ }
+    }
+  },
+
+  /** Hermes 专用详情页多轮对话流；请求不设置浏览器超时，由 AbortSignal 控制。 */
+  async *stockChatStream(
+    symbol: string,
+    snapshot: StockChatSnapshotV1,
+    messages: StockChatMessage[],
+    signal?: AbortSignal,
+  ): AsyncGenerator<StockChatStreamEvent> {
+    let res: Response
+    try {
+      res = await fetch('/api/stock-analysis/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol, snapshot, messages }),
+        signal,
+      })
+    } catch (error) {
+      if (signal?.aborted) throw error
+      throw new Error(error instanceof Error ? error.message : 'AI 对话请求失败')
+    }
+    if (!res.ok) {
+      let detail = ''
+      try {
+        const j = JSON.parse(await res.text())
+        const raw = j.detail ?? j.message ?? ''
+        detail = Array.isArray(raw)
+          ? raw.map((item: any) => item?.msg || String(item)).join('; ')
+          : typeof raw === 'string' ? raw : JSON.stringify(raw)
+      } catch { /* ignore */ }
+      throw new ApiError(detail || `${res.status} ${res.statusText}`, res.status)
+    }
+    if (!res.body) throw new Error('响应无 body')
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buf = ''
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      const lines = buf.split('\n')
+      buf = lines.pop() ?? ''
+      for (const line of lines) {
+        const s = line.trim()
+        if (!s) continue
+        try { yield JSON.parse(s) as StockChatStreamEvent } catch { /* ignore malformed keepalive */ }
+      }
+    }
+    buf += decoder.decode()
+    if (buf.trim()) {
+      try { yield JSON.parse(buf.trim()) as StockChatStreamEvent } catch { /* ignore */ }
     }
   },
 

@@ -21,6 +21,7 @@ import { StockChanlunPanel } from '@/components/StockChanlunPanel'
 import { StockElliottPanel } from '@/components/StockElliottPanel'
 import { StockPriceZonesPanel } from '@/components/StockPriceZonesPanel'
 import { StockSignalRiskPanel } from '@/components/StockSignalRiskPanel'
+import { StockAiChatPanel } from '@/components/StockAiChatPanel'
 import { financialMetricsQueryOptions, useFinancialMetrics } from '@/lib/useFinancials'
 import { useCapabilities, useQuoteStatus } from '@/lib/useSharedQueries'
 import { scheduleNeighborPrefetch } from '@/lib/neighborPrefetch'
@@ -36,6 +37,7 @@ import { analyzeElliott } from '@/lib/elliott'
 import { storage, type StockPreviewAnalysisSectionsV2, type StockPreviewAnalysisSectionsV3, type StockPreviewDecisionSectionsV1 } from '@/lib/storage'
 import { buildPriceZones, type PriceZone } from '@/lib/priceZones'
 import { buildSignalRiskContexts, selectPreferredSignal, type SignalRiskContext } from '@/lib/signalRisk'
+import { buildStockChatSnapshot } from '@/lib/stockChatContext'
 import { actionSignalMarkers, buildActionSignals, type ActionSignalInput, type ActionSignalResult } from '@/lib/actionSignals'
 
 const DEFAULT_SPLIT_RATIO = 1.4 / 2.4
@@ -349,6 +351,20 @@ export function StockPanel({
   const signalRiskContexts: SignalRiskContext[] = useMemo(
     () => buildSignalRiskContexts(chanlunAnalysis.candidateSignals, priceZones, chanlunAnalysis.currentPrice),
     [chanlunAnalysis.candidateSignals, chanlunAnalysis.currentPrice, priceZones],
+  )
+  const stockChatSnapshot = useMemo(
+    () => buildStockChatSnapshot({
+      symbol,
+      period,
+      assetType: analysisAssetType,
+      selectedDate: selectedBarKey,
+      response: analysisResponse,
+      chanlun: chanlunAnalysis,
+      elliott: elliottAnalysis,
+      priceZones,
+      signalRisk: signalRiskContexts,
+    }),
+    [analysisResponse, chanlunAnalysis, elliottAnalysis, period, priceZones, selectedBarKey, signalRiskContexts, symbol],
   )
   const preferredSignal = useMemo(
     () => selectPreferredSignal(signalRiskContexts),
@@ -880,8 +896,8 @@ export function StockPanel({
               />
             )}
             {resolvedRightPaneMode === 'technical' && (
-              <div className="h-full min-h-0 overflow-y-auto">
-                <div className="flex items-center justify-between gap-2 border-b border-border/70 px-2.5 py-1.5 text-[13px] text-muted">
+              <div className={`flex h-full min-h-0 flex-col ${analysisTab === 'ai' ? 'overflow-hidden' : 'overflow-y-auto'}`}>
+                <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/70 px-2.5 py-1.5 text-[11px] text-muted">
                   <div className="flex min-w-0 flex-wrap items-center gap-2">
                     <span>截至 {formatAnalysisAsOf(analysisResponse?.data_status?.data_through ?? analysisResponse?.rows.at(-1)?.date ?? null, period)}</span>
                     {analysisRefreshing ? <span>计算中…</span> : analysisSnapshot?.calculatedAt != null && <span>计算于 {formatAnalysisCalculatedAt(analysisSnapshot.calculatedAt)}</span>}
@@ -898,7 +914,7 @@ export function StockPanel({
                     <RefreshCw className={`h-3.5 w-3.5 ${analysisRefreshing ? 'animate-spin' : ''}`} />
                   </button>
                 </div>
-                <div className="sticky top-0 z-10 border-b border-border/70 bg-surface">
+                <div className="sticky top-0 z-10 shrink-0 border-b border-border/70 bg-surface">
                   <div role="tablist" aria-label="指标详情分析类型" className="flex items-stretch">
                     {STOCK_ANALYSIS_TABS.map(tab => {
                       const active = analysisTab === tab.id
@@ -924,7 +940,7 @@ export function StockPanel({
                   id="stock-analysis-tabpanel"
                   role="tabpanel"
                   aria-labelledby={`stock-analysis-tab-${analysisTab}`}
-                  className="min-h-0"
+                  className={analysisTab === 'ai' ? 'flex min-h-0 flex-1 flex-col' : 'min-h-0'}
                 >
                 {analysisTab === 'indicator' && <>
                 <StockTechnicalPanel
@@ -988,7 +1004,9 @@ export function StockPanel({
                   onSelectSignal={setSelectedSignalId}
                 />
                 </>}
-                {analysisTab === 'ai' && <div className="min-h-[320px]" />}
+                {analysisTab === 'ai' && (
+                  <StockAiChatPanel symbol={symbol} snapshot={stockChatSnapshot} />
+                )}
                 </div>
               </div>
             )}
