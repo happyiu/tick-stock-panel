@@ -136,6 +136,51 @@ function volumeRatioAt(data: OHLC[], index: number, days: number): number | null
   return current / average
 }
 
+function toCandlePixel(chart: ECharts, index: number, price: number): [number, number] | null {
+  if (!Number.isFinite(price)) return null
+  const point = chart.convertToPixel(
+    { xAxisIndex: 0, yAxisIndex: 0 },
+    [index, price],
+  )
+  if (!Array.isArray(point) || point.length < 2) return null
+  const x = Number(point[0])
+  const y = Number(point[1])
+  return Number.isFinite(x) && Number.isFinite(y) ? [x, y] : null
+}
+
+/** 只命中 K 线实体，不把影线或同一日期列的空白区域当成点击。 */
+function isCandleBodyHit(
+  chart: ECharts,
+  pixel: [number, number],
+  index: number,
+  data: OHLC[],
+): boolean {
+  const candle = data[index]
+  if (!candle) return false
+
+  const openPoint = toCandlePixel(chart, index, candle.open)
+  const closePoint = toCandlePixel(chart, index, candle.close)
+  if (!openPoint || !closePoint) return false
+
+  // ECharts 默认蜡烛实体宽度为 category band 的 1/2，点击区域按实际实体宽度计算。
+  const neighborIndex = index > 0 ? index - 1 : index + 1
+  const neighbor = data[neighborIndex]
+  const neighborPoint = neighbor
+    ? toCandlePixel(chart, neighborIndex, neighbor.open)
+    : null
+  const bandWidth = neighborPoint ? Math.abs(openPoint[0] - neighborPoint[0]) : 0
+  const halfBodyWidth = bandWidth > 0 ? Math.max(bandWidth / 4, 0.75) : 4
+
+  const bodyTop = Math.min(openPoint[1], closePoint[1])
+  const bodyBottom = Math.max(openPoint[1], closePoint[1])
+  // 开收相同的十字线实体高度很小，保留少量像素使其仍然可点击。
+  const bodyHalfHeight = Math.max((bodyBottom - bodyTop) / 2, 0.75)
+  const bodyCenterY = (bodyTop + bodyBottom) / 2
+
+  return Math.abs(pixel[0] - openPoint[0]) <= halfBodyWidth
+    && Math.abs(pixel[1] - bodyCenterY) <= bodyHalfHeight
+}
+
 function fmtVolumeRatio(value: number | null, digits = 2): string {
   return value == null ? '—' : `${value.toFixed(digits)}x`
 }
@@ -1397,6 +1442,7 @@ export function EChartsCandlestick({
       const index = Array.isArray(coordinate) ? Math.round(Number(coordinate[0])) : -1
       const currentData = dataRef.current
       if (index < 0 || index >= currentData.length) return
+      if (!isCandleBodyHit(chart, pixel, index, currentData)) return
       moveChartToIndex(index)
       onDateClickRef.current?.(currentData[index].date)
     }
