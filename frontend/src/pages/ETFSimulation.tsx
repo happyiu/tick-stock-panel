@@ -43,6 +43,7 @@ const button = 'inline-flex h-9 items-center justify-center gap-1.5 rounded-btn 
 const primary = `${button} border-accent bg-accent text-white hover:bg-accent/90`
 
 const money = (v?: number | null) => v == null || !Number.isFinite(v) ? '—' : v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const price = (v?: number | null) => v == null || !Number.isFinite(v) ? '—' : v.toLocaleString('zh-CN', { minimumFractionDigits: 3, maximumFractionDigits: 3 })
 const pct = (v?: number | null) => v == null ? '—' : `${v >= 0 ? '+' : ''}${(v * 100).toFixed(2)}%`
 const time = (v?: string | null) => v ? v.replace('T', ' ').slice(0, 16) : '—'
 const shortTime = (v?: string | null) => time(v).replace(/^20(\d{2})-/, '$1-')
@@ -604,8 +605,8 @@ export function ETFSimulation() {
                             <td className="py-2.5 font-medium" title="查看K线" onClick={event => { event.stopPropagation(); openPositionPreview(p) }}>{p.name || p.symbol}<span className="ml-1 text-muted">{p.symbol}</span></td>
                             <td>{p.quantity}</td>
                             <td>{p.available_quantity} / {p.quantity - p.available_quantity}</td>
-                            <td>{money(p.average_cost)}</td>
-                            <td>{money(p.last_price)}</td>
+                            <td>{price(p.average_cost)}</td>
+                            <td>{price(p.last_price)}</td>
                             <td>{money(p.market_value)}</td>
                             <td className={p.unrealized_pnl >= 0 ? 'text-bull' : 'text-bear'}>{money(p.unrealized_pnl)} · {pct(p.unrealized_pnl_pct)}</td>
                             <td className="text-muted">{shortTime(p.price_time)}</td>
@@ -667,8 +668,8 @@ export function ETFSimulation() {
               <div><dt className="text-xs text-muted">持仓类型</dt><dd className="mt-1 font-medium">{positionDetails.editable ? '手动持仓' : '交易持仓'}</dd></div>
               <div><dt className="text-xs text-muted">可卖数量</dt><dd className="mt-1 font-medium tabular-nums">{positionDetails.available_quantity.toLocaleString('zh-CN')}</dd></div>
               <div><dt className="text-xs text-muted">冻结数量</dt><dd className="mt-1 font-medium tabular-nums">{positionDetails.reserved_quantity.toLocaleString('zh-CN')}</dd></div>
-              <div><dt className="text-xs text-muted">平均成本</dt><dd className="mt-1 font-medium tabular-nums">{money(positionDetails.average_cost)}</dd></div>
-              <div><dt className="text-xs text-muted">现价</dt><dd className="mt-1 font-medium tabular-nums">{money(positionDetails.last_price)}</dd></div>
+              <div><dt className="text-xs text-muted">平均成本</dt><dd className="mt-1 font-medium tabular-nums">{price(positionDetails.average_cost)}</dd></div>
+              <div><dt className="text-xs text-muted">现价</dt><dd className="mt-1 font-medium tabular-nums">{price(positionDetails.last_price)}</dd></div>
               <div className="col-span-2 md:col-span-2"><dt className="text-xs text-muted">市值</dt><dd className="mt-1 font-medium tabular-nums">{money(positionDetails.market_value)}</dd></div>
               <div className="col-span-2 grid grid-cols-2 gap-x-3 gap-y-2 md:col-span-4 md:grid-cols-4">
                 <div><dt className="text-xs text-muted">未实现盈亏</dt><dd className={`mt-1 font-medium tabular-nums ${positionDetails.unrealized_pnl >= 0 ? 'text-bull' : 'text-bear'}`}>{money(positionDetails.unrealized_pnl)}</dd></div>
