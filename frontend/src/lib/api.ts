@@ -2252,9 +2252,250 @@ export interface StrategyAlertEvent {
   [key: string]: unknown
 }
 
+// ===== ETF paper trading =====
+export interface PaperAccount {
+  id: string
+  mode: 'live' | 'replay'
+  name: string
+  initial_cash: number
+  cash: number
+  commission_rate: number
+  minimum_commission: number
+  slippage_bps: number
+  max_positions: number
+  max_exposure_pct: number
+  max_symbol_exposure_pct: number
+  revision: number
+  archived: number
+  runtime_status: string
+  runtime_message: string
+  created_at: string
+  updated_at: string
+  replay_start?: string | null
+  replay_end?: string | null
+  replay_cursor?: string | null
+  replay_status?: string | null
+  replay_speed: number
+}
+
+export interface EtfTradingRule {
+  symbol: string
+  settlement_cycle: 'T0' | 'T1' | 'unknown'
+  lot_size: number
+  price_tick: number
+  updated_at: string | null
+}
+
+export interface PaperOrder {
+  id: string
+  symbol: string
+  side: 'buy' | 'sell'
+  order_type: 'market' | 'limit'
+  quantity: number
+  limit_price: number | null
+  status: string
+  submitted_at: string
+  filled_at: string | null
+  filled_price: number | null
+  fee: number
+  reason: string
+}
+
+export interface ConditionalOrder {
+  id: string
+  symbol: string
+  side: 'buy' | 'sell'
+  direction: 'above' | 'below'
+  trigger_price: number
+  quantity: number
+  child_order_type: 'market' | 'limit'
+  status: string
+  oco_group: string | null
+  created_at: string
+  triggered_at: string | null
+  reason: string
+}
+
+export interface PaperFill {
+  id: string
+  symbol: string
+  side: 'buy' | 'sell'
+  quantity: number
+  price: number
+  gross: number
+  fee: number
+  realized_pnl: number
+  filled_at: string
+}
+
+export interface PaperPosition {
+  symbol: string
+  name: string
+  quantity: number
+  editable: boolean
+  available_quantity: number
+  reserved_quantity: number
+  average_cost: number
+  last_price: number
+  market_value: number
+  unrealized_pnl: number
+  unrealized_pnl_pct: number
+  price_time: string | null
+  description: string
+}
+
+export interface EquityPoint {
+  bar_time: string
+  equity: number
+  cash: number
+  market_value: number
+  realized_pnl: number
+  unrealized_pnl: number
+  drawdown: number
+}
+
+export interface PositionEquityPoint {
+  bar_time: string
+  equity: number
+  market_value: number
+  realized_pnl: number
+  unrealized_pnl: number
+  total_pnl: number
+  return_rate: number
+  drawdown: number
+}
+
+export interface PaperSnapshot {
+  account: PaperAccount
+  summary: {
+    equity: number
+    cash: number
+    market_value: number
+    realized_pnl: number
+    unrealized_pnl: number
+    total_pnl: number
+    daily_pnl: number
+    total_return: number
+    exposure_pct: number
+    max_drawdown: number
+  }
+  positions: PaperPosition[]
+  orders: PaperOrder[]
+  conditions: ConditionalOrder[]
+  fills: PaperFill[]
+  ledger: Array<Record<string, string | number | null>>
+  equity_curve: EquityPoint[]
+  position_equity_curves: Record<string, PositionEquityPoint[]>
+  clock: string
+}
+
+export interface PaperSetupRequired {
+  setup_required: true
+  message: string
+}
+
+export type PaperSnapshotResponse = PaperSnapshot | PaperSetupRequired
+
+export interface PaperAccountConfigPayload {
+  name?: string
+  initial_cash?: number
+  commission_rate?: number
+  minimum_commission?: number
+  slippage_bps?: number
+  max_positions?: number
+  max_exposure_pct?: number
+  max_symbol_exposure_pct?: number
+}
+
+export interface PaperLiveAccountSetupPayload extends PaperAccountConfigPayload {
+  name: string
+}
+
+export interface PaperManualPositionPayload {
+  account_id: string
+  symbol: string
+  quantity: number
+  average_cost: number
+}
+
+export interface PaperPositionDescriptionPayload {
+  account_id: string
+  symbol: string
+  description: string
+}
+
 // ===== API surface =====
 export const api = {
   health: () => request<{ status: string; version: string; mode: string }>('/health'),
+
+  paperSnapshot: (accountId?: string) => request<PaperSnapshotResponse>(
+    `/api/paper-trading/snapshot?mode=${accountId ? 'replay' : 'live'}`
+      + (accountId ? `&account_id=${encodeURIComponent(accountId)}` : ''),
+  ),
+  paperCreateLiveAccount: (payload: PaperLiveAccountSetupPayload) =>
+    request<PaperSnapshot>(`/api/paper-trading/live/setup`, {
+      method: 'POST', body: JSON.stringify(payload),
+    }),
+  paperRules: () => request<{ items: EtfTradingRule[] }>('/api/paper-trading/rules'),
+  paperSetRule: (symbol: string, payload: Omit<EtfTradingRule, 'symbol' | 'updated_at'>) =>
+    request<EtfTradingRule>(`/api/paper-trading/rules/${encodeURIComponent(symbol)}`, {
+      method: 'PUT', body: JSON.stringify(payload),
+    }),
+  paperUpdateConfig: (accountId: string, payload: PaperAccountConfigPayload) =>
+    request<PaperSnapshot>(`/api/paper-trading/accounts/${encodeURIComponent(accountId)}/config`, {
+      method: 'PUT', body: JSON.stringify(payload),
+    }),
+  paperRebuildLive: () => request<PaperSetupRequired>('/api/paper-trading/live/rebuild', { method: 'POST' }),
+  paperArchivedAccounts: () => request<{ items: PaperAccount[] }>('/api/paper-trading/accounts/archived'),
+  paperDeleteArchivedAccount: (accountId: string) => request<{ ok: boolean }>(
+    `/api/paper-trading/accounts/${encodeURIComponent(accountId)}`, { method: 'DELETE' },
+  ),
+  paperAddManualPosition: (payload: PaperManualPositionPayload) =>
+    request<PaperSnapshot>('/api/paper-trading/positions/manual', {
+      method: 'POST', body: JSON.stringify(payload),
+    }),
+  paperEditManualPosition: (payload: PaperManualPositionPayload) =>
+    request<PaperSnapshot>('/api/paper-trading/positions/manual', {
+      method: 'PUT', body: JSON.stringify(payload),
+    }),
+  paperUpdatePositionDescription: (payload: PaperPositionDescriptionPayload) =>
+    request<PaperSnapshot>('/api/paper-trading/positions/description', {
+      method: 'PUT', body: JSON.stringify(payload),
+    }),
+  paperDeleteManualPosition: (accountId: string, symbol: string) => request<PaperSnapshot>(
+    `/api/paper-trading/positions/manual/${encodeURIComponent(symbol)}?account_id=${encodeURIComponent(accountId)}`,
+    { method: 'DELETE' },
+  ),
+  paperCreateOrder: (payload: Record<string, unknown>) =>
+    request<PaperOrder>('/api/paper-trading/orders', { method: 'POST', body: JSON.stringify(payload) }),
+  paperCancelOrder: (accountId: string, orderId: string) => request<PaperOrder>(
+    `/api/paper-trading/orders/${encodeURIComponent(orderId)}/cancel?account_id=${encodeURIComponent(accountId)}`,
+    { method: 'POST' },
+  ),
+  paperCreateCondition: (payload: Record<string, unknown>) =>
+    request<{ items: ConditionalOrder[] }>('/api/paper-trading/conditions', {
+      method: 'POST', body: JSON.stringify(payload),
+    }),
+  paperCancelCondition: (accountId: string, conditionId: string) => request<{ ok: boolean }>(
+    `/api/paper-trading/conditions/${encodeURIComponent(conditionId)}/cancel?account_id=${encodeURIComponent(accountId)}`,
+    { method: 'POST' },
+  ),
+  paperReplays: () => request<{ items: PaperAccount[] }>('/api/paper-trading/replays'),
+  paperCreateReplay: (payload: { name: string; start: string; end: string; initial_cash: number }) =>
+    request<PaperSnapshot>('/api/paper-trading/replays', {
+      method: 'POST', body: JSON.stringify(payload),
+    }),
+  paperControlReplay: (accountId: string, action: 'play' | 'pause' | 'archive', speed?: number) =>
+    request<PaperAccount>(`/api/paper-trading/replays/${encodeURIComponent(accountId)}/control`, {
+      method: 'POST', body: JSON.stringify({ action, speed }),
+    }),
+  paperStepReplay: (accountId: string, bars = 1) => request<PaperSnapshot>(
+    `/api/paper-trading/replays/${encodeURIComponent(accountId)}/step?bars=${bars}`,
+    { method: 'POST' },
+  ),
+  paperReplayBars: (accountId: string, symbol: string) => request<{ items: MinuteKlineRow[] }>(
+    `/api/paper-trading/replays/${encodeURIComponent(accountId)}/bars?symbol=${encodeURIComponent(symbol)}`,
+  ),
 
   // ===== Auth (访问认证) =====
   authStatus: () =>

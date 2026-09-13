@@ -15,6 +15,7 @@
     "test:stock-chat": "node --experimental-strip-types scripts/assert-stock-chat.mjs",
     "test:elliott": "node --experimental-strip-types scripts/assert-elliott.mjs",
     "test:format": "node --experimental-strip-types scripts/assert-format.mjs",
+    "test:paper-trading-time": "node --experimental-strip-types scripts/assert-paper-trading-time.mjs",
     "test:find-feel": "node --experimental-strip-types scripts/assert-find-feel.mjs"
   },
   "dependencies": {

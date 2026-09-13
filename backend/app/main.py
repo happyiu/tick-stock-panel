@@ -29,6 +29,7 @@ from app.api import (
     mining,
     monitor_rules,
     overview,
+    paper_trading,
     pipeline,
     regime,
     rps,
@@ -197,6 +198,22 @@ async def _application_lifespan(app: FastAPI):
         minute_refresh.start()
     except Exception as e:
         logger.warning("minute_refresh init failed: %s", e)
+
+    # ETF 模拟交易为独立的增量状态域; 即使页面关闭也持续维护活动账户.
+    try:
+        from app.services.paper_trading import (
+            PaperTradingEngine,
+            PaperTradingService,
+            PaperTradingStore,
+        )
+        paper_store = PaperTradingStore(store.data_dir)
+        paper_engine = PaperTradingEngine(paper_store, repo)
+        paper_service = PaperTradingService(paper_engine, repo, capset)
+        app.state.paper_trading_engine = paper_engine
+        app.state.paper_trading_service = paper_service
+        paper_service.start()
+    except Exception as e:
+        logger.warning("paper trading init failed: %s", e)
 
     # 停机缺口自检: 延迟后台扫描, 发现最近交易日的盘中快照/缺口时自动创建
     # 修复任务 (盘中停机→次日开实时场景, 不修则坏数据被"只刷今天"分支永久留存)
@@ -391,6 +408,9 @@ async def _application_lifespan(app: FastAPI):
         mrs = getattr(app.state, "minute_refresh", None)
         if mrs:
             mrs.stop()
+        pts = getattr(app.state, "paper_trading_service", None)
+        if pts:
+            pts.stop()
         logger.info("shutdown")
 
 
@@ -476,6 +496,7 @@ app.include_router(kline.router)
 app.include_router(watchlist.router)
 app.include_router(screener.router)
 app.include_router(backtest.router)
+app.include_router(paper_trading.router)
 app.include_router(factors.router)
 app.include_router(mining.router)
 app.include_router(intraday.router)

@@ -66,6 +66,14 @@ export const QK = {
     : ['strategy-link-options'] as const,
   strategyDetail:       (id: string) => ['strategy-detail', id] as const,
 
+  // ETF 模拟交易（独立 SSE 只失效当前账户）
+  paperSnapshot:        (accountId: string) => ['paper-trading', 'snapshot', accountId] as const,
+  paperRules:           ['paper-trading', 'rules'] as const,
+  paperReplays:         ['paper-trading', 'replays'] as const,
+  paperArchivedAccounts: ['paper-trading', 'archived-accounts'] as const,
+  paperReplayBars:      (accountId: string, symbol: string) =>
+                          ['paper-trading', 'replay-bars', accountId, symbol] as const,
+
   // Data / Pipeline
   dataStatus:           ['data-status'] as const,
   pipelineJobs:         ['pipeline-jobs'] as const,

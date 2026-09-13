@@ -35,6 +35,7 @@ const BUILTIN_PAGES: NavEntry[] = [
   { id: '/', label: '看板', type: 'builtin', visible: true },
   { id: '/watchlist', label: '自选股', type: 'builtin', visible: true },
   { id: '/watchlist-etf', label: '自选ETF', type: 'builtin', visible: true },
+  { id: '/etf-simulation', label: 'ETF模拟交易', type: 'builtin', visible: true },
   { id: '/screener', label: '策略', type: 'builtin', visible: true },
   { id: '/factors', label: '因子', type: 'builtin', visible: true },
   { id: '/backtest', label: '回测', type: 'builtin', visible: true },

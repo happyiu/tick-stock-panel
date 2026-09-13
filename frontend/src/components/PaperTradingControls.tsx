@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { ArrowLeftRight, CircleAlert, Link as LinkIcon, X } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { api, type PaperSnapshot } from '@/lib/api'
+import { api, type EtfTradingRule, type PaperSnapshot } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 
 export type PaperTradingTab = 'order' | 'condition'
@@ -69,10 +69,18 @@ export function PaperTradingSymbolField({
   )
 }
 
-function RuleEditor({ symbol, done }: { symbol: string; done: () => void | Promise<void> }) {
-  const [cycle, setCycle] = useState<'T0' | 'T1'>('T1')
-  const [lot, setLot] = useState(100)
-  const [tick, setTick] = useState(0.001)
+function RuleEditor({
+  symbol,
+  initialRule,
+  done,
+}: {
+  symbol: string
+  initialRule?: Pick<EtfTradingRule, 'settlement_cycle' | 'lot_size' | 'price_tick'>
+  done: () => void | Promise<void>
+}) {
+  const [cycle, setCycle] = useState<'T0' | 'T1'>(initialRule?.settlement_cycle === 'T0' ? 'T0' : 'T1')
+  const [lot, setLot] = useState(initialRule?.lot_size ?? 100)
+  const [tick, setTick] = useState(initialRule?.price_tick ?? 0.001)
   const save = useMutation({
     mutationFn: () => api.paperSetRule(symbol, { settlement_cycle: cycle, lot_size: lot, price_tick: tick }),
     onSuccess: () => { void done() },
@@ -81,7 +89,7 @@ function RuleEditor({ symbol, done }: { symbol: string; done: () => void | Promi
   return (
     <div className="rounded-btn border border-amber-500/30 bg-amber-500/5 p-2.5">
       <div className="mb-2 flex items-center gap-1 text-xs font-medium text-amber-500">
-        <CircleAlert className="h-3.5 w-3.5" />首次交易前确认制度
+        <CircleAlert className="h-3.5 w-3.5" />{initialRule ? '修改交易制度' : '默认 T+1，可修改'}
       </div>
       <div className="grid grid-cols-3 gap-2">
         <select className={input} value={cycle} onChange={event => setCycle(event.target.value as 'T0' | 'T1')}>
@@ -92,7 +100,7 @@ function RuleEditor({ symbol, done }: { symbol: string; done: () => void | Promi
         <input title="价格步长" className={input} type="number" step="0.001" value={tick} onChange={event => setTick(Number(event.target.value))} />
       </div>
       <button type="button" className={`${button} mt-2 h-8 text-xs`} disabled={save.isPending} onClick={() => save.mutate()}>
-        确认 {symbol} 制度
+        {initialRule ? '保存修改' : `确认 ${symbol} 制度`}
       </button>
     </div>
   )
@@ -116,8 +124,19 @@ function OrderForm({
   const [quantity, setQuantity] = useState(100)
   const [quantityUnit, setQuantityUnit] = useState<'shares' | 'lots'>('shares')
   const [limit, setLimit] = useState('')
+  const [editingRule, setEditingRule] = useState(false)
   const rules = useQuery({ queryKey: QK.paperRules, queryFn: api.paperRules })
-  const rule = rules.data?.items.find(item => item.symbol === symbol)
+  const configuredRule = rules.data?.items.find(item => item.symbol === symbol)
+  const rule: EtfTradingRule | undefined = symbol
+    ? (configuredRule ?? {
+      symbol,
+      settlement_cycle: 'T1',
+      lot_size: 100,
+      price_tick: 0.001,
+      updated_at: null,
+    })
+    : undefined
+  useEffect(() => setEditingRule(false), [symbol])
   const submit = useMutation({
     mutationFn: () => api.paperCreateOrder({
       account_id: data.account.id,
@@ -137,8 +156,21 @@ function OrderForm({
       <Field label="ETF 标的">
         <PaperTradingSymbolField value={symbol} choose={select} locked={symbolLocked} />
       </Field>
-      {symbol && !rule && <RuleEditor symbol={symbol} done={async () => { await rules.refetch(); await done() }} />}
-      {rule && <div className="text-xs text-secondary">{rule.settlement_cycle} · 每手 {rule.lot_size} 股 · 价格步长 {rule.price_tick}</div>}
+      {rule && (
+        <div className="flex items-center justify-between gap-2 text-xs text-secondary">
+          <span>{rule.settlement_cycle} · 每手 {rule.lot_size} 股 · 价格步长 {rule.price_tick}{configuredRule ? '' : ' · 默认'}</span>
+          <button type="button" className="shrink-0 text-accent hover:underline" onClick={() => setEditingRule(value => !value)}>
+            {editingRule ? '收起' : '修改'}
+          </button>
+        </div>
+      )}
+      {symbol && editingRule && (
+        <RuleEditor
+          symbol={symbol}
+          initialRule={configuredRule}
+          done={async () => { setEditingRule(false); await rules.refetch(); await done() }}
+        />
+      )}
       <div className="grid grid-cols-2 gap-2">
         <Field label="方向">
           <select className={input} value={side} onChange={event => setSide(event.target.value as 'buy' | 'sell')}>
@@ -193,7 +225,7 @@ function OrderForm({
         <span>可用 ¥{money(data.summary.cash)}</span>
         <span>可卖 {data.positions.find(item => item.symbol === symbol)?.available_quantity ?? 0} 股</span>
       </div>
-      <button type="button" className={primary} disabled={!rule || submit.isPending} onClick={() => submit.mutate()}>
+      <button type="button" className={primary} disabled={!symbol || submit.isPending} onClick={() => submit.mutate()}>
         {side === 'buy' ? '提交买单' : '提交卖单'}
       </button>
     </div>

@@ -85,6 +85,7 @@ const nav = [
   { to: '/',                label: '看板',     icon: LayoutDashboard },
   { to: '/watchlist',  label: '自选股',   icon: Star },
   { to: '/watchlist-etf', label: '自选ETF', icon: Star },
+  { to: '/etf-simulation', label: 'ETF模拟交易', icon: TrendingUp },
   { to: '/screener',   label: '策略',   icon: ScanSearch },
   { to: '/factors',    label: '因子', icon: Sigma },
   { to: '/backtest',   label: '回测', icon: History },
