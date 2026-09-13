@@ -6,6 +6,7 @@ import type { ECharts, EChartsOption } from 'echarts'
 import type { ChanlunAnalysis } from '@/lib/chanlun'
 import type { ElliottAnalysis } from '@/lib/elliott'
 import type { StockPreviewChanlunOverlayConfig, StockPreviewElliottOverlayConfig } from '@/lib/storage'
+import { zoomWindowEndingAt } from '@/lib/chartViewport'
 
 export interface OHLC {
   date: string
@@ -350,6 +351,7 @@ interface Props {
   symbol?: string
   linkedPrice?: number | null
   onDateClick?: (date: string) => void
+  selectedDate?: string | null
   onPriceDoubleClick?: (price: number, currentPrice: number) => void
   /** 默认可见蜡烛根数, 默认 60; 'all' = 初始适配显示全部返回数据 */
   visibleBars?: number | 'all'
@@ -1116,6 +1118,7 @@ export function EChartsCandlestick({
   symbol: _symbol,
   linkedPrice,
   onDateClick,
+  selectedDate,
   onPriceDoubleClick,
   visibleBars = 60,
   activeIndicators = [],
@@ -1215,6 +1218,25 @@ export function EChartsCandlestick({
       : Math.max(0, 100 - (visibleBars / Math.max(data.length, 1)) * 100)
     return { start, end: 100 }
   }, [visibleBars, data.length])
+  const initialZoomRef = useRef(initialZoom)
+  initialZoomRef.current = initialZoom
+
+  const moveChartToIndex = useCallback((index: number) => {
+    const chart = chartRef.current
+    const currentData = dataRef.current
+    const zoom = zoomWindowEndingAt(index, currentData.length, userZoomRef.current ?? initialZoomRef.current)
+    if (!chart || !zoom) return
+
+    // Category-axis dataZoom uses percentages. Move the selected candle to the
+    // right edge while preserving the current visible width.
+    const lastIndex = Math.max(currentData.length - 1, 1)
+    const nextZoom = {
+      start: (zoom.startValue / lastIndex) * 100,
+      end: currentData.length === 1 ? 100 : (zoom.endValue / lastIndex) * 100,
+    }
+    userZoomRef.current = nextZoom
+    chart.dispatchAction({ type: 'dataZoom', ...nextZoom })
+  }, [])
 
   // ===== 信息栏 HTML 内容 (基于 infoIdxRef.current) =====
   const getInfoBarHTML = useCallback(() => {
@@ -1352,18 +1374,18 @@ export function EChartsCandlestick({
       if (idxChanged) triggerInfoBarUpdate()
     })
 
-    chart.on('click', (params: any) => {
-      if (params.componentType === 'markPoint' && params.name) {
-        onDateClickRef.current?.(params.name)
-        return
-      }
-      if (params.seriesName !== 'K' || params.dataIndex == null) return
-      const d = dataRef.current
-      const idx = params.dataIndex
-      if (idx >= 0 && idx < d.length) {
-        onDateClickRef.current?.(d[idx].date)
-      }
-    })
+    const handleNativeChartClick = (event: MouseEvent) => {
+      const rect = el.getBoundingClientRect()
+      const pixel: [number, number] = [event.clientX - rect.left, event.clientY - rect.top]
+      if (!chart.containPixel({ gridIndex: 0 }, pixel)) return
+      const coordinate = chart.convertFromPixel({ xAxisIndex: 0, yAxisIndex: 0 }, pixel)
+      const index = Array.isArray(coordinate) ? Math.round(Number(coordinate[0])) : -1
+      const currentData = dataRef.current
+      if (index < 0 || index >= currentData.length) return
+      moveChartToIndex(index)
+      onDateClickRef.current?.(currentData[index].date)
+    }
+    el.addEventListener('click', handleNativeChartClick)
 
     const handlePriceDoubleClick = (event: { offsetX: number; offsetY: number }) => {
       const pixel: [number, number] = [event.offsetX, event.offsetY]
@@ -1400,8 +1422,8 @@ export function EChartsCandlestick({
 
     return () => {
       chart.off('updateAxisPointer')
-      chart.off('click')
       chart.off('dataZoom')
+      el.removeEventListener('click', handleNativeChartClick)
       hoverEl.removeEventListener('mouseenter', handlePointerEnter)
       hoverEl.removeEventListener('mouseleave', handlePointerLeave)
       chart.getZr().off('dblclick', handlePriceDoubleClick)
@@ -1541,6 +1563,12 @@ export function EChartsCandlestick({
       infoEl.innerHTML = getInfoBarHTML()
     }
   }, [data, markers, ranges, priceBands, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme, assetType, chanlunAnalysis, chanlunOverlay, elliottAnalysis, elliottOverlay])
+
+  useEffect(() => {
+    if (!selectedDate) return
+    const index = dateIndexMap.get(selectedDate)
+    if (index != null) moveChartToIndex(index)
+  }, [dateIndexMap, moveChartToIndex, selectedDate])
 
   // 渲染信息栏容器 (内容由 JS 直接写入)
   const initialHTML = useMemo(() => {

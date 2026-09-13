@@ -84,6 +84,7 @@ interface Props {
   visibleBars?: number | 'all'
   linkedPrice?: number | null
   onDateClick?: (date: string) => void
+  selectedDate?: string | null
   onPriceDoubleClick?: (price: number, currentPrice: number) => void
   /** 扩展数据列参数（逗号分隔 config_id.field_name），透传给 klineDaily 接口 */
   extColumns?: string
@@ -173,6 +174,7 @@ export function StockDailyKChart({
   visibleBars = 60,
   linkedPrice,
   onDateClick,
+  selectedDate,
   onPriceDoubleClick,
   extColumns,
   refetchIntervalMs,
@@ -488,6 +490,7 @@ export function StockDailyKChart({
           assetType={kline.data?.asset_type}
           linkedPrice={linkedPrice}
           onDateClick={onDateClick}
+          selectedDate={selectedDate}
           onPriceDoubleClick={onPriceDoubleClick}
           visibleBars={visibleBars}
           activeIndicators={activeIndicators}

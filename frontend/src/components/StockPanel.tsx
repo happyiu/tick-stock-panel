@@ -782,6 +782,10 @@ export function StockPanel({
       ? selectableRows[selectableRows.length - 2].close
       : undefined
   const selectedTradeDate = selectedBarKey?.slice(0, 10) ?? null
+  const analysisAsOf =
+    selectedBarKey ?? analysisResponse?.data_status?.data_through ?? analysisResponse?.rows.at(-1)?.date ?? null
+  const latestBarKey = selectableRows.at(-1)?.date ?? null
+  const canReturnLatest = selectedBarKey != null && latestBarKey != null && selectedBarKey !== latestBarKey
   if (!symbol) return null
 
   const rightPaneVisible = showIntraday && selectedBarKey && !rightPaneDismissed
@@ -839,6 +843,7 @@ export function StockPanel({
             showMarkerToggle={showMarkerToggle}
             linkedPrice={linkedPrice}
             onDateClick={handleDateClick}
+            selectedDate={selectedBarKey}
             onPriceDoubleClick={onPriceDoubleClick}
             visibleBars={visibleBars ?? (showIntraday ? 40 : 60)}
             extColumns={extColumns}
@@ -899,7 +904,18 @@ export function StockPanel({
               <div className={`flex h-full min-h-0 flex-col ${analysisTab === 'ai' ? 'overflow-hidden' : 'overflow-y-auto'}`}>
                 <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/70 px-2.5 py-1.5 text-[11px] text-muted">
                   <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    <span>截至 {formatAnalysisAsOf(analysisResponse?.data_status?.data_through ?? analysisResponse?.rows.at(-1)?.date ?? null, period)}</span>
+                    <span>截至 {formatAnalysisAsOf(analysisAsOf, period)}</span>
+                    {canReturnLatest && (
+                      <button
+                        type="button"
+                        onClick={handleLatest}
+                        className="text-accent transition-colors hover:text-accent/80"
+                        title="回到最新 K 线"
+                        aria-label="回到最新 K 线"
+                      >
+                        回到最新
+                      </button>
+                    )}
                     {analysisRefreshing ? <span>计算中…</span> : analysisSnapshot?.calculatedAt != null && <span>计算于 {formatAnalysisCalculatedAt(analysisSnapshot.calculatedAt)}</span>}
                     {analysisRefreshError && <span className="text-bear" title={analysisRefreshError.message}>计算失败，保留上次结果</span>}
                   </div>
@@ -952,7 +968,6 @@ export function StockPanel({
                   isLoading={analysisLoading}
                   error={analysisError}
                   onRetry={() => { void recalculateAnalysis() }}
-                  onLatest={handleLatest}
                   collapsed={analysisSections.technicalCollapsed}
                   onToggleCollapsed={() => toggleAnalysisSection('technicalCollapsed')}
                 />

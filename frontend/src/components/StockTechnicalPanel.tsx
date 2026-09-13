@@ -832,7 +832,6 @@ export interface StockTechnicalPanelProps {
   isLoading?: boolean
   error?: Error | null
   onRetry?: () => void
-  onLatest?: () => void
   collapsed?: boolean
   onToggleCollapsed?: () => void
 }
@@ -846,7 +845,6 @@ export function StockTechnicalPanel({
   isLoading = false,
   error,
   onRetry,
-  onLatest,
   collapsed = false,
   onToggleCollapsed,
 }: StockTechnicalPanelProps) {
@@ -885,7 +883,6 @@ export function StockTechnicalPanel({
     [assetType, bars, scoreIndicators, selectedIndex],
   )
   const indicatorsByKey = useMemo(() => new Map(indicators.map(indicator => [indicator.key, indicator])), [indicators])
-  const isLatest = selectedIndex >= 0 && selectedIndex === bars.length - 1
   const directionChange = scoreDelta(score?.direction_score, previousScore?.direction_score)
   const trendChange = scoreDelta(score?.trend, previousScore?.trend)
   const momentumChange = scoreDelta(score?.momentum, previousScore?.momentum)
@@ -952,15 +949,6 @@ export function StockTechnicalPanel({
                 <span className="text-xs font-medium text-foreground">技术指标</span>
                 <span className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[12px] text-secondary">{PERIOD_LABELS[period]}</span>
               </div>
-              {!collapsed && (
-                <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[13px] text-muted">
-                  {!isLatest && bars.length > 0 && (
-                    <button type="button" onClick={onLatest} className="text-accent transition-colors hover:text-foreground">
-                      回到最新
-                    </button>
-                  )}
-                </div>
-              )}
             </div>
             <div className="flex shrink-0 items-center gap-0.5">
               {!collapsed && (
