@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, RefreshCw, Clock, Gamepad2, LineChart, Star, RadioTower, Maximize2, Minimize2, Activity, ChevronLeft, ChevronRight } from 'lucide-react'
+import { X, RefreshCw, Clock, Gamepad2, LineChart, Star, RadioTower, Maximize2, Minimize2, Activity, ChevronLeft, ChevronRight, ArrowLeftRight } from 'lucide-react'
 import { api, type KlinePeriod, type KlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { cn } from '@/lib/cn'
@@ -12,6 +12,7 @@ import { WatchlistAddMenu } from '@/components/WatchlistAddMenu'
 import { StockMultiDayIntradayChart } from '@/components/StockMultiDayIntradayChart'
 import { DatePicker } from '@/components/DatePicker'
 import { RuleEditor } from '@/components/monitor/RuleEditor'
+import { PaperTradingSidePanel } from '@/components/PaperTradingControls'
 import { PriceAlertDialog } from '@/components/stock-analysis/PriceAlertDialog'
 import { FindFeelDialog, type FindFeelLockContext } from '@/components/FindFeelDialog'
 import { buildMonitorPriceLines } from '@/lib/price-alerts'
@@ -144,6 +145,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
   const [dateRange, setDateRange] = useState(() => previewKlineRange('1d', triggerInfo?.asset_type))
   const [chartSelectedDate, setChartSelectedDate] = useState<string | null>(null)
   const [findFeelOpen, setFindFeelOpen] = useState(false)
+  const [tradeOpen, setTradeOpen] = useState(false)
   const [findFeelRows, setFindFeelRows] = useState<KlineRow[]>([])
   const [findFeelLock, setFindFeelLock] = useState<FindFeelLockContext | null>(null)
   const [findFeelDate, setFindFeelDate] = useState<string | null>(null)
@@ -207,6 +209,17 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
     queryFn: api.monitorRulesList,
     enabled: !!symbol,
   })
+  const paperSnapshot = useQuery({
+    queryKey: QK.paperSnapshot('live'),
+    queryFn: () => api.paperSnapshot(),
+    enabled: tradeOpen && assetType === 'etf',
+  })
+  const paperData = paperSnapshot.data && 'account' in paperSnapshot.data
+    ? paperSnapshot.data
+    : undefined
+  const paperSetupRequired = Boolean(
+    paperSnapshot.data && 'setup_required' in paperSnapshot.data && paperSnapshot.data.setup_required,
+  )
   // 异动边缘: 与异动页同 queryKey 共享缓存; 该股处于观察/边缘/触发状态时在图表上方显示信息条
   const abnormal = useQuery({
     queryKey: QK.abnormalOverview(0.5, 300),
@@ -244,6 +257,15 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
       qc.invalidateQueries({ queryKey: ['watchlist-enriched'] })
     },
   })
+
+  useEffect(() => {
+    const accountId = paperData?.account.id
+    if (!tradeOpen || !accountId) return
+    const eventSource = new EventSource(`/api/paper-trading/stream?account_id=${encodeURIComponent(accountId)}`)
+    const invalidateSnapshot = () => { void qc.invalidateQueries({ queryKey: QK.paperSnapshot('live') }) }
+    eventSource.addEventListener('paper_revision', invalidateSnapshot)
+    return () => eventSource.close()
+  }, [paperData?.account.id, qc, tradeOpen])
 
   // ===== 切股导航 =====
   const navList = useMemo(() => uniqueNavItems(navListSource ?? []), [navListSource])
@@ -415,11 +437,22 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
 
   const handleOpenFindFeel = useCallback(() => {
     if (view !== 'daily' || assetType === 'index' || findFeelLocked) return
+    setTradeOpen(false)
     setFindFeelOpen(true)
     setFindFeelLock(null)
     setFindFeelDate(null)
     setFindFeelPhase('setup')
   }, [assetType, findFeelLocked, view])
+
+  const handleOpenTrade = useCallback(() => {
+    if (view !== 'daily' || assetType !== 'etf' || findFeelOpen) return
+    setTradeOpen(true)
+  }, [assetType, findFeelOpen, view])
+
+  const handleSetView = (next: PreviewView) => {
+    setView(next)
+    if (next !== 'daily') setTradeOpen(false)
+  }
 
   const handleFindFeelLock = useCallback((context: FindFeelLockContext) => {
     setFindFeelLock({ ...context, dateRange: { ...context.dateRange } })
@@ -445,6 +478,17 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
   const handleFindFeelRowsChange = useCallback((rows: KlineRow[]) => {
     setFindFeelRows(rows)
   }, [])
+
+  const tradeDisabled = view !== 'daily' || assetType !== 'etf' || findFeelOpen
+  const tradeTitle = findFeelOpen
+    ? '请先关闭调试'
+    : view !== 'daily'
+      ? '请切换到 K 线视图后交易'
+      : assetType === 'etf'
+        ? '打开 ETF 交易面板'
+        : assetType === 'stock'
+          ? '当前仅支持 ETF 模拟交易'
+          : '正在识别标的类型'
 
   return (
     <AnimatePresence>
@@ -633,7 +677,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                     role="tab"
                     aria-selected={view === 'daily'}
                     disabled={findFeelLocked}
-                    onClick={() => setView('daily')}
+                    onClick={() => handleSetView('daily')}
                     className={`inline-flex h-6 items-center gap-1 rounded px-2 text-[11px] transition-colors ${
                       view === 'daily' ? 'bg-surface text-foreground shadow-sm' : 'text-muted hover:text-secondary'
                     } disabled:cursor-not-allowed disabled:opacity-40`}
@@ -646,7 +690,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                     role="tab"
                     aria-selected={view === 'intraday'}
                     disabled={findFeelLocked}
-                    onClick={() => setView('intraday')}
+                    onClick={() => handleSetView('intraday')}
                     className={`inline-flex h-6 items-center gap-1 rounded px-2 text-[11px] transition-colors ${
                       view === 'intraday' ? 'bg-surface text-foreground shadow-sm' : 'text-muted hover:text-secondary'
                     } disabled:cursor-not-allowed disabled:opacity-40`}
@@ -687,6 +731,18 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                   title="加监控"
                 >
                   <RadioTower className="h-4 w-4" />
+                </button>
+
+                {/* 交易 */}
+                <button
+                  type="button"
+                  onClick={handleOpenTrade}
+                  disabled={tradeDisabled}
+                  className={`rounded-btn p-1.5 transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${tradeOpen ? 'bg-accent/10 text-accent' : 'text-accent hover:bg-accent/10'}`}
+                  title={tradeTitle}
+                  aria-label="交易"
+                >
+                  <ArrowLeftRight className="h-4 w-4" />
                 </button>
 
                 {/* 调试 */}
@@ -820,7 +876,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
               {view === 'daily' ? (
                 <div className={cn(
                   'flex h-full min-h-0 min-w-0 gap-3',
-                  findFeelOpen ? 'flex-col overflow-y-auto md:flex-row md:overflow-hidden' : 'overflow-hidden',
+                  findFeelOpen || tradeOpen ? 'flex-col overflow-y-auto md:flex-row md:overflow-hidden' : 'overflow-hidden',
                 )}>
                   <FindFeelDialog
                     open={findFeelOpen}
@@ -836,6 +892,18 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                     onProgress={handleFindFeelProgress}
                     onClose={handleFindFeelClose}
                   />
+                  {tradeOpen && (
+                    <PaperTradingSidePanel
+                      data={paperData}
+                      loading={paperSnapshot.isLoading}
+                      setupRequired={paperSetupRequired}
+                      error={paperSnapshot.isError}
+                      symbol={symbol}
+                      name={name}
+                      onClose={() => setTradeOpen(false)}
+                      done={() => { void paperSnapshot.refetch() }}
+                    />
+                  )}
                   <div className="min-h-0 min-w-0 flex-1">
                     <StockPanel
                       symbol={symbol}
