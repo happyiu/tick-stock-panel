@@ -7,10 +7,12 @@ import {
   DEFAULT_30M_DAYS,
   DEFAULT_INTRADAY_DAYS,
   defaultKlineRange,
+  filterKlineRowsThrough,
   klineDailyQueryOptions,
   klineMinuteQueryOptions,
   klineMinuteRangeQueryOptions,
   klinePeriodQueryOptions,
+  normalizeKlineBarKey,
   nextThirtyMinuteBoundaryAt,
 } from '@/lib/kline'
 import { StockInfoBar } from '@/components/StockInfoBar'
@@ -109,6 +111,10 @@ interface Props {
   className?: string
   /** 当用户点击蜡烛选中日期时回调（用于外部自动开启分时图）。 */
   onSelectDate?: (date: string) => void
+  /** 将当前图表选中 K 线回传给详情页玩法入口。 */
+  onSelectedDateChange?: (date: string | null) => void
+  /** 回传当前周期的完整 K 线快照，供详情页玩法在确认时复制。 */
+  onPeriodRowsChange?: (rows: KlineRow[]) => void
   /** 外部传入的日期范围 */
   dateRange?: { start: string; end: string }
   markers?: ChartMarker[]
@@ -140,9 +146,15 @@ interface Props {
   resizableSplit?: boolean
   /** 将日K与右侧面板限制在同一高度，并让两栏内容分别滚动。 */
   independentPaneScroll?: boolean
-  /** 主蜡烛图周期；信息条仍使用日线最新两根，避免周期切换改变当日涨跌口径。 */
+  /** 主蜡烛图周期；常态信息条仍使用日线口径，调试锁定时跟随可见周期截面。 */
   period?: KlinePeriod
   periodDays?: number
+  /** 调试进行中时，图表及其附属分析只显示到该根 K 线。 */
+  visibleThrough?: string | null
+  /** 调试设置开启时，不显示当前推进 K 线的日期。 */
+  hideCurrentDate?: boolean
+  /** 外部锁定的当前 K 线；用于逐根推进时保持详情页各区域同步。 */
+  lockedSelectedDate?: string | null
   /** 初始可见蜡烛根数 (默认 60); 'all' = 初始适配显示全部数据 (用于全区间回放) */
   visibleBars?: number | 'all'
 }
@@ -163,6 +175,8 @@ export function StockPanel({
   showIntradayChart = true,
   className,
   onSelectDate,
+  onSelectedDateChange,
+  onPeriodRowsChange,
   dateRange: externalDateRange,
   markers,
   ranges,
@@ -185,6 +199,9 @@ export function StockPanel({
   independentPaneScroll = false,
   period = '1d',
   periodDays = DEFAULT_30M_DAYS,
+  visibleThrough,
+  hideCurrentDate = false,
+  lockedSelectedDate,
   visibleBars,
 }: Props) {
   const resolvedRightPaneMode: StockPanelRightPaneMode = rightPaneMode
@@ -192,6 +209,7 @@ export function StockPanel({
   const includeTechnicalScores = resolvedRightPaneMode === 'technical'
   const [linkedPrice, setLinkedPrice] = useState<number | null>(null)
   const [selectedBarKey, setSelectedBarKey] = useState<string | null>(null)
+  const effectiveSelectedBarKey = lockedSelectedDate ?? selectedBarKey
   const [followsLatest, setFollowsLatest] = useState(true)
   const followsLatestRef = useRef(true)
   const [rightPaneDismissed, setRightPaneDismissed] = useState(false)
@@ -278,8 +296,12 @@ export function StockPanel({
   })
   const rawRows: KlineRow[] = kline.data?.rows ?? []
   const assetType = kline.data?.asset_type
+  const visibleRawRows = useMemo(
+    () => filterKlineRowsThrough(rawRows, '1d', visibleThrough),
+    [rawRows, visibleThrough],
+  )
   // OHLC 视图用于日期选中/昨收价推导 (与图表侧同口径)
-  const rows = useMemo(() => toOHLC(rawRows, '1d'), [rawRows])
+  const rows = useMemo(() => toOHLC(visibleRawRows, '1d'), [visibleRawRows])
   // 技术面板观察与左侧 K 线完全相同的 period query; 1d 时会与上面的日K query 共享缓存。
   const periodKline = useQuery({
     ...klinePeriodQueryOptions(symbol, period, chartDateRange, periodDays, extColumns, includeTechnicalScores),
@@ -289,11 +311,21 @@ export function StockPanel({
     ),
     refetchInterval: refetchIntervalMs,
   })
-  const periodRows = useMemo(
-    () => toOHLC(periodKline.data?.rows ?? [], period),
-    [period, periodKline.data?.rows],
+  const periodRawRows: KlineRow[] = useMemo(
+    () => periodKline.data?.rows ?? [],
+    [periodKline.data?.rows],
   )
+  const visiblePeriodRawRows = useMemo(
+    () => filterKlineRowsThrough(periodRawRows, period, visibleThrough),
+    [period, periodRawRows, visibleThrough],
+  )
+  const periodRows = useMemo(() => toOHLC(visiblePeriodRawRows, period), [period, visiblePeriodRawRows])
   const refetchPeriod = periodKline.refetch
+
+  useEffect(() => {
+    if (!onPeriodRowsChange) return
+    onPeriodRowsChange(periodKline.isPlaceholderData ? [] : periodRawRows)
+  }, [onPeriodRowsChange, periodKline.isPlaceholderData, periodRawRows])
   const analysisContextKey = `${symbol}|${resolvedRightPaneMode}|${period}|${chartDateRange.start}|${chartDateRange.end}|${periodDays}|${extColumns ?? ''}|${includeTechnicalScores}`
   const [analysisSnapshot, setAnalysisSnapshot] = useState<AnalysisSnapshot | null>(null)
   const [analysisRefreshing, setAnalysisRefreshing] = useState(false)
@@ -328,21 +360,42 @@ export function StockPanel({
   const analysisResponse = analysisSnapshot?.contextKey === analysisContextKey
     ? analysisSnapshot.response
     : undefined
+  const displayAnalysisResponse = useMemo(() => {
+    if (!analysisResponse || !visibleThrough) return analysisResponse
+    const boundary = normalizeKlineBarKey(visibleThrough, period)
+    const technicalScores = analysisResponse.technical_scores
+      ? {
+          ...analysisResponse.technical_scores,
+          rows: analysisResponse.technical_scores.rows.filter(row => (
+            normalizeKlineBarKey(row.as_of, period) <= boundary
+          )),
+        }
+      : undefined
+    const dataStatus = analysisResponse.data_status
+      ? { ...analysisResponse.data_status, data_through: visibleThrough }
+      : analysisResponse.data_status
+    return {
+      ...analysisResponse,
+      rows: filterKlineRowsThrough(analysisResponse.rows, period, visibleThrough),
+      technical_scores: technicalScores,
+      data_status: dataStatus,
+    }
+  }, [analysisResponse, period, visibleThrough])
   const analysisRows = useMemo(
-    () => toOHLC(analysisResponse?.rows ?? [], period),
-    [analysisResponse?.rows, period],
+    () => toOHLC(displayAnalysisResponse?.rows ?? [], period),
+    [displayAnalysisResponse?.rows, period],
   )
-  const analysisAssetType = analysisResponse?.asset_type ?? assetType
+  const analysisAssetType = displayAnalysisResponse?.asset_type ?? assetType
   const analysisLoading = !analysisResponse && (periodKline.isLoading || periodKline.isFetching)
   const analysisError = analysisRefreshError ?? periodKline.error
 
   const chanlunAnalysis = useMemo(
-    () => analyzeChanlun(analysisRows, selectedBarKey, { period, source: chanlunSource }),
-    [analysisRows, chanlunSource, period, selectedBarKey],
+    () => analyzeChanlun(analysisRows, effectiveSelectedBarKey, { period, source: chanlunSource }),
+    [analysisRows, chanlunSource, effectiveSelectedBarKey, period],
   )
   const elliottAnalysis = useMemo(
-    () => analyzeElliott(analysisRows, period, selectedBarKey),
-    [analysisRows, period, selectedBarKey],
+    () => analyzeElliott(analysisRows, period, effectiveSelectedBarKey),
+    [analysisRows, effectiveSelectedBarKey, period],
   )
   const priceZones: PriceZone[] = useMemo(
     () => buildPriceZones(chanlunAnalysis),
@@ -357,14 +410,14 @@ export function StockPanel({
       symbol,
       period,
       assetType: analysisAssetType,
-      selectedDate: selectedBarKey,
-      response: analysisResponse,
+      selectedDate: effectiveSelectedBarKey,
+      response: displayAnalysisResponse,
       chanlun: chanlunAnalysis,
       elliott: elliottAnalysis,
       priceZones,
       signalRisk: signalRiskContexts,
     }),
-    [analysisResponse, chanlunAnalysis, elliottAnalysis, period, priceZones, selectedBarKey, signalRiskContexts, symbol],
+    [chanlunAnalysis, displayAnalysisResponse, effectiveSelectedBarKey, elliottAnalysis, period, priceZones, signalRiskContexts, symbol],
   )
   const preferredSignal = useMemo(
     () => selectPreferredSignal(signalRiskContexts),
@@ -381,15 +434,15 @@ export function StockPanel({
       assetType: analysisAssetType,
       period,
       rows: analysisRows,
-      technicalScores: analysisResponse?.technical_scores,
-      dataStatus: analysisResponse?.data_status,
-      dataSource: analysisResponse?.source,
-      selectedDate: selectedBarKey,
+      technicalScores: displayAnalysisResponse?.technical_scores,
+      dataStatus: displayAnalysisResponse?.data_status,
+      dataSource: displayAnalysisResponse?.source,
+      selectedDate: effectiveSelectedBarKey,
     }
-  }, [analysisAssetType, analysisResponse, analysisRows, period, selectedBarKey, symbol])
-  const actionInputKey = `${symbol}|${period}|${chartDateRange.start}|${chartDateRange.end}|${selectedBarKey ?? ''}|${analysisSnapshot?.calculatedAt ?? 0}|${analysisRows.length}`
+  }, [analysisAssetType, analysisRows, displayAnalysisResponse, effectiveSelectedBarKey, period, symbol])
+  const actionInputKey = `${symbol}|${period}|${chartDateRange.start}|${chartDateRange.end}|${effectiveSelectedBarKey ?? ''}|${analysisSnapshot?.calculatedAt ?? 0}|${analysisRows.length}`
   const actionContextKey = analysisContextKey
-  const actionSnapshotKey = `${analysisContextKey}|${selectedBarKey ?? ''}`
+  const actionSnapshotKey = `${analysisContextKey}|${effectiveSelectedBarKey ?? ''}`
   const actionWorkerRef = useRef<Worker | null>(null)
   const actionWorkerRequestRef = useRef(0)
   const actionResultCacheRef = useRef(new Map<string, ActionSignalResult>())
@@ -557,10 +610,11 @@ export function StockPanel({
   )
   // 非日K查询尚未到达时用信息条的日线维持分栏高度，数据到达后自动切换到目标周期。
   const selectableRows = period !== '1d' && periodRows.length > 0 ? periodRows : rows
+  const infoRows = visibleThrough && period !== '1d' ? visiblePeriodRawRows : visibleRawRows
   const stockInfo = kline.data?.stock_info
   const name = kline.data?.name
 
-  const multiObservationEnd = selectedBarKey?.slice(0, 10) ?? chartDateRange.end
+  const multiObservationEnd = effectiveSelectedBarKey?.slice(0, 10) ?? chartDateRange.end
   const multiPeriodQueries = useQueries({
     queries: CHANLUN_PERIODS.map(candidatePeriod => {
       const endDate = new Date(`${multiObservationEnd}T12:00:00`)
@@ -574,7 +628,16 @@ export function StockPanel({
   })
   const multiPeriodAnalysis = useMemo(() => CHANLUN_PERIODS.map((candidatePeriod, index) => {
     const query = multiPeriodQueries[index]
-    const candidateRows = toOHLC(query.data?.rows ?? [], candidatePeriod)
+    const through = effectiveSelectedBarKey
+      ? candidatePeriod === '30m' && effectiveSelectedBarKey.length <= 10
+        ? `${effectiveSelectedBarKey} 23:59`
+        : effectiveSelectedBarKey
+      : null
+    const candidateRawRows = filterKlineRowsThrough(query.data?.rows ?? [], candidatePeriod, through)
+    const closedRows = period === '30m' && candidatePeriod !== '30m' && effectiveSelectedBarKey != null && effectiveSelectedBarKey.length > 10
+      ? candidateRawRows.filter(row => row.is_closed === true)
+      : candidateRawRows
+    const candidateRows = toOHLC(closedRows, candidatePeriod)
     return {
       period: candidatePeriod,
       analysis: query.data ? analyzeChanlun(candidateRows, null, { period: candidatePeriod, source: chanlunSource }) : undefined,
@@ -583,6 +646,8 @@ export function StockPanel({
     }
   }), [
     chanlunSource,
+    effectiveSelectedBarKey,
+    period,
     multiPeriodQueries[0].data, multiPeriodQueries[0].error, multiPeriodQueries[0].isFetching, multiPeriodQueries[0].isLoading,
     multiPeriodQueries[1].data, multiPeriodQueries[1].error, multiPeriodQueries[1].isFetching, multiPeriodQueries[1].isLoading,
     multiPeriodQueries[2].data, multiPeriodQueries[2].error, multiPeriodQueries[2].isFetching, multiPeriodQueries[2].isLoading,
@@ -593,7 +658,12 @@ export function StockPanel({
     if (assetType) onAssetTypeChange?.(assetType)
   }, [assetType, onAssetTypeChange])
 
+  useEffect(() => {
+    onSelectedDateChange?.(selectedBarKey)
+  }, [onSelectedDateChange, selectedBarKey])
+
   const handleDateClick = useCallback((date: string) => {
+    if (lockedSelectedDate != null) return
     const selected = period === '30m'
       ? date.replace('T', ' ').slice(0, 16)
       : date.slice(0, 10)
@@ -602,14 +672,15 @@ export function StockPanel({
     setRightPaneDismissed(false)
     // 兼容外部已有的分时自动打开回调，仍只传交易日。
     if (resolvedRightPaneMode === 'intraday') onSelectDate?.(selected.slice(0, 10))
-  }, [onSelectDate, period, resolvedRightPaneMode, selectableRows, setFollowingLatest])
+  }, [lockedSelectedDate, onSelectDate, period, resolvedRightPaneMode, selectableRows, setFollowingLatest])
 
   const handleLatest = useCallback(() => {
+    if (lockedSelectedDate != null) return
     const latestKey = selectableRows.at(-1)?.date ?? null
     if (!latestKey) return
     setFollowingLatest(true)
     setSelectedBarKey(latestKey)
-  }, [selectableRows, setFollowingLatest])
+  }, [lockedSelectedDate, selectableRows, setFollowingLatest])
 
   const clampSplitRatio = useCallback((value: number) => (
     clampSplitRatioValue(value)
@@ -761,34 +832,34 @@ export function StockPanel({
 
   // 目标周期数据到达后，如果此前只是用日线占位选中了日期，则回到该周期最新一根。
   useEffect(() => {
-    if (resolvedRightPaneMode !== 'technical' || period === '1d' || !periodRows.length || !selectedBarKey) return
+    if (resolvedRightPaneMode !== 'technical' || period === '1d' || !periodRows.length || !selectedBarKey || lockedSelectedDate != null) return
     if (!periodRows.some(row => row.date === selectedBarKey)) {
       setSelectedBarKey(null)
       setFollowingLatest(true)
     }
-  }, [period, periodRows, resolvedRightPaneMode, selectedBarKey, setFollowingLatest])
+  }, [lockedSelectedDate, period, periodRows, resolvedRightPaneMode, selectedBarKey, setFollowingLatest])
 
   // 右侧开启且无选中 K 线时，自动选中最新一根；点击历史 K 线后则保持历史截面。
   useEffect(() => {
-    if (showIntraday && !selectedBarKey && selectableRows.length > 0) {
+    if (showIntraday && !effectiveSelectedBarKey && selectableRows.length > 0) {
       setSelectedBarKey(selectableRows[selectableRows.length - 1].date)
     }
-  }, [selectableRows, selectedBarKey, showIntraday])
+  }, [effectiveSelectedBarKey, selectableRows, showIntraday])
 
-  const selectedIdx = selectedBarKey ? selectableRows.findIndex(r => r.date === selectedBarKey) : -1
+  const selectedIdx = effectiveSelectedBarKey ? selectableRows.findIndex(r => r.date === effectiveSelectedBarKey) : -1
   const prevClose = selectedIdx > 0
     ? selectableRows[selectedIdx - 1].close
     : selectableRows.length >= 2
       ? selectableRows[selectableRows.length - 2].close
       : undefined
-  const selectedTradeDate = selectedBarKey?.slice(0, 10) ?? null
+  const selectedTradeDate = effectiveSelectedBarKey?.slice(0, 10) ?? null
   const analysisAsOf =
-    selectedBarKey ?? analysisResponse?.data_status?.data_through ?? analysisResponse?.rows.at(-1)?.date ?? null
+    effectiveSelectedBarKey ?? displayAnalysisResponse?.data_status?.data_through ?? displayAnalysisResponse?.rows.at(-1)?.date ?? null
   const latestBarKey = selectableRows.at(-1)?.date ?? null
-  const canReturnLatest = selectedBarKey != null && latestBarKey != null && selectedBarKey !== latestBarKey
+  const canReturnLatest = effectiveSelectedBarKey != null && latestBarKey != null && effectiveSelectedBarKey !== latestBarKey
   if (!symbol) return null
 
-  const rightPaneVisible = showIntraday && selectedBarKey && !rightPaneDismissed
+  const rightPaneVisible = showIntraday && effectiveSelectedBarKey && !rightPaneDismissed
   const splitVisible = resizableSplit && rightPaneVisible
   const dailyPaneStyle = splitVisible
     ? { flex: `0 0 ${splitRatio * 100}%` }
@@ -807,7 +878,7 @@ export function StockPanel({
           symbol={symbol}
           name={name}
           stockInfo={stockInfo}
-          rows={rawRows}
+          rows={infoRows}
           assetType={assetType}
           fields={fields}
           onFieldsChange={handleFieldsChange}
@@ -843,7 +914,7 @@ export function StockPanel({
             showMarkerToggle={showMarkerToggle}
             linkedPrice={linkedPrice}
             onDateClick={handleDateClick}
-            selectedDate={selectedBarKey}
+            selectedDate={effectiveSelectedBarKey}
             onPriceDoubleClick={onPriceDoubleClick}
             visibleBars={visibleBars ?? (showIntraday ? 40 : 60)}
             extColumns={extColumns}
@@ -853,6 +924,8 @@ export function StockPanel({
             includeTechnicalScores={includeTechnicalScores}
             chanlunAnalysis={resolvedRightPaneMode === 'technical' ? chanlunAnalysis : undefined}
             elliottAnalysis={resolvedRightPaneMode === 'technical' ? elliottAnalysis : undefined}
+            visibleThrough={visibleThrough}
+            hideCurrentDate={hideCurrentDate}
           />
         </div>
 
@@ -904,7 +977,7 @@ export function StockPanel({
               <div className={`flex h-full min-h-0 flex-col ${analysisTab === 'ai' ? 'overflow-hidden' : 'overflow-y-auto'}`}>
                 <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/70 px-2.5 py-1.5 text-[11px] text-muted">
                   <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    <span>截至 {formatAnalysisAsOf(analysisAsOf, period)}</span>
+                    <span>{hideCurrentDate ? '截至 当前进度' : `截至 ${formatAnalysisAsOf(analysisAsOf, period)}`}</span>
                     {canReturnLatest && (
                       <button
                         type="button"
@@ -960,10 +1033,10 @@ export function StockPanel({
                 >
                 {analysisTab === 'indicator' && <>
                 <StockTechnicalPanel
-                  rows={analysisResponse?.rows ?? []}
-                  technicalScores={analysisResponse?.technical_scores}
+                  rows={displayAnalysisResponse?.rows ?? []}
+                  technicalScores={displayAnalysisResponse?.technical_scores}
                   period={period}
-                  selectedDate={selectedBarKey}
+                  selectedDate={effectiveSelectedBarKey}
                   assetType={analysisAssetType}
                   isLoading={analysisLoading}
                   error={analysisError}
@@ -1028,7 +1101,7 @@ export function StockPanel({
           </div>
         )}
 
-        {showIntraday && selectedBarKey && rightPaneDismissed && (
+        {showIntraday && effectiveSelectedBarKey && rightPaneDismissed && (
           <button
             type="button"
             onClick={() => setRightPaneDismissed(false)}

@@ -14,7 +14,8 @@
     "test:analysis-refresh": "node --experimental-strip-types scripts/assert-analysis-refresh.mjs",
     "test:stock-chat": "node --experimental-strip-types scripts/assert-stock-chat.mjs",
     "test:elliott": "node --experimental-strip-types scripts/assert-elliott.mjs",
-    "test:format": "node --experimental-strip-types scripts/assert-format.mjs"
+    "test:format": "node --experimental-strip-types scripts/assert-format.mjs",
+    "test:find-feel": "node --experimental-strip-types scripts/assert-find-feel.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

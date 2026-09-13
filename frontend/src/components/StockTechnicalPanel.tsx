@@ -743,34 +743,6 @@ function riskExtremeSummaries(category: TechnicalScoreCategory | undefined): Arr
   ]
 }
 
-function riskTrendLabel(change: number): string {
-  if (change <= -8) return '快速回落'
-  if (change < -1.5) return '正在下降'
-  if (change <= 1.5) return '基本稳定'
-  if (change < 8) return '正在上升'
-  return '快速上升'
-}
-
-function riskTrendSummary(category: TechnicalScoreCategory | undefined): { change: number; label: string } | null {
-  const change = numberValue(category?.risk_change_5)
-  if (change == null) return null
-  return { change, label: category?.risk_trend ?? riskTrendLabel(change) }
-}
-
-function riskTrendArrow(change: number): string {
-  return change < -1.5 ? '↓' : change > 1.5 ? '↑' : '→'
-}
-
-function riskTrendClass(change: number): string {
-  if (Math.abs(change) <= 1.5) return 'text-muted'
-  return change < 0 ? 'text-bull' : 'text-bear'
-}
-
-function riskTrendChangeText(change: number): string {
-  const rounded = Math.round(change)
-  return `${rounded > 0 ? '+' : ''}${rounded}`
-}
-
 function dimensionStateLabel(value: number | null | undefined, change: number | null): string {
   const direction = scoreDirectionLabel(value == null ? null : value)
   if (direction === '未评估' || change == null || Math.abs(change) < 0.5) return direction
@@ -892,7 +864,6 @@ export function StockTechnicalPanel({
   const currentConfidence = score?.available ? score.confidence : null
   const volumePriceCategory = score?.categories?.find(category => category.id === 'volume_price')
   const riskCategory = score?.categories?.find(category => category.id === 'volatility_risk')
-  const riskTrend = riskTrendSummary(riskCategory)
   const extremeSummaries = riskExtremeSummaries(riskCategory)
   const volumeStatus = indicatorsByKey.get('volume_price')?.status
   const volumeState = volumePriceCategory
@@ -1017,9 +988,7 @@ export function StockTechnicalPanel({
                     <div className="mt-1 flex flex-wrap items-baseline gap-1.5">
                       <span className="font-mono text-[13px] font-semibold tabular-nums text-warning">{score?.volatility_risk == null ? '—' : `${Math.round(score.volatility_risk)}/100`}</span>
                       <span className="text-[12px] text-warning">{riskCategory?.status ?? riskLabel(score?.volatility_risk)}</span>
-                      {riskTrend && <span className={`text-[12px] ${riskTrendClass(riskTrend.change)}`}>{riskTrendArrow(riskTrend.change)}{riskTrend.label}</span>}
                     </div>
-                    {riskTrend && <div className={`mt-1 text-[11px] ${riskTrendClass(riskTrend.change)}`}>近5周期 {riskTrendChangeText(riskTrend.change)} · {riskTrend.label}</div>}
                     {extremeSummaries.length > 0 && <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-secondary">{extremeSummaries.map(item => <span key={item.label}>{item.label} {Math.round(item.score)}/100</span>)}</div>}
                   </div>
                 </div>
@@ -1537,7 +1506,6 @@ function ETFCategoryIndicator({ category, indicator, compact = false }: { catego
 function ETFIndicatorScores({ score }: { score: TechnicalScoreRow | null }) {
   const categories = score?.categories ?? []
   const riskCategory = categories.find(category => category.id === 'volatility_risk')
-  const riskTrend = riskTrendSummary(riskCategory)
   const extremeSummaries = riskExtremeSummaries(riskCategory)
   const summary: Array<{
     label: string
@@ -1546,11 +1514,9 @@ function ETFIndicatorScores({ score }: { score: TechnicalScoreRow | null }) {
     available?: boolean
     coverage?: number
     display?: string
-    change?: number | null
-    trend?: string | null
   }> = [
     { label: '方向分', kind: 'direction' as const, value: score?.category_direction_score, available: score?.direction_available, coverage: score?.category_direction_coverage },
-    { label: '市场风险', kind: 'risk' as const, value: score?.category_risk_score, available: score?.risk_available, change: riskTrend?.change, trend: riskTrend?.label },
+    { label: '市场风险', kind: 'risk' as const, value: score?.category_risk_score, available: score?.risk_available },
     { label: '成交活跃度', kind: 'activity' as const, value: score?.category_activity_score, available: score?.activity_available },
   ]
   if (extremeSummaries.length > 0) {
@@ -1571,7 +1537,6 @@ function ETFIndicatorScores({ score }: { score: TechnicalScoreRow | null }) {
             <div className={`mt-1 font-mono text-[14px] font-semibold tabular-nums ${scoreSummaryClass(item)}`}>
               {item.available === false ? '数据不足' : item.display ?? categoryScoreText(item.kind, item.value)}
             </div>
-            {item.change != null && <div className={`mt-0.5 text-[10px] ${riskTrendClass(item.change)}`}>近5周期 {riskTrendChangeText(item.change)} · {riskTrendArrow(item.change)}{item.trend ?? '风险变化'}</div>}
             {item.coverage != null && item.coverage < 100 && <div className="mt-0.5 text-[10px] text-muted">覆盖 {item.coverage}%</div>}
           </div>
         ))}

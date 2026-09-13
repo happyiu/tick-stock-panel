@@ -4,7 +4,7 @@ import { Check, Settings2 } from 'lucide-react'
 import { type KlinePeriod, type KlineRow } from '@/lib/api'
 import type { ChanlunAnalysis } from '@/lib/chanlun'
 import type { ElliottAnalysis } from '@/lib/elliott'
-import { DEFAULT_30M_DAYS, defaultKlineRange, klinePeriodQueryOptions } from '@/lib/kline'
+import { DEFAULT_30M_DAYS, defaultKlineRange, filterKlineRowsThrough, klinePeriodQueryOptions } from '@/lib/kline'
 import { ChartDataNotice } from '@/components/ChartDataNotice'
 import { storage, type StockPreviewChanlunOverlayConfig, type StockPreviewElliottOverlayConfig } from '@/lib/storage'
 import {
@@ -98,6 +98,10 @@ interface Props {
   chanlunAnalysis?: ChanlunAnalysis
   /** 当前周期、当前历史截面的艾略特波浪摆动代理；覆盖层默认关闭。 */
   elliottAnalysis?: ElliottAnalysis
+  /** 调试进行中时只展示到当前推进的 K 线。 */
+  visibleThrough?: string | null
+  /** 调试设置开启时隐藏当前推进 K 线的日期。 */
+  hideCurrentDate?: boolean
 }
 
 function isValidRow(r: any): boolean {
@@ -183,6 +187,8 @@ export function StockDailyKChart({
   includeTechnicalScores = false,
   chanlunAnalysis,
   elliottAnalysis,
+  visibleThrough,
+  hideCurrentDate = false,
 }: Props) {
   const [activeIndicators, setActiveIndicators] = useState<string[]>(['vol'])
   const [showMarkers, setShowMarkers] = useState(true)
@@ -207,9 +213,13 @@ export function StockDailyKChart({
     refetchInterval: refetchIntervalMs,
   })
 
-  const rows = useMemo(() => toOHLC(kline.data?.rows ?? [], period), [kline.data?.rows, period])
+  const displayRawRows = useMemo(
+    () => filterKlineRowsThrough(kline.data?.rows ?? [], period, visibleThrough),
+    [kline.data?.rows, period, visibleThrough],
+  )
+  const rows = useMemo(() => toOHLC(displayRawRows, period), [displayRawRows, period])
   const stockInfo = kline.data?.stock_info
-  const limitMarkers = useMemo(() => buildLimitUpMarkers(kline.data?.rows ?? []), [kline.data?.rows])
+  const limitMarkers = useMemo(() => buildLimitUpMarkers(displayRawRows), [displayRawRows])
   const effectiveShowLimitMarkers = showLimitMarkers && period === '1d'
   const allMarkers = useMemo(() => [
     ...(markers ?? []),
@@ -263,9 +273,13 @@ export function StockDailyKChart({
 
   if (!symbol) return null
 
+  const dataStatus = visibleThrough && kline.data?.data_status
+    ? { ...kline.data.data_status, data_through: visibleThrough }
+    : kline.data?.data_status
+
   return (
     <div className={className} style={{ minHeight: chartHeight }}>
-      <ChartDataNotice status={kline.data?.data_status} />
+      <ChartDataNotice status={dataStatus} hideDate={hideCurrentDate} />
       {showIndicatorControls && rows.length > 0 && (
         <div className="flex items-center gap-1.5 px-1 pb-0.5">
           {SUB_CHARTS.map(ind => (
@@ -466,12 +480,12 @@ export function StockDailyKChart({
       )}
       {kline.isLoading && <div className="text-sm text-muted py-4">加载中…</div>}
       {kline.isError && <div className="text-sm text-danger py-2">K线加载失败</div>}
-      {!kline.isLoading && !kline.isError && (kline.data?.rows?.length ?? 0) === 0 && (
+      {!kline.isLoading && !kline.isError && displayRawRows.length === 0 && (
         <div className="flex items-center justify-center text-sm text-muted" style={{ height }}>
           {period === '30m' ? '暂无30分钟K数据，请检查图表行情数据源' : '暂无该周期K线数据'}
         </div>
       )}
-      {!kline.isLoading && !kline.isError && (kline.data?.rows?.length ?? 0) > 0 && rows.length === 0 && (
+      {!kline.isLoading && !kline.isError && displayRawRows.length > 0 && rows.length === 0 && (
         <div className="text-sm text-danger py-2">数据格式异常，请刷新页面</div>
       )}
       {rows.length > 0 && (
@@ -499,6 +513,7 @@ export function StockDailyKChart({
           chanlunOverlay={chanlunOverlay}
           elliottAnalysis={elliottAnalysis}
           elliottOverlay={elliottOverlay}
+          hideCurrentDate={hideCurrentDate}
         />
       )}
     </div>

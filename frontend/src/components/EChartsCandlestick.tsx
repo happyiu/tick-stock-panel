@@ -364,6 +364,8 @@ interface Props {
   chanlunOverlay?: StockPreviewChanlunOverlayConfig
   elliottAnalysis?: ElliottAnalysis
   elliottOverlay?: StockPreviewElliottOverlayConfig
+  /** 调试设置开启时隐藏当前推进 K 线的日期展示。 */
+  hideCurrentDate?: boolean
 }
 
 // 序列颜色 (双主题通用); 画布轴/网格/文字等主题相关色走 CT() 动态取
@@ -762,6 +764,7 @@ function buildOption(
   chanlunOverlay?: StockPreviewChanlunOverlayConfig,
   elliottAnalysis?: ElliottAnalysis,
   elliottOverlay?: StockPreviewElliottOverlayConfig,
+  hideCurrentDate = false,
 ): EChartsOption {
   const candleData = data.map(d => [d.open, d.close, d.low, d.high])
 
@@ -872,7 +875,13 @@ function buildOption(
   xAxes.push({
     type: 'category', data: dates, boundaryGap: true,
     axisLine: { lineStyle: { color: CT().border } },
-    axisLabel: { color: CT().text, fontSize: 10, fontFamily: 'JetBrains Mono, monospace' },
+    axisLabel: {
+      show: !hideCurrentDate,
+      color: CT().text,
+      fontSize: 10,
+      fontFamily: 'JetBrains Mono, monospace',
+    },
+    axisPointer: { label: { show: !hideCurrentDate } },
     axisTick: { show: false },
     splitLine: { show: false },
   })
@@ -1070,7 +1079,11 @@ function buildOption(
     backgroundColor: THEME.bg,
     tooltip: {
       trigger: 'axis',
-      axisPointer: { type: 'cross', crossStyle: { color: CT().crosshair } },
+      axisPointer: {
+        type: 'cross',
+        crossStyle: { color: CT().crosshair },
+        label: { show: !hideCurrentDate },
+      },
       backgroundColor: 'transparent',
       borderWidth: 0,
       textStyle: { fontSize: 0 },
@@ -1079,6 +1092,7 @@ function buildOption(
     axisPointer: {
       link: [{ xAxisIndex: 'all' }],
       label: {
+        show: !hideCurrentDate,
         backgroundColor: CT().crosshairLabelBg,
         fontFamily: 'JetBrains Mono, monospace',
         fontSize: 10,
@@ -1128,6 +1142,7 @@ export function EChartsCandlestick({
   chanlunOverlay,
   elliottAnalysis,
   elliottOverlay,
+  hideCurrentDate = false,
 }: Props) {
   const hoverSurfaceRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -1256,7 +1271,7 @@ export function EChartsCandlestick({
     const turnoverRate = floatShares && d.volume ? (d.volume * 100 / floatShares * 100) : null
 
     let html = `<div style="display:flex;align-items:center;gap:6px;padding:0 8px;font:11px 'JetBrains Mono',monospace;select:none;min-height:20px;flex-wrap:wrap">`
-    html += `<span style="color:${CT().text}">${d.date}</span>`
+    if (!hideCurrentDate) html += `<span style="color:${CT().text}">${d.date}</span>`
     html += `<span style="color:${CT().text}">开</span>`
     html += `<span style="color:${d.open >= d.close ? THEME.bear : THEME.bull}">${fmtAssetPrice(d.open, assetType)}</span>`
     html += `<span style="color:${CT().text}">高</span>`
@@ -1304,7 +1319,7 @@ export function EChartsCandlestick({
     }
 
     return html
-  }, [data, stockInfo, showMA, activeIndicators, assetType])
+  }, [data, stockInfo, showMA, activeIndicators, assetType, hideCurrentDate])
   getInfoBarHTMLRef.current = getInfoBarHTML
 
   // data/symbol 变化时重置 infoIdx:
@@ -1545,6 +1560,7 @@ export function EChartsCandlestick({
       chanlunOverlay,
       elliottAnalysis,
       elliottOverlay,
+      hideCurrentDate,
     )
 
     chart.setOption(option, true)
@@ -1562,7 +1578,7 @@ export function EChartsCandlestick({
     if (infoEl) {
       infoEl.innerHTML = getInfoBarHTML()
     }
-  }, [data, markers, ranges, priceBands, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme, assetType, chanlunAnalysis, chanlunOverlay, elliottAnalysis, elliottOverlay])
+  }, [data, markers, ranges, priceBands, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme, assetType, chanlunAnalysis, chanlunOverlay, elliottAnalysis, elliottOverlay, hideCurrentDate])
 
   useEffect(() => {
     if (!selectedDate) return
@@ -1578,7 +1594,7 @@ export function EChartsCandlestick({
     const floatShares = stockInfo?.float_shares
     const turnoverRate = floatShares && d.volume ? (d.volume * 100 / floatShares * 100) : null
     let html = `<div style="display:flex;align-items:center;gap:6px;padding:0 8px;font:11px 'JetBrains Mono',monospace;min-height:20px;flex-wrap:wrap">`
-    html += `<span style="color:${CT().text}">${d.date}</span>`
+    if (!hideCurrentDate) html += `<span style="color:${CT().text}">${d.date}</span>`
     html += `<span style="color:${CT().text}">开</span>`
     html += `<span style="color:${d.open >= d.close ? THEME.bear : THEME.bull}">${fmtAssetPrice(d.open, assetType)}</span>`
     html += `<span style="color:${CT().text}">高</span>`
@@ -1611,7 +1627,7 @@ export function EChartsCandlestick({
       html += `</div>`
     }
     return html
-  }, [data, stockInfo, showMA, activeIndicators, assetType])
+  }, [data, stockInfo, showMA, activeIndicators, assetType, hideCurrentDate])
 
   return (
     <div ref={hoverSurfaceRef} className="w-full">

@@ -14,6 +14,7 @@ import {
   type KlineDailyResponse,
   type KlinePeriod,
   type KlineResponse,
+  type KlineRow,
 } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 
@@ -30,6 +31,26 @@ export const KLINE_PERIOD_OPTIONS: { value: KlinePeriod; label: string }[] = [
   { value: '1w', label: '周 K' },
   { value: '1mo', label: '月 K' },
 ]
+
+/** 将不同周期的 K 线日期统一成图表使用的选中键。 */
+export function normalizeKlineBarKey(value: unknown, period: KlinePeriod): string {
+  const text = String(value ?? '')
+  return period === '30m'
+    ? text.replace('T', ' ').slice(0, 16)
+    : text.slice(0, 10)
+}
+
+/** 按周期裁剪到某一根 K 线，保留原始行字段以供信息条和分析使用。 */
+export function filterKlineRowsThrough(
+  rows: KlineRow[],
+  period: KlinePeriod,
+  through?: string | null,
+): KlineRow[] {
+  if (!through) return rows
+  const boundary = normalizeKlineBarKey(through, period)
+  if (!boundary) return rows
+  return rows.filter(row => normalizeKlineBarKey(row.date, period) <= boundary)
+}
 
 /** 各周期首次切换时采用的展示范围。30F 的精确交易日数量由后端 days 参数裁剪。 */
 export function defaultKlineRange(
