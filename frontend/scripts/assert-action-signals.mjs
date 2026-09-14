@@ -10,12 +10,13 @@ function barDate(index, period) {
 
 function makeScenario(period = '1d', count = 75) {
   const overrides = {
+    54: { close: 100.0, open: 100.2, high: 100.5, low: 99.5, volume: 180, rsi_14: 20, macd_hist: -1.0, atr14: 0.8, ma20: 100 },
     55: { close: 99.0, open: 99.3, high: 99.6, low: 98.8, rsi_14: 31, macd_hist: -0.4, atr14: 0.5, ma20: 100 },
     56: { close: 98.5, open: 99.0, high: 99.2, low: 98.2, rsi_14: 26, macd_hist: -0.8, atr14: 0.5, ma20: 100 },
     57: { close: 98.8, open: 98.5, high: 99.1, low: 98.6, rsi_14: 27, macd_hist: -0.7, atr14: 0.5, ma20: 100 },
-    58: { close: 99.4, open: 98.8, high: 99.8, low: 99.2, rsi_14: 30, macd_hist: -0.5, atr14: 0.5, ma20: 100 },
-    59: { close: 99.8, open: 99.4, high: 100.1, low: 99.5, rsi_14: 34, macd_hist: -0.4, atr14: 0.5, ma20: 100 },
-    60: { close: 99.3, open: 99.7, high: 99.9, low: 99.0, rsi_14: 32, macd_hist: -0.6, atr14: 0.5, ma20: 100 },
+    58: { close: 99.0, open: 98.8, high: 99.4, low: 98.8, volume: 100, rsi_14: 30, macd_hist: -0.5, atr14: 0.8, ma20: 100 },
+    59: { close: 99.4, open: 99.2, high: 99.8, low: 99.2, rsi_14: 34, macd_hist: -0.4, atr14: 1.0, ma20: 100 },
+    60: { close: 99.3, open: 99.7, high: 99.9, low: 98.6, rsi_14: 32, macd_hist: -0.6, atr14: 0.5, ma20: 100 },
     61: { close: 99.4, open: 99.2, high: 100.0, low: 99.2, rsi_14: 34, macd_hist: -0.5, atr14: 0.5, ma20: 100 },
     62: { close: 99.9, open: 99.5, high: 100.1, low: 99.6, volume: 120, rsi_14: 37, macd_hist: -0.4, atr14: 0.5, ma20: 100 },
     63: { close: 100.0, open: 99.8, high: 100.5, low: 99.8, rsi_14: 40, macd_hist: -0.2, atr14: 0.8, ma20: 100.2 },
@@ -140,6 +141,49 @@ function makeHighWatchLifecycleBars(period = '1d', refresh = false) {
   })
 }
 
+function makeEqualLowScenario(period = '1d') {
+  const rows = makeScenario(period).map(bar => ({ ...bar }))
+  rows[54] = { ...rows[54], low: 98.0 }
+  rows[58] = { ...rows[58], low: 98.1 }
+  rows[60] = { ...rows[60], close: 99.3, open: 99.0, high: 99.7, low: 98.8, rsi_14: 32, macd_hist: -0.2, atr14: 1.0, ma20: 100 }
+  return rows
+}
+
+function makeAuxiliaryOnlyScenario(period = '1d') {
+  const rows = makeScenario(period).map(bar => ({ ...bar }))
+  rows[54] = { ...rows[54], rsi_14: 50, macd_hist: 0, volume: 180 }
+  rows[55] = { ...rows[55], rsi_14: 31 }
+  rows[56] = { ...rows[56], rsi_14: 50, macd_hist: 0, volume: 100 }
+  rows[57] = { ...rows[57], rsi_14: 50, macd_hist: 0 }
+  rows[58] = { ...rows[58], rsi_14: 50, macd_hist: 0 }
+  rows[59] = { ...rows[59], rsi_14: 50, macd_hist: 0 }
+  return rows
+}
+
+function makeDelayedReversalScenario(period = '1d') {
+  const rows = makeScenario(period).map(bar => ({ ...bar }))
+  rows[58] = { ...rows[58], close: 99.3, open: 99.0, high: 99.6, low: 98.7 }
+  return rows
+}
+
+function makeChasedTrialScenario(period = '1d') {
+  const rows = makeScenario(period).map(bar => ({ ...bar }))
+  rows[59] = { ...rows[59], close: 100.6, open: 100.3, high: 100.8, low: 100.1 }
+  return rows
+}
+
+function makeVolumeRatioMismatchScenario(period = '1d') {
+  const rows = makeScenario(period).map(bar => ({ ...bar }))
+  for (const index of [49, 50, 51, 52, 53]) rows[index] = { ...rows[index], volume: 200 }
+  rows[54] = { ...rows[54], volume: 100, rsi_14: 50, macd_hist: -1.0, close: 100, high: 100.8 }
+  rows[55] = { ...rows[55], volume: 50, rsi_14: 31, ma20: 100.5, close: 99.8, high: 100.0, low: 98.8 }
+  rows[56] = { ...rows[56], volume: 80, rsi_14: 50, macd_hist: -0.8, close: 99.5, high: 99.8, low: 98.2 }
+  rows[57] = { ...rows[57], rsi_14: 50, close: 99.4 }
+  rows[58] = { ...rows[58], rsi_14: 50, close: 99.3 }
+  rows[59] = { ...rows[59], rsi_14: 50, macd_hist: -0.4, close: 99.4 }
+  return rows
+}
+
 for (const assetType of ['stock', 'etf']) {
   for (const period of ['1d', '30m']) {
     const rows = makeScenario(period)
@@ -151,12 +195,13 @@ for (const assetType of ['stock', 'etf']) {
     assert.equal(result.events[0].trigger, 'structure')
     assert.equal(result.events[1].trigger, 'neckline_break')
     assert.ok(result.events[0].reasons.some(reason => reason.includes('动能衰竭')))
+    assert.ok(result.events[0].reasons.some(reason => reason.includes('探底量能收缩')))
     assert.ok(result.events[2].reasons.some(reason => reason.includes('ROC')))
     assert.equal(new Set(result.events.map(event => event.id)).size, result.events.length)
 
-    const observation = buildActionSignals({ assetType, period, rows: rows.slice(0, 62) })
+    const observation = buildActionSignals({ assetType, period, rows: rows.slice(0, ACTION_SIGNAL_WARMUP_BARS - 1) })
     assert.equal(observation.events.length, 0, `${assetType}/${period} 超跌阶段不能直接买入`)
-    assert.equal(observation.current.action, 'bottom_observe')
+    assert.equal(observation.status, 'blocked')
 
     const beforeExit = buildActionSignals({ assetType, period, rows: rows.slice(0, 74) })
     assert.equal(beforeExit.events.at(-1)?.type, 'reduce', `${assetType}/${period} 第一次破防不能直接退出`)
@@ -212,6 +257,23 @@ for (const period of ['1d', '30m']) {
 
   const refreshedHighWatch = buildActionSignals({ assetType: 'stock', period, rows: makeHighWatchLifecycleBars(period, true) })
   assert.equal(refreshedHighWatch.current.action, 'top_observe', `${period} 新的高位证据应刷新观察期限`)
+
+  const equalLow = buildActionSignals({ assetType: 'stock', period, rows: makeEqualLowScenario(period) })
+  assert.equal(equalLow.events[0]?.type, 'attack', `${period} 近似等低重测也应允许试仓`)
+  assert.ok(equalLow.events[0]?.reasons.some(reason => reason.includes('近似等低')))
+
+  const delayedReversal = buildActionSignals({ assetType: 'stock', period, rows: makeDelayedReversalScenario(period) })
+  assert.equal(delayedReversal.events[0]?.type, 'attack', `${period} 底部后窗口内反转应允许试仓`)
+  assert.ok(delayedReversal.events[0]?.reasons.some(reason => reason.includes('上涨反转')))
+
+  const auxiliaryOnly = buildActionSignals({ assetType: 'stock', period, rows: makeAuxiliaryOnlyScenario(period) })
+  assert.equal(auxiliaryOnly.events.some(event => event.type === 'attack'), false, `${period} 只有辅助证据不能触发试仓`)
+
+  const chasedTrial = buildActionSignals({ assetType: 'stock', period, rows: makeChasedTrialScenario(period) })
+  assert.equal(chasedTrial.events.some(event => event.type === 'attack'), false, `${period} 风险过高或距底部过远不能追高试仓`)
+
+  const volumeRatioMismatch = buildActionSignals({ assetType: 'stock', period, rows: makeVolumeRatioMismatchScenario(period) })
+  assert.equal(volumeRatioMismatch.events.some(event => event.type === 'attack'), false, `${period} 原始量缩但RVOL未收缩时不能仅凭量能加分触发试仓`)
 }
 
 const insufficient = buildActionSignals({ period: '30m', rows: makeScenario('30m').slice(0, ACTION_SIGNAL_WARMUP_BARS - 1) })

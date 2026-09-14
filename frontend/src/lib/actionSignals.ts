@@ -1,7 +1,7 @@
 import type { ChanlunBarInput } from './chanlun.ts'
 import type { ChartDataStatus, KlinePeriod, TechnicalScoreRow, TechnicalScores } from './api.ts'
 
-export const ACTION_SIGNAL_VERSION = 'action-signal-v3' as const
+export const ACTION_SIGNAL_VERSION = 'action-signal-v4' as const
 export const ACTION_SIGNAL_WARMUP_BARS = 60
 
 const OBSERVATION_MAX_AGE = 25
@@ -13,6 +13,22 @@ const ROC_HISTORY_MIN_SAMPLES = 30
 const ROC_HISTORY_FLAT_BAND = 0.0005
 const BOTTOM_MA20_ATR_THRESHOLD = -1.2
 const BOTTOM_ROC20_PERCENTILE_THRESHOLD = 15
+const TRIAL_PIVOT_MAX_AGE = 8
+const TRIAL_REVERSAL_WINDOW = 3
+const TRIAL_EQUAL_LOW_ATR_TOLERANCE = 0.2
+const TRIAL_NEW_LOW_ATR_MARGIN = 0.1
+const TRIAL_RSI_IMPROVEMENT = 3
+const TRIAL_ROC_IMPROVEMENT = 0.015
+const TRIAL_ROC_PERCENTILE_IMPROVEMENT = 10
+const TRIAL_MACD_RISING_MOVES = 2
+const TRIAL_IMPULSE_CONTRACTION = 0.85
+const TRIAL_VOLUME_CONTRACTION = 0.9
+const TRIAL_EXHAUSTION_SCORE = 2
+const TRIAL_DEFENSE_ATR_BUFFER = 0.2
+const TRIAL_MAX_RISK_ATR = 1.5
+const TRIAL_MAX_BOTTOM_DISTANCE_ATR = 1.8
+const TRIAL_MAX_TRIGGER_DISTANCE_ATR = 0.6
+const TRIAL_NUMERIC_EPSILON = 1e-9
 
 export type ActionSignalType = 'attack' | 'add' | 'reduce' | 'retreat'
 export type ActionPhase = 'wait' | 'bullish' | 'defensive'
@@ -128,6 +144,35 @@ interface HigherLowStructure {
   key: string
   neckline: number | null
   necklineBreak: boolean
+}
+
+interface BottomPressureTest {
+  previousIndex: number
+  latestIndex: number
+  previousLow: number
+  latestLow: number
+  mode: 'new_low' | 'equal_low'
+  key: string
+}
+
+interface BottomExhaustion {
+  confirmed: boolean
+  score: number
+  coreMomentumImproved: boolean
+  pressure: BottomPressureTest | null
+  reasons: string[]
+}
+
+interface BullishReversalEvidence {
+  index: number
+  triggerPrice: number
+  label: string
+}
+
+interface TrialDefenseCandidate {
+  pivotIndex: number
+  low: number
+  price: number
 }
 
 interface ReplayState {
@@ -337,12 +382,53 @@ function isTopNeutral(features: ActionFeatures, close: number): boolean {
     && distance != null && distance < 0.5
 }
 
-function isBullishReversal(bars: ActionBar[], index: number): boolean {
+function hasLongLowerShadow(bar: ActionBar): boolean {
+  const range = bar.high - bar.low
+  if (!positive(range)) return false
+  const body = Math.abs(bar.close - bar.open)
+  const lowerShadow = Math.min(bar.open, bar.close) - bar.low
+  return lowerShadow >= Math.max(body * 1.5, range * 0.4)
+}
+
+function bullishReversalEvidenceAt(bars: ActionBar[], index: number): BullishReversalEvidence | null {
   const bar = bars[index]
   const previous = bars[index - 1]
-  if (!bar || !previous) return false
+  if (!bar || !previous) return null
   const range = bar.high - bar.low
-  return bar.close >= bar.open && bar.close > previous.close && (range <= 0 || bar.close >= bar.low + range * 0.55)
+  const closeInTop35 = bar.close > bar.open && positive(range) && bar.close >= bar.low + range * 0.65
+  const previousHighBreak = bar.close > previous.high
+  const recentHighs = bars.slice(Math.max(0, index - 2), index).map(item => item.high)
+  const recentTwoBarHighBreak = recentHighs.length >= 2 && bar.close > Math.max(...recentHighs)
+  const bullishEngulfing = bar.close > bar.open
+    && previous.close < previous.open
+    && bar.open <= previous.close
+    && bar.close >= previous.open
+  const lowerShadowConfirmed = hasLongLowerShadow(previous)
+    && bar.close >= bar.open
+    && bar.close > previous.close
+
+  const evidence = closeInTop35
+    ? '阳线收盘位于振幅上方35%'
+    : previousHighBreak
+      ? '收盘突破前一根高点'
+      : recentTwoBarHighBreak
+        ? '收盘突破近两根高点'
+        : bullishEngulfing
+          ? '看涨吞没'
+          : lowerShadowConfirmed
+            ? '长下影后续确认'
+            : null
+  return evidence == null ? null : { index, triggerPrice: bar.close, label: evidence }
+}
+
+function bullishReversalWithin(bars: ActionBar[], pivotIndex: number, index: number): BullishReversalEvidence | null {
+  const end = Math.min(index, pivotIndex + TRIAL_REVERSAL_WINDOW)
+  let latest: BullishReversalEvidence | null = null
+  for (let cursor = pivotIndex + 1; cursor <= end; cursor += 1) {
+    const evidence = bullishReversalEvidenceAt(bars, cursor)
+    if (evidence != null) latest = evidence
+  }
+  return latest
 }
 
 function isBearishReversal(bars: ActionBar[], index: number): boolean {
@@ -374,34 +460,152 @@ function confirmedPivotIndices(bars: ActionBar[], index: number, type: 'bottom' 
   return result
 }
 
-function lowerLowAt(bars: ActionBar[], index: number): boolean {
-  const prior = bars.slice(Math.max(0, index - 5), index).map(bar => bar.low)
-  return prior.length >= 3 && bars[index].low <= Math.min(...prior)
-}
-
 function higherHighAt(bars: ActionBar[], index: number): boolean {
   const prior = bars.slice(Math.max(0, index - 5), index).map(bar => bar.high)
   return prior.length >= 3 && bars[index].high >= Math.max(...prior)
 }
 
-function bottomExhaustion(bars: ActionBar[], index: number, current: ActionFeatures, roc20Percentiles?: Map<string, number>): boolean {
-  if (index < 3 || !isBullishReversal(bars, index)) return false
-  const pivots = confirmedPivotIndices(bars, index, 'bottom')
-  for (const pivotIndex of pivots.slice(-3).reverse()) {
-    if (index - pivotIndex < 2 || index - pivotIndex > 8 || !lowerLowAt(bars, pivotIndex)) continue
-    const pivot = featureAt(bars, pivotIndex, roc20Percentiles)
-    const before = featureAt(bars, pivotIndex - 1, roc20Percentiles)
-    const improved = countTrue([
-      pivot.rsi != null && before.rsi != null && (pivot.rsi > before.rsi + 1 || (current.rsi != null && current.rsi > pivot.rsi + 1)),
-      pivot.roc5 != null && before.roc5 != null && (pivot.roc5 > before.roc5 || (current.roc5 != null && current.roc5 > pivot.roc5)),
-      pivot.roc20 != null && before.roc20 != null && (pivot.roc20 > before.roc20 || (current.roc20 != null && current.roc20 > pivot.roc20)),
-      pivot.macdHist != null && before.macdHist != null && (pivot.macdHist > before.macdHist || (current.macdHist != null && current.macdHist > pivot.macdHist)),
-      pivot.rangeRatio != null && current.rangeRatio != null && current.rangeRatio < pivot.rangeRatio,
-      pivot.volumeRatio != null && current.volumeRatio != null && current.volumeRatio > pivot.volumeRatio,
-    ]) >= 2
-    if (improved) return true
+function previousLowReference(bars: ActionBar[], latestIndex: number): number | null {
+  const from = Math.max(0, latestIndex - 8)
+  const to = latestIndex - PIVOT_SPAN
+  if (to - from + 1 < 3) return null
+  let lowestIndex = from
+  for (let cursor = from + 1; cursor <= to; cursor += 1) {
+    if (bars[cursor].low <= bars[lowestIndex].low) lowestIndex = cursor
   }
-  return false
+  return lowestIndex
+}
+
+function bottomPressureTest(bars: ActionBar[], index: number, current: ActionFeatures): BottomPressureTest | null {
+  const pivots = confirmedPivotIndices(bars, index, 'bottom')
+  for (let pivotOffset = pivots.length - 1; pivotOffset >= 0; pivotOffset -= 1) {
+    const latestIndex = pivots[pivotOffset]
+    if (index - latestIndex < PIVOT_SPAN || index - latestIndex > TRIAL_PIVOT_MAX_AGE) continue
+    const previousIndex = pivots[pivotOffset - 1] ?? previousLowReference(bars, latestIndex)
+    if (previousIndex == null || previousIndex >= latestIndex) continue
+    const latestLow = bars[latestIndex].low
+    const previousLow = bars[previousIndex].low
+    const latestFeatures = featureAt(bars, latestIndex)
+    const atr = positive(current.atr) ? current.atr : latestFeatures.atr
+    if (!positive(atr)) continue
+    const difference = latestLow - previousLow
+    const mode = difference <= -atr * TRIAL_NEW_LOW_ATR_MARGIN + TRIAL_NUMERIC_EPSILON
+      ? 'new_low'
+      : Math.abs(difference) <= atr * TRIAL_EQUAL_LOW_ATR_TOLERANCE + TRIAL_NUMERIC_EPSILON
+        ? 'equal_low'
+        : null
+    if (mode != null) {
+      return {
+        previousIndex,
+        latestIndex,
+        previousLow,
+        latestLow,
+        mode,
+        key: `${previousIndex}:${latestIndex}`,
+      }
+    }
+  }
+  return null
+}
+
+function downImpulseAt(bars: ActionBar[], index: number, atr: number | null): number | null {
+  if (!positive(atr)) return null
+  const losses: number[] = []
+  for (let cursor = Math.max(1, index - 2); cursor <= index; cursor += 1) {
+    const previousClose = bars[cursor - 1]?.close
+    const close = bars[cursor]?.close
+    if (!positive(previousClose) || !positive(close)) continue
+    const change = close - previousClose
+    if (change < 0) losses.push(Math.abs(change))
+  }
+  return losses.length ? average(losses)! / atr : null
+}
+
+function rsiRisingLastThree(bars: ActionBar[], index: number, roc20Percentiles?: Map<string, number>): boolean {
+  if (index < 2) return false
+  const values = [index - 2, index - 1, index]
+    .map(cursor => featureAt(bars, cursor, roc20Percentiles).rsi)
+  return values.every(finite) && values[0]! < values[1]! && values[1]! < values[2]!
+}
+
+function macdRisingMoves(bars: ActionBar[], index: number, roc20Percentiles?: Map<string, number>): number {
+  let moves = 0
+  for (let cursor = Math.max(1, index - 2); cursor <= index; cursor += 1) {
+    const previous = featureAt(bars, cursor - 1, roc20Percentiles).macdHist
+    const current = featureAt(bars, cursor, roc20Percentiles).macdHist
+    if (finite(previous) && finite(current) && current > previous) moves += 1
+  }
+  return moves
+}
+
+function evaluateBottomExhaustion(
+  bars: ActionBar[],
+  index: number,
+  current: ActionFeatures,
+  roc20Percentiles?: Map<string, number>,
+): BottomExhaustion {
+  const pressure = index < 3 ? null : bottomPressureTest(bars, index, current)
+  if (!pressure) {
+    return { confirmed: false, score: 0, coreMomentumImproved: false, pressure: null, reasons: [] }
+  }
+
+  const previous = featureAt(bars, pressure.previousIndex, roc20Percentiles)
+  const latest = featureAt(bars, pressure.latestIndex, roc20Percentiles)
+  const rsiImproved = (previous.rsi != null
+    && ((latest.rsi != null && latest.rsi >= previous.rsi + TRIAL_RSI_IMPROVEMENT)
+      || (current.rsi != null && current.rsi >= previous.rsi + TRIAL_RSI_IMPROVEMENT)))
+    || rsiRisingLastThree(bars, index, roc20Percentiles)
+  const rocImproved = previous.roc20 != null
+    && ((latest.roc20 != null && latest.roc20 >= previous.roc20 + TRIAL_ROC_IMPROVEMENT)
+      || (current.roc20 != null && current.roc20 >= previous.roc20 + TRIAL_ROC_IMPROVEMENT)
+      || (latest.roc20Percentile != null
+        && previous.roc20Percentile != null
+        && latest.roc20Percentile >= previous.roc20Percentile + TRIAL_ROC_PERCENTILE_IMPROVEMENT)
+      || (current.roc20Percentile != null
+        && previous.roc20Percentile != null
+        && current.roc20Percentile >= previous.roc20Percentile + TRIAL_ROC_PERCENTILE_IMPROVEMENT))
+  const macdImproved = previous.macdHist != null
+    && ((latest.macdHist != null && latest.macdHist > previous.macdHist)
+      || (current.macdHist != null && current.macdHist > previous.macdHist))
+    && macdRisingMoves(bars, index, roc20Percentiles) >= TRIAL_MACD_RISING_MOVES
+  const previousImpulse = downImpulseAt(bars, pressure.previousIndex, previous.atr)
+  const latestImpulse = downImpulseAt(bars, pressure.latestIndex, latest.atr)
+  const impulseContracted = previousImpulse != null
+    && latestImpulse != null
+    && previousImpulse > 0
+    && latestImpulse <= previousImpulse * TRIAL_IMPULSE_CONTRACTION
+  const volumeContracted = positive(previous.volumeRatio)
+    && positive(latest.volumeRatio)
+    && latest.volumeRatio <= previous.volumeRatio * TRIAL_VOLUME_CONTRACTION
+  const coreMomentumImproved = countTrue([rsiImproved, rocImproved, macdImproved]) >= 1
+  const score = (rsiImproved ? 1 : 0)
+    + (rocImproved ? 1 : 0)
+    + (macdImproved ? 1 : 0)
+    + (impulseContracted ? 0.5 : 0)
+    + (volumeContracted ? 0.5 : 0)
+  const reasons = [
+    `底部压力测试：${pressure.mode === 'new_low' ? '新低' : '近似等低'}`,
+    `试仓衰竭评分 ${score.toFixed(1)}（门槛 ${TRIAL_EXHAUSTION_SCORE.toFixed(1)}）`,
+    rsiImproved ? 'RSI改善' : null,
+    rocImproved ? 'ROC改善' : null,
+    macdImproved ? 'MACD柱改善' : null,
+    impulseContracted ? '下跌冲击收缩' : null,
+    volumeContracted ? '探底量能收缩' : null,
+  ].filter((item): item is string => item != null)
+  return {
+    confirmed: score >= TRIAL_EXHAUSTION_SCORE && coreMomentumImproved,
+    score,
+    coreMomentumImproved,
+    pressure,
+    reasons,
+  }
+}
+
+function recentHighBreakAt(bars: ActionBar[], index: number, lookback: number): number | null {
+  const priorHighs = bars.slice(Math.max(0, index - lookback), index).map(bar => bar.high)
+  if (priorHighs.length < lookback) return null
+  const triggerPrice = Math.max(...priorHighs)
+  return bars[index].close > triggerPrice ? triggerPrice : null
 }
 
 function topExhaustion(bars: ActionBar[], index: number, current: ActionFeatures, roc20Percentiles?: Map<string, number>): boolean {
@@ -446,6 +650,21 @@ function higherLowStructure(bars: ActionBar[], index: number, features: ActionFe
   }
 }
 
+function trialStructureEvidence(
+  bars: ActionBar[],
+  index: number,
+  pressure: BottomPressureTest | null,
+  structure: HigherLowStructure | null,
+): { improved: boolean; label: string; triggerPrice: number | null } {
+  if (structure != null) return { improved: true, label: '确认低点抬高', triggerPrice: null }
+  const recentTwoBarTrigger = recentHighBreakAt(bars, index, 2)
+  if (recentTwoBarTrigger != null) return { improved: true, label: '收盘突破近两根高点', triggerPrice: recentTwoBarTrigger }
+  const recentThreeBarTrigger = recentHighBreakAt(bars, index, 3)
+  if (recentThreeBarTrigger != null) return { improved: true, label: '收盘突破近三根高点', triggerPrice: recentThreeBarTrigger }
+  if (pressure != null) return { improved: true, label: '确认底分型', triggerPrice: null }
+  return { improved: false, label: '', triggerPrice: null }
+}
+
 function entryTooExtended(features: ActionFeatures, close: number): boolean {
   const distance = finite(features.ma20) && positive(features.atr) ? (close - features.ma20!) / features.atr! : null
   return (distance != null && distance > 0.9)
@@ -458,8 +677,33 @@ function defenseFor(structure: HigherLowStructure, features: ActionFeatures): nu
   return structure.latestLow - buffer
 }
 
+function trialDefenseFor(pressure: BottomPressureTest, features: ActionFeatures): TrialDefenseCandidate {
+  const buffer = positive(features.atr) ? features.atr * TRIAL_DEFENSE_ATR_BUFFER : pressure.latestLow * 0.002
+  return {
+    pivotIndex: pressure.latestIndex,
+    low: pressure.latestLow,
+    price: pressure.latestLow - buffer,
+  }
+}
+
 function validDefense(value: number | null, close: number): value is number {
   return positive(value) && value < close
+}
+
+function trialRiskAtr(defense: number | null, close: number, atr: number | null): number | null {
+  return validDefense(defense, close) && positive(atr) ? (close - defense) / atr : null
+}
+
+function trialNotChasing(
+  pressure: BottomPressureTest,
+  close: number,
+  atr: number | null,
+  triggerPrice: number | null,
+): boolean {
+  if (!positive(atr)) return false
+  if ((close - pressure.latestLow) / atr > TRIAL_MAX_BOTTOM_DISTANCE_ATR + TRIAL_NUMERIC_EPSILON) return false
+  if (triggerPrice != null && (close - triggerPrice) / atr > TRIAL_MAX_TRIGGER_DISTANCE_ATR + TRIAL_NUMERIC_EPSILON) return false
+  return true
 }
 
 function percent(value: number | null): string {
@@ -556,13 +800,13 @@ function emptyResult(
     events: [],
     history: [],
     pendingConfirmation: false,
-    nextConditions: ['超跌只进入底部观察；出现动能衰竭、底分型和低点抬高后才试仓', '突破抬高低点后的颈线才加仓'],
+    nextConditions: ['超跌只进入底部观察；衰竭评分达标且反转或结构改善后才试仓', '突破抬高低点后的颈线才加仓'],
     riskConditions: ['高位动能衰竭先减仓', '连续收盘跌破核心防守位且反抽失败后退出'],
   }
 }
 
 function nextConditions(phase: ActionPhase): string[] {
-  if (phase === 'wait') return ['底部观察 → 动能衰竭 + 底分型 + 低点抬高 → 试仓', '试仓后收盘突破颈线 → 加仓']
+  if (phase === 'wait') return ['底部观察 → 衰竭评分达标 + 反转或结构改善 → 试仓', '试仓后收盘突破颈线 → 加仓']
   if (phase === 'defensive') return ['重新出现低点抬高和颈线突破后再加仓', '跌破核心防守位并反抽失败 → 退出']
   return ['高位出现顶分型和动能衰竭 → 减仓', '跌破抬高低点防守位，二次确认反抽失败 → 退出']
 }
@@ -631,14 +875,14 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
     const previous = closedBars[index - 1] ?? null
     const score = scoreFor(scoreMap, bar, period)
     const features = featureAt(closedBars, index, roc20Percentiles)
-    const lowerExhaustion = bottomExhaustion(closedBars, index, features, roc20Percentiles)
+    const lowerExhaustion = evaluateBottomExhaustion(closedBars, index, features, roc20Percentiles)
     const upperExhaustion = topExhaustion(closedBars, index, features, roc20Percentiles)
-    const bottomObservation = isBottomObservation(features, bar.close) || lowerExhaustion
+    const bottomObservation = isBottomObservation(features, bar.close) || lowerExhaustion.confirmed
     const topObservation = isTopObservation(features, bar.close)
     const extremeTopObservation = isExtremeTopObservation(features, bar.close)
     const topWatch = topObservation || extremeTopObservation
 
-    if (bottomObservation) state.bottomObservedAt ??= index
+    if (bottomObservation) state.bottomObservedAt = index
     if (state.bottomObservedAt != null && index - state.bottomObservedAt > OBSERVATION_MAX_AGE) state.bottomObservedAt = null
     if (topWatch) {
       // 只要高位证据再次出现，就刷新观察起点；25 根是兜底期限，不是强制过期点。
@@ -675,6 +919,12 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
 
     const structure = higherLowStructure(closedBars, index, features)
     const defenseCandidate = structure ? defenseFor(structure, features) : null
+    const pressure = lowerExhaustion.pressure
+    const trialDefenseCandidate = pressure ? trialDefenseFor(pressure, features) : null
+    const reversalEvidence = pressure ? bullishReversalWithin(closedBars, pressure.latestIndex, index) : null
+    const trialStructure = trialStructureEvidence(closedBars, index, pressure, structure)
+    const trialTriggerPrice = reversalEvidence?.triggerPrice ?? trialStructure.triggerPrice
+    const riskAtr = trialRiskAtr(trialDefenseCandidate?.price ?? null, bar.close, features.atr)
     const bottomObservationFresh = state.bottomObservedAt != null && index - state.bottomObservedAt <= OBSERVATION_MAX_AGE
     const topObservationFresh = state.topObservedAt != null && index - state.topObservedAt <= OBSERVATION_MAX_AGE
     const addCooldownReady = index - state.lastActionIndex >= ACTION_COOLDOWN_BARS
@@ -691,12 +941,13 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
       && !entryTooExtended(features, bar.close)
     const trialEntry = state.phase !== 'bullish'
       && bottomObservationFresh
-      && lowerExhaustion
-      && isBullishReversal(closedBars, index)
-      && structure != null
-      && defenseCandidate != null
-      && validDefense(defenseCandidate, bar.close)
-      && !entryTooExtended(features, bar.close)
+      && lowerExhaustion.confirmed
+      && (reversalEvidence != null || trialStructure.improved)
+      && trialDefenseCandidate != null
+      && riskAtr != null
+      && riskAtr <= TRIAL_MAX_RISK_ATR + TRIAL_NUMERIC_EPSILON
+      && pressure != null
+      && trialNotChasing(pressure, bar.close, features.atr, trialTriggerPrice)
 
     let event: ActionSignalEvent | undefined
     if (!stale && coreInvalidation) {
@@ -747,16 +998,21 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
       state.extremeTopObservedAt = null
       state.topNeutralStreak = 0
       state.breakBelowDefenseStreak = 0
-    } else if (!stale && trialEntry && addCooldownReady && structure && defenseCandidate != null) {
+    } else if (!stale && trialEntry && addCooldownReady && pressure != null && trialDefenseCandidate != null && riskAtr != null) {
       const type: ActionSignalType = state.phase === 'wait' ? 'attack' : 'add'
-      event = createEvent(type, 'structure', period, bar, score, structure.latestLow, defenseCandidate, structure.key, [
-        type === 'attack' ? '超跌后空头动能衰竭，底分型确认低点抬高，试仓' : '新的低点抬高结构确认，回到加仓候选',
+      const bottomDistanceAtr = (bar.close - pressure.latestLow) / (features.atr ?? 1)
+      const structureId = structure?.key ?? pressure.key
+      event = createEvent(type, 'structure', period, bar, score, pressure.latestLow, trialDefenseCandidate.price, structureId, [
+        type === 'attack' ? '超跌后空头动能衰竭，反转或结构改善确认，试仓' : '新的底部证据确认，回到加仓候选',
+        ...lowerExhaustion.reasons,
+        reversalEvidence != null ? `上涨反转：${reversalEvidence.label}` : `结构改善：${trialStructure.label}`,
         ...locationReasons(features, bar.close),
-        `核心防守位 ${defenseCandidate.toFixed(3)}`,
+        `风险 ATR ${riskAtr.toFixed(1)}，距底部 ${bottomDistanceAtr.toFixed(1)} ATR`,
+        `核心防守位 ${trialDefenseCandidate.price.toFixed(3)}`,
         ...auxiliaryScoreReason(score),
       ])
       state.phase = 'bullish'
-      state.defensePrice = defenseCandidate
+      state.defensePrice = trialDefenseCandidate.price
       state.reducedInRound = false
       state.lastActionIndex = index
       state.lastEventId = event.id
