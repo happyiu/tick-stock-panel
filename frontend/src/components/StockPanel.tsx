@@ -306,8 +306,8 @@ export function StockPanel({
   const periodKline = useQuery({
     ...klinePeriodQueryOptions(symbol, period, chartDateRange, periodDays, extColumns, includeTechnicalScores),
     enabled: !!symbol && (
-      resolvedRightPaneMode === 'technical'
-      || (resolvedRightPaneMode === 'intraday' && period !== '1d')
+      period === '30m'
+      || resolvedRightPaneMode === 'technical'
     ),
     refetchInterval: refetchIntervalMs,
   })
@@ -427,20 +427,28 @@ export function StockPanel({
     () => signalRiskContexts.find(context => context.signal.id === selectedSignalId) ?? preferredSignal,
     [preferredSignal, selectedSignalId, signalRiskContexts],
   )
+  const actionRows = useMemo(() => {
+    if (analysisRows.length > 0) return analysisRows
+    if (period === '30m') return periodKline.isPlaceholderData ? [] : periodRows
+    return rows
+  }, [analysisRows, period, periodKline.isPlaceholderData, periodRows, rows])
+  const actionResponse = displayAnalysisResponse ?? (
+    period === '30m' && !periodKline.isPlaceholderData ? periodKline.data : period === '1d' ? kline.data : undefined
+  )
   const actionInput = useMemo<ActionSignalInput | null>(() => {
     if (period !== '1d' && period !== '30m') return null
     return {
       symbol,
       assetType: analysisAssetType,
       period,
-      rows: analysisRows,
-      technicalScores: displayAnalysisResponse?.technical_scores,
-      dataStatus: displayAnalysisResponse?.data_status,
-      dataSource: displayAnalysisResponse?.source,
+      rows: actionRows,
+      technicalScores: actionResponse?.technical_scores,
+      dataStatus: actionResponse?.data_status,
+      dataSource: actionResponse?.source,
       selectedDate: effectiveSelectedBarKey,
     }
-  }, [analysisAssetType, analysisRows, displayAnalysisResponse, effectiveSelectedBarKey, period, symbol])
-  const actionInputKey = `${symbol}|${period}|${chartDateRange.start}|${chartDateRange.end}|${effectiveSelectedBarKey ?? ''}|${analysisSnapshot?.calculatedAt ?? 0}|${analysisRows.length}`
+  }, [actionResponse, actionRows, analysisAssetType, effectiveSelectedBarKey, period, symbol])
+  const actionInputKey = `${symbol}|${period}|${chartDateRange.start}|${chartDateRange.end}|${effectiveSelectedBarKey ?? ''}|${analysisSnapshot?.calculatedAt ?? 0}|${actionRows.length}|${actionRows.at(-1)?.date ?? ''}`
   const actionContextKey = analysisContextKey
   const actionSnapshotKey = `${analysisContextKey}|${effectiveSelectedBarKey ?? ''}`
   const actionWorkerRef = useRef<Worker | null>(null)
@@ -907,6 +915,11 @@ export function StockPanel({
             dateRange={chartDateRange}
             markers={markers}
             actionMarkers={actionMarkers}
+            actionState={actionSignals ? {
+              action: actionSignals.current.action,
+              status: actionSignals.status,
+              reason: actionSignals.currentEvent?.reasons.join('；') ?? actionSignals.reason,
+            } : undefined}
             ranges={ranges}
             priceBands={decisionSections.showPriceZones ? priceBands : undefined}
             priceLines={chartPriceLines}

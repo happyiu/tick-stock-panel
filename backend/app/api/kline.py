@@ -622,7 +622,7 @@ def get_period_kline(
         if period == "30m":
             default_days = days * 3 + 20
         else:
-            default_days = 365 if period == "1w" else 730
+            default_days = 365 * 3 if period == "1w" else 365 * 4
         start = date.fromisoformat(start_date) if start_date else end - timedelta(days=default_days)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="日期格式错误,应为 YYYY-MM-DD") from exc

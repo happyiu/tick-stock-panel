@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Check, Settings2 } from 'lucide-react'
 import { type KlinePeriod, type KlineRow } from '@/lib/api'
+import type { ActionCurrentAction, ActionSignalStatus } from '@/lib/actionSignals'
 import type { ChanlunAnalysis } from '@/lib/chanlun'
 import type { ElliottAnalysis } from '@/lib/elliott'
 import { DEFAULT_30M_DAYS, defaultKlineRange, filterKlineRowsThrough, klinePeriodQueryOptions } from '@/lib/kline'
@@ -64,6 +65,17 @@ function normalizeElliottOverlay(config: StockPreviewElliottOverlayConfig): Stoc
   }
 }
 
+function loadActiveSubCharts(): string[] {
+  const saved = storage.stockPreviewSubCharts.get(['vol'])
+  if (!Array.isArray(saved)) return ['vol']
+  const valid = saved.filter((key, index) =>
+    typeof key === 'string'
+      && SUB_CHARTS.some(chart => chart.key === key)
+      && saved.indexOf(key) === index,
+  )
+  return saved.length > 0 && valid.length === 0 ? ['vol'] : valid
+}
+
 interface Props {
   symbol: string
   height?: number
@@ -72,6 +84,12 @@ interface Props {
   markers?: ChartMarker[]
   /** 行动决策层历史事件标记；仅日线和30分钟周期接入。 */
   actionMarkers?: ChartMarker[]
+  /** 当前行动状态；与事件标记使用同一套闭合K线回放。 */
+  actionState?: {
+    action: ActionCurrentAction
+    status: ActionSignalStatus
+    reason: string
+  }
   ranges?: ChartRange[]
   priceBands?: ChartPriceBand[]
   priceLines?: ChartPriceLine[]
@@ -102,6 +120,28 @@ interface Props {
   visibleThrough?: string | null
   /** 调试设置开启时隐藏当前推进 K 线的日期。 */
   hideCurrentDate?: boolean
+}
+
+const ACTION_STATE_LABELS: Record<ActionCurrentAction, string> = {
+  bottom_observe: '底部观察',
+  top_observe: '高位观察',
+  extreme_top_observe: '极端高位观察',
+  attack: '试仓',
+  add: '加仓',
+  reduce: '减仓',
+  retreat: '退出',
+  hold: '持有',
+  defensive: '防守',
+  wait: '等待',
+  wait_defensive: '高位观察',
+}
+
+function actionStateClass(action: ActionCurrentAction): string {
+  if (action === 'attack') return 'text-bull bg-bull/10'
+  if (action === 'add' || action === 'hold') return 'text-accent bg-accent/10'
+  if (action === 'reduce' || action === 'top_observe' || action === 'extreme_top_observe' || action === 'wait_defensive') return 'text-warning bg-warning/10'
+  if (action === 'retreat' || action === 'defensive') return 'text-bear bg-bear/10'
+  return 'text-muted bg-elevated'
 }
 
 function isValidRow(r: any): boolean {
@@ -167,6 +207,7 @@ export function StockDailyKChart({
   dateRange: externalDateRange,
   markers,
   actionMarkers,
+  actionState,
   ranges,
   priceBands,
   priceLines,
@@ -190,7 +231,7 @@ export function StockDailyKChart({
   visibleThrough,
   hideCurrentDate = false,
 }: Props) {
-  const [activeIndicators, setActiveIndicators] = useState<string[]>(['vol'])
+  const [activeIndicators, setActiveIndicators] = useState<string[]>(loadActiveSubCharts)
   const [showMarkers, setShowMarkers] = useState(true)
   const [showActionSignals, setShowActionSignals] = useState(() => storage.stockPreviewActionSignals.get(true))
   const [volumeCompare, setVolumeCompare] = useState<VolumeCompareConfig>(() =>
@@ -220,7 +261,7 @@ export function StockDailyKChart({
   const rows = useMemo(() => toOHLC(displayRawRows, period), [displayRawRows, period])
   const stockInfo = kline.data?.stock_info
   const limitMarkers = useMemo(() => buildLimitUpMarkers(displayRawRows), [displayRawRows])
-  const effectiveShowLimitMarkers = showLimitMarkers && period === '1d'
+  const effectiveShowLimitMarkers = showLimitMarkers && period === '1d' && kline.data?.asset_type !== 'etf'
   const allMarkers = useMemo(() => [
     ...(markers ?? []),
     ...(showActionSignals && (period === '1d' || period === '30m') ? (actionMarkers ?? []) : []),
@@ -236,7 +277,13 @@ export function StockDailyKChart({
   }, [])
 
   const toggleIndicator = useCallback((key: string) => {
-    setActiveIndicators(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key])
+    setActiveIndicators(prev => {
+      const next = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+      if (SUB_CHARTS.some(chart => chart.key === key)) {
+        storage.stockPreviewSubCharts.set(next.filter(item => SUB_CHARTS.some(chart => chart.key === item)))
+      }
+      return next
+    })
   }, [])
 
   const updateVolumeCompare = useCallback((patch: Partial<VolumeCompareConfig>) => {
@@ -463,7 +510,15 @@ export function StockDailyKChart({
               异动
             </button>
           )}
-          {actionMarkers && (period === '1d' || period === '30m') && (
+          {actionState && (period === '1d' || period === '30m') && (
+            <span
+              className={`ml-auto rounded px-2 py-0.5 text-[10px] font-mono ${actionStateClass(actionState.action)}`}
+              title={actionState.reason}
+            >
+              {ACTION_STATE_LABELS[actionState.action]}{actionState.status === 'provisional' ? '（待收盘）' : ''}
+            </span>
+          )}
+          {(actionMarkers?.length ?? 0) > 0 && (period === '1d' || period === '30m') && (
             <button
               type="button"
               onClick={toggleActionSignals}

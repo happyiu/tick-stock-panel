@@ -119,6 +119,9 @@ export const storage = {
   /** 个股日K成交量对比设置 */
   stockVolumeCompare:   kv<{ enabled: boolean; days: number }>('stock_volume_compare'),
 
+  /** 个股预览 K 线副图显隐与顺序 */
+  stockPreviewSubCharts: kv<string[]>('stock_preview_sub_charts'),
+
   /** 个股详情多日分时周期 */
   stockPreviewIntradayDays: kv<number>('stock_preview_intraday_days'),
 

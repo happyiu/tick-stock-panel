@@ -67,8 +67,8 @@ export function defaultKlineRange(
   const start = new Date(now)
   if (period === '30m') start.setDate(start.getDate() - (thirtyMinuteDays * 3 + 20))
   else if (period === '1d') start.setMonth(start.getMonth() - 6)
-  else if (period === '1w') start.setFullYear(start.getFullYear() - 1)
-  else start.setFullYear(start.getFullYear() - 2)
+  else if (period === '1w') start.setFullYear(start.getFullYear() - 3)
+  else start.setFullYear(start.getFullYear() - 4)
   return { start: formatLocalDate(start), end }
 }
 
