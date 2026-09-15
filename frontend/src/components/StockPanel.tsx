@@ -48,6 +48,24 @@ const MAX_SPLIT_RATIO = 0.75
 const SPLIT_GAP_PX = 12
 const CHANLUN_PERIODS: KlinePeriod[] = ['30m', '1d', '1w', '1mo']
 
+function actionStateReason(result: ActionSignalResult): string {
+  const { current } = result
+  if (current.action === 'defense_test') {
+    return current.defensePrice == null
+      ? '盘中跌破防守位但收盘收回，暂不退出。'
+      : `盘中跌破防守位 ${current.defensePrice.toFixed(3)} 但收盘收回，暂不退出。`
+  }
+  if (current.defenseStatus === 'break_pending' && current.defensePrice != null) {
+    return `收盘跌破防守位 ${current.defensePrice.toFixed(3)}，等待第二根收盘确认；单根深破则立即退出。`
+  }
+  if (current.phase === 'defensive') {
+    return current.observation === 'bottom_observe'
+      ? '防守状态；重新进入底部观察，等待回补或结构恢复。'
+      : '高位风险确认后进入防守；等待 HL + 颈线突破、强势恢复或防守失败。'
+  }
+  return result.currentEvent?.reasons.join('；') ?? result.reason
+}
+
 function clampSplitRatioValue(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_SPLIT_RATIO
   return Math.max(MIN_SPLIT_RATIO, Math.min(MAX_SPLIT_RATIO, value))
@@ -917,8 +935,10 @@ export function StockPanel({
             actionMarkers={actionMarkers}
             actionState={actionSignals ? {
               action: actionSignals.current.action,
+              observation: actionSignals.current.observation,
+              defenseStatus: actionSignals.current.defenseStatus,
               status: actionSignals.status,
-              reason: actionSignals.currentEvent?.reasons.join('；') ?? actionSignals.reason,
+              reason: actionStateReason(actionSignals),
             } : undefined}
             ranges={ranges}
             priceBands={decisionSections.showPriceZones ? priceBands : undefined}

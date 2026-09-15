@@ -1,13 +1,21 @@
 import type { ChanlunBarInput } from './chanlun.ts'
 import type { ChartDataStatus, KlinePeriod, TechnicalScoreRow, TechnicalScores } from './api.ts'
 
-export const ACTION_SIGNAL_VERSION = 'action-signal-v4' as const
+export const ACTION_SIGNAL_VERSION = 'action-signal-v8' as const
 export const ACTION_SIGNAL_WARMUP_BARS = 60
 
 const OBSERVATION_MAX_AGE = 25
 const STRUCTURE_LOOKBACK = 40
 const PIVOT_SPAN = 2
 const ACTION_COOLDOWN_BARS = 5
+const ADD_MIN_COOLDOWN_BARS = 3
+const ADD_LOW_TOLERANCE_ATR = 0.2
+const ADD_BREAKOUT_STRONG_ATR = 0.1
+const ADD_BREAKOUT_NORMAL_ATR = 0.2
+const ADD_PULLBACK_TOLERANCE_ATR = 0.2
+const ADD_PULLBACK_MAX_AGE = 5
+const ADD_MAX_TRIGGER_DISTANCE_ATR = 0.8
+const ADD_VOLUME_RATIO = 1.1
 const ROC_HISTORY_LOOKBACK = 250
 const ROC_HISTORY_MIN_SAMPLES = 30
 const ROC_HISTORY_FLAT_BAND = 0.0005
@@ -29,12 +37,26 @@ const TRIAL_MAX_RISK_ATR = 1.5
 const TRIAL_MAX_BOTTOM_DISTANCE_ATR = 1.8
 const TRIAL_MAX_TRIGGER_DISTANCE_ATR = 0.6
 const TRIAL_NUMERIC_EPSILON = 1e-9
+const REDUCE_HIGH_WATCH_MAX_AGE = 8
+const REDUCE_STILL_HIGH_POSITION_THRESHOLD = 0.7
+const REDUCE_STILL_HIGH_DISTANCE_ATR = 0.5
+const REDUCE_RECENT_HIGH_DISTANCE_ATR = 1
+const REDUCE_TOP_BREAK_ATR = 0.1
+const REDUCE_LOCAL_LOW_BREAK_ATR = 0.1
+const REDUCE_FALSE_BREAKOUT_LOOKBACK = 4
+const DEFENSE_ATR_BUFFER = 0.25
+const DEFENSE_CONFIRMED_BREAK_ATR = 0.1
+const DEFENSE_STRONG_BREAK_ATR = 0.3
+const DEFENSE_RECOVERY_ATR = 0.1
+const DEFENSE_RECOVERY_MAX_DISTANCE_ATR = 0.8
 
 export type ActionSignalType = 'attack' | 'add' | 'reduce' | 'retreat'
 export type ActionPhase = 'wait' | 'bullish' | 'defensive'
-export type ActionCurrentAction = ActionSignalType | 'bottom_observe' | 'top_observe' | 'extreme_top_observe' | 'hold' | 'defensive' | 'wait' | 'wait_defensive'
+export type ActionObservation = 'bottom_observe' | 'top_observe' | 'extreme_top_observe'
+export type ActionDefenseStatus = 'normal' | 'test' | 'break_pending'
+export type ActionCurrentAction = ActionSignalType | ActionObservation | 'hold' | 'defensive' | 'defense_test' | 'wait' | 'wait_defensive'
 export type ActionSignalStatus = 'ready' | 'provisional' | 'blocked' | 'stale'
-export type ActionSignalTrigger = 'breakout' | 'pullback' | 'structure' | 'support_break' | 'score_decay' | 'core_invalidation' | 'exhaustion' | 'neckline_break'
+export type ActionSignalTrigger = 'breakout' | 'pullback' | 'structure' | 'support_break' | 'score_decay' | 'core_invalidation' | 'exhaustion' | 'neckline_break' | 'recovery' | 'top_structure' | 'false_breakout' | 'break_higher_low' | 'upper_shadow' | 'deceleration' | 'peak_drawdown'
 
 export interface ActionBar extends ChanlunBarInput {
   volume?: number | null
@@ -72,6 +94,8 @@ export interface ActionSignalState {
   date: string | null
   phase: ActionPhase
   action: ActionCurrentAction
+  observation: ActionObservation | null
+  defenseStatus: ActionDefenseStatus
   score: ActionScore | null
   defensePrice: number | null
   eventId: string | null
@@ -143,7 +167,7 @@ interface HigherLowStructure {
   latestLow: number
   key: string
   neckline: number | null
-  necklineBreak: boolean
+  formationAtr: number | null
 }
 
 interface BottomPressureTest {
@@ -175,13 +199,83 @@ interface TrialDefenseCandidate {
   price: number
 }
 
+interface AddTrigger {
+  trigger: 'breakout' | 'neckline_break'
+  triggerPrice: number
+  structureId: string | null
+  structure: HigherLowStructure | null
+  label: string
+}
+
+interface AddConfirmation {
+  momentum: boolean
+  volumePrice: boolean
+  trendStructure: boolean
+  count: number
+  reasons: string[]
+}
+
+interface PendingAddBreakout {
+  index: number
+  trigger: 'breakout' | 'neckline_break'
+  triggerPrice: number
+  structureId: string | null
+  defensePrice: number | null
+  label: string
+}
+
+interface TopStructureBreak {
+  triggerPrice: number
+  key: string
+}
+
+interface FalseBreakout {
+  index: number
+  priorHigh: number
+}
+
+interface ReduceDimension {
+  confirmed: boolean
+  reasons: string[]
+}
+
+interface ReduceExhaustion {
+  score: number
+  coreWeakening: boolean
+  reasons: string[]
+}
+
+interface ReducePriceReversal {
+  trigger: 'top_structure' | 'false_breakout' | 'break_higher_low' | 'upper_shadow'
+  referencePrice: number | null
+  structureId: string | null
+  label: string
+}
+
+interface DefenseReference {
+  reduceIndex: number
+  reducePrice: number
+  reduceHigh: number
+  structureLow: number
+  atr: number | null
+  initialDefensePrice: number | null
+}
+
 interface ReplayState {
   phase: ActionPhase
   defensePrice: number | null
+  defenseAtr: number | null
+  defenseStructureLow: number | null
+  defenseReference: DefenseReference | null
+  defenseStatus: ActionDefenseStatus
   events: ActionSignalEvent[]
   history: ActionSignalState[]
   usedStructureKeys: Set<string>
-  reducedInRound: boolean
+  positionStage: 'trial' | 'established' | null
+  reducedThisSwing: boolean
+  reduceIndex: number | null
+  reduceSwingHigh: number | null
+  reduceSwingLow: number | null
   lastActionIndex: number
   lastEventId: string | null
   bottomObservedAt: number | null
@@ -189,6 +283,7 @@ interface ReplayState {
   extremeTopObservedAt: number | null
   topNeutralStreak: number
   breakBelowDefenseStreak: number
+  pendingAddBreakout: PendingAddBreakout | null
 }
 
 function finite(value: unknown): value is number {
@@ -388,6 +483,14 @@ function hasLongLowerShadow(bar: ActionBar): boolean {
   const body = Math.abs(bar.close - bar.open)
   const lowerShadow = Math.min(bar.open, bar.close) - bar.low
   return lowerShadow >= Math.max(body * 1.5, range * 0.4)
+}
+
+function hasLongUpperShadow(bar: ActionBar): boolean {
+  const range = bar.high - bar.low
+  if (!positive(range)) return false
+  const body = Math.abs(bar.close - bar.open)
+  const upperShadow = bar.high - Math.max(bar.open, bar.close)
+  return upperShadow >= Math.max(body * 1.5, range * 0.4)
 }
 
 function bullishReversalEvidenceAt(bars: ActionBar[], index: number): BullishReversalEvidence | null {
@@ -608,6 +711,179 @@ function recentHighBreakAt(bars: ActionBar[], index: number, lookback: number): 
   return bars[index].close > triggerPrice ? triggerPrice : null
 }
 
+function recentHighReference(bars: ActionBar[], index: number, lookback: number, minSamples = lookback): number | null {
+  const highs = bars.slice(Math.max(0, index - lookback), index).map(bar => bar.high).filter(finite)
+  return highs.length >= minSamples ? Math.max(...highs) : null
+}
+
+function reduceStillHigh(bars: ActionBar[], index: number, features: ActionFeatures, close: number): ReduceDimension {
+  const distance = finite(features.ma20) && positive(features.atr) ? (close - features.ma20!) / features.atr! : null
+  const positionHigh = features.position20 != null && features.position20 >= REDUCE_STILL_HIGH_POSITION_THRESHOLD
+  const ma20High = distance != null && distance >= REDUCE_STILL_HIGH_DISTANCE_ATR
+  const windowHighs = bars.slice(Math.max(0, index - 19), index + 1).map(bar => bar.high).filter(finite)
+  const recentHigh = windowHighs.length ? Math.max(...windowHighs) : null
+  const nearRecentHigh = recentHigh != null
+    && positive(features.atr)
+    && recentHigh - close <= features.atr * REDUCE_RECENT_HIGH_DISTANCE_ATR
+  const reasons = [
+    positionHigh ? `20根位置 ${(features.position20! * 100).toFixed(0)}%` : null,
+    ma20High ? `价格偏离 MA20 ${distance!.toFixed(1)} ATR` : null,
+    nearRecentHigh ? `距离近20根最高价 ${(recentHigh! - close).toFixed(1)} ATR` : null,
+  ].filter((item): item is string => item != null)
+  return { confirmed: positionHigh || ma20High || nearRecentHigh, reasons }
+}
+
+function upwardPushContraction(bars: ActionBar[], index: number, atr: number | null): boolean {
+  if (index < 6 || !positive(atr)) return false
+  const previousRise = bars[index - 3].close - bars[index - 6].close
+  const recentRise = bars[index].close - bars[index - 3].close
+  return previousRise >= atr * 0.2
+    && recentRise <= previousRise * 0.7
+    && recentRise >= -atr * 0.5
+}
+
+function reduceExhaustion(
+  bars: ActionBar[],
+  index: number,
+  roc20Percentiles?: Map<string, number>,
+): ReduceExhaustion {
+  const current = featureAt(bars, index, roc20Percentiles)
+  const previous = featureAt(bars, index - 1, roc20Percentiles)
+  const rsiWeak = current.rsi != null && previous.rsi != null && current.rsi <= previous.rsi - 1
+  const rocWeak = (current.roc5 != null && previous.roc5 != null && current.roc5 < previous.roc5)
+    || (current.roc20 != null && previous.roc20 != null && current.roc20 < previous.roc20)
+  const macdWeak = current.macdHist != null && previous.macdHist != null && current.macdHist < previous.macdHist
+  const pushContracted = upwardPushContraction(bars, index, current.atr)
+  const volumeWeak = reduceVolumePriceWeakness(bars, index, current).confirmed
+  const coreWeakening = rsiWeak || rocWeak || macdWeak
+  const score = (rsiWeak ? 1 : 0)
+    + (rocWeak ? 1 : 0)
+    + (macdWeak ? 1 : 0)
+    + (pushContracted ? 0.5 : 0)
+    + (volumeWeak ? 0.5 : 0)
+  const reasons = [
+    rsiWeak ? 'RSI走弱 +1' : null,
+    rocWeak ? 'ROC走弱 +1' : null,
+    macdWeak ? 'MACD柱走弱 +1' : null,
+    pushContracted ? '上涨推动收缩 +0.5' : null,
+    volumeWeak ? '量价背离 +0.5' : null,
+  ].filter((item): item is string => item != null)
+  return { score, coreWeakening, reasons }
+}
+
+function topStructureBreakAt(bars: ActionBar[], index: number, features: ActionFeatures): TopStructureBreak | null {
+  if (!positive(features.atr)) return null
+  const pivots = confirmedPivotIndices(bars, index, 'top')
+  for (const pivotIndex of pivots.slice(-3).reverse()) {
+    if (index - pivotIndex < PIVOT_SPAN || index - pivotIndex > 12) continue
+    const triggerPrice = bars[pivotIndex].low
+    if (bars[index].close >= triggerPrice - features.atr * REDUCE_TOP_BREAK_ATR - TRIAL_NUMERIC_EPSILON) continue
+    return {
+      triggerPrice,
+      key: `top:${pivotIndex}`,
+    }
+  }
+  return null
+}
+
+function falseBreakoutAt(bars: ActionBar[], index: number, features: ActionFeatures): FalseBreakout | null {
+  if (!positive(features.atr)) return null
+  const from = Math.max(20, index - REDUCE_FALSE_BREAKOUT_LOOKBACK)
+  for (let candidateIndex = from; candidateIndex <= index; candidateIndex += 1) {
+    const priorHigh = recentHighReference(bars, candidateIndex, 20, 10)
+    if (priorHigh == null || bars[candidateIndex].high <= priorHigh + TRIAL_NUMERIC_EPSILON) continue
+    const confirmationClose = bars[index].close
+    if (confirmationClose < priorHigh - features.atr * REDUCE_TOP_BREAK_ATR - TRIAL_NUMERIC_EPSILON) {
+      return { index: candidateIndex, priorHigh }
+    }
+  }
+  return null
+}
+
+function reduceVolumePriceWeakness(bars: ActionBar[], index: number, features: ActionFeatures): ReduceDimension {
+  const bar = bars[index]
+  const previous = bars[index - 1]
+  const previousFeatures = previous ? featureAt(bars, index - 1) : null
+  const priorHigh = recentHighReference(bars, index, 20, 10)
+  const highWithoutVolume = priorHigh != null
+    && positive(features.atr)
+    && bar.high >= priorHigh - features.atr * REDUCE_TOP_BREAK_ATR
+    && features.volumeRatio != null
+    && features.volumeRatio < 1
+  const upOnLowerVolume = previous != null
+    && bar.close > previous.close
+    && features.volumeRatio != null
+    && features.volumeRatio < 1
+  const highVolumeStagnation = features.volumeRatio != null
+    && features.volumeRatio >= 1.5
+    && previous != null
+    && positive(features.atr)
+    && Math.abs(bar.close - previous.close) <= features.atr * 0.3
+  const volumeFadingOnPullback = isBearishReversal(bars, index)
+    && features.volumeRatio != null
+    && previousFeatures?.volumeRatio != null
+    && features.volumeRatio < previousFeatures.volumeRatio
+  const reasons = [
+    highWithoutVolume ? '接近前高但量比低于1' : null,
+    upOnLowerVolume ? '上涨缩量' : null,
+    highVolumeStagnation ? '高位放量滞涨' : null,
+    volumeFadingOnPullback ? '回落时量能继续衰减' : null,
+  ].filter((item): item is string => item != null)
+  return { confirmed: reasons.length > 0, reasons }
+}
+
+function breakHigherLowAt(bars: ActionBar[], index: number, features: ActionFeatures): ReducePriceReversal | null {
+  if (!positive(features.atr)) return null
+  const structure = higherLowStructure(bars, index, features)
+  if (structure == null || index - structure.latestIndex < PIVOT_SPAN || index - structure.latestIndex > 12) return null
+  const priorHigh = recentHighReference(bars, structure.latestIndex, 8, 3)
+  const higherHighConfirmed = structure.neckline != null
+    && priorHigh != null
+    && structure.neckline > priorHigh + features.atr * REDUCE_TOP_BREAK_ATR
+  if (!higherHighConfirmed || bars[index].close >= structure.latestLow - features.atr * REDUCE_LOCAL_LOW_BREAK_ATR) return null
+  return {
+    trigger: 'break_higher_low',
+    referencePrice: structure.latestLow,
+    structureId: structure.key,
+    label: `Higher Low 后跌破防守低点 ${structure.latestLow.toFixed(3)}`,
+  }
+}
+
+function upperShadowReversalAt(bars: ActionBar[], index: number): ReducePriceReversal | null {
+  const previous = bars[index - 1]
+  if (previous == null || !hasLongUpperShadow(previous) || !isBearishReversal(bars, index)) return null
+  return {
+    trigger: 'upper_shadow',
+    referencePrice: previous.high,
+    structureId: null,
+    label: `长上影后次根 K 线继续回落 ${previous.high.toFixed(3)}`,
+  }
+}
+
+function reducePriceReversalAt(bars: ActionBar[], index: number, features: ActionFeatures): ReducePriceReversal | null {
+  const topBreak = topStructureBreakAt(bars, index, features)
+  if (topBreak != null) {
+    return {
+      trigger: 'top_structure',
+      referencePrice: topBreak.triggerPrice,
+      structureId: topBreak.key,
+      label: `确认顶分型后跌破中间 K 线低点 ${topBreak.triggerPrice.toFixed(3)}`,
+    }
+  }
+  const failedBreakout = falseBreakoutAt(bars, index, features)
+  if (failedBreakout != null) {
+    return {
+      trigger: 'false_breakout',
+      referencePrice: failedBreakout.priorHigh,
+      structureId: null,
+      label: `冲高失败，收盘跌回前高 ${failedBreakout.priorHigh.toFixed(3)} 下方`,
+    }
+  }
+  const higherLowBreak = breakHigherLowAt(bars, index, features)
+  if (higherLowBreak != null) return higherLowBreak
+  return upperShadowReversalAt(bars, index)
+}
+
 function topExhaustion(bars: ActionBar[], index: number, current: ActionFeatures, roc20Percentiles?: Map<string, number>): boolean {
   if (index < 3 || !isBearishReversal(bars, index)) return false
   const pivots = confirmedPivotIndices(bars, index, 'top')
@@ -628,7 +904,12 @@ function topExhaustion(bars: ActionBar[], index: number, current: ActionFeatures
   return false
 }
 
-function higherLowStructure(bars: ActionBar[], index: number, features: ActionFeatures): HigherLowStructure | null {
+function higherLowStructure(
+  bars: ActionBar[],
+  index: number,
+  features: ActionFeatures,
+  lowToleranceAtr = 0,
+): HigherLowStructure | null {
   const pivots = confirmedPivotIndices(bars, index, 'bottom')
   if (pivots.length < 2) return null
   const latestIndex = pivots.at(-1)!
@@ -636,9 +917,15 @@ function higherLowStructure(bars: ActionBar[], index: number, features: ActionFe
   const latestLow = bars[latestIndex].low
   const previousLow = bars[previousIndex].low
   const tolerance = Math.max((features.atr ?? latestLow * 0.005) * 0.1, latestLow * 0.001)
-  if (latestLow <= previousLow + tolerance) return null
+  if (lowToleranceAtr > 0) {
+    const atrTolerance = positive(features.atr) ? features.atr * lowToleranceAtr : latestLow * 0.002
+    if (latestLow < previousLow - atrTolerance - TRIAL_NUMERIC_EPSILON) return null
+  } else if (latestLow <= previousLow + tolerance) {
+    return null
+  }
   const necklineValues = bars.slice(latestIndex + 1, index).map(bar => bar.high).filter(positive)
   const neckline = necklineValues.length ? Math.max(...necklineValues) : null
+  const formationFeatures = featureAt(bars, latestIndex)
   return {
     previousIndex,
     latestIndex,
@@ -646,8 +933,138 @@ function higherLowStructure(bars: ActionBar[], index: number, features: ActionFe
     latestLow,
     key: `${previousIndex}:${latestIndex}`,
     neckline,
-    necklineBreak: neckline != null && positive(features.atr) && bars[index].close > neckline + features.atr * 0.1,
+    formationAtr: positive(formationFeatures.atr) ? formationFeatures.atr : features.atr,
   }
+}
+
+function currentSwingHigh(bars: ActionBar[], index: number): number | null {
+  const highs = bars.slice(Math.max(0, index - 19), index + 1).map(bar => bar.high).filter(finite)
+  return highs.length ? Math.max(...highs) : null
+}
+
+function latestConfirmedSwingLow(bars: ActionBar[], index: number): number | null {
+  const pivotIndex = confirmedPivotIndices(bars, index, 'bottom').at(-1)
+  return pivotIndex == null ? null : bars[pivotIndex].low
+}
+
+function latestConfirmedSwingHigh(bars: ActionBar[], index: number): number | null {
+  const pivotIndex = confirmedPivotIndices(bars, index, 'top').at(-1)
+  return pivotIndex == null ? null : bars[pivotIndex].high
+}
+
+function rearmReduceSwing(
+  state: ReplayState,
+  index: number,
+  bar: ActionBar,
+  features: ActionFeatures,
+  structure: HigherLowStructure | null,
+): void {
+  if (!state.reducedThisSwing || state.reduceIndex == null || index <= state.reduceIndex) return
+  state.reduceSwingLow = Math.min(state.reduceSwingLow ?? bar.low, bar.low)
+  const previousHighBroken = state.reduceSwingHigh != null
+    && bar.close > state.reduceSwingHigh + TRIAL_NUMERIC_EPSILON
+  const higherLowHigherHigh = structure != null
+    && structure.latestIndex > state.reduceIndex
+    && structure.neckline != null
+    && positive(features.atr)
+    && bar.close > structure.neckline + features.atr * REDUCE_TOP_BREAK_ATR
+  const reboundFromReduceLow = state.reduceSwingLow != null
+    && positive(features.atr)
+    && bar.close - state.reduceSwingLow >= features.atr
+  if (previousHighBroken || higherLowHigherHigh || reboundFromReduceLow) {
+    state.reducedThisSwing = false
+    state.reduceIndex = null
+    state.reduceSwingHigh = null
+    state.reduceSwingLow = null
+  }
+}
+
+function addTriggerAt(
+  bars: ActionBar[],
+  index: number,
+  features: ActionFeatures,
+  structure: HigherLowStructure | null,
+): AddTrigger | null {
+  if (!positive(features.atr)) return null
+  if (structure?.neckline != null && bars[index].close > structure.neckline + features.atr * ADD_BREAKOUT_STRONG_ATR) {
+    return {
+      trigger: 'neckline_break',
+      triggerPrice: structure.neckline,
+      structureId: structure.key,
+      structure,
+      label: `低点容错后突破颈线 ${structure.neckline.toFixed(3)}`,
+    }
+  }
+  const lookbacks = [5, 10]
+  for (const lookback of lookbacks) {
+    const triggerPrice = recentHighBreakAt(bars, index, lookback)
+    if (triggerPrice != null) {
+      return {
+        trigger: 'breakout',
+        triggerPrice,
+        structureId: null,
+        structure: null,
+        label: `V型反转突破近${lookback}根高点 ${triggerPrice.toFixed(3)}`,
+      }
+    }
+  }
+  return null
+}
+
+function addConfirmation(
+  bars: ActionBar[],
+  index: number,
+  features: ActionFeatures,
+  triggerPrice: number,
+  roc20Percentiles?: Map<string, number>,
+): AddConfirmation {
+  const previous = bars[index - 1]
+  const previousFeatures = previous ? featureAt(bars, index - 1, roc20Percentiles) : null
+  const momentum = countTrue([
+    macdRisingMoves(bars, index, roc20Percentiles) >= TRIAL_MACD_RISING_MOVES,
+    features.roc5 != null && features.roc5 > 0,
+    features.rsi != null && features.rsi > 50 && previousFeatures?.rsi != null && features.rsi > previousFeatures.rsi,
+  ]) >= 1
+  const volumePrice = (features.volumeRatio != null && features.volumeRatio >= ADD_VOLUME_RATIO)
+    || (previous != null && bars[index].close > previous.close && positive(bars[index].volume) && positive(previous.volume) && bars[index].volume > previous.volume)
+  const trendStructure = bars[index].close > triggerPrice
+    || (features.ma20 != null && bars[index].close > features.ma20)
+  const reasons = [
+    momentum ? '动能转强' : null,
+    volumePrice ? '量价确认' : null,
+    trendStructure ? '结构突破确认' : null,
+  ].filter((item): item is string => item != null)
+  return { momentum, volumePrice, trendStructure, count: reasons.length, reasons }
+}
+
+function triggerDistanceAtr(close: number, triggerPrice: number, atr: number | null): number | null {
+  return positive(atr) && positive(triggerPrice) ? (close - triggerPrice) / atr : null
+}
+
+function addCooldownReady(index: number, lastActionIndex: number, strong: boolean): boolean {
+  return index - lastActionIndex >= (strong ? ADD_MIN_COOLDOWN_BARS : ACTION_COOLDOWN_BARS)
+}
+
+function addDefenseIntact(state: ReplayState, close: number): boolean {
+  return !positive(state.defensePrice) || (state.breakBelowDefenseStreak === 0 && close > state.defensePrice)
+}
+
+function pullbackConfirmed(
+  pending: PendingAddBreakout | null,
+  index: number,
+  bar: ActionBar,
+  atr: number | null,
+): boolean {
+  if (pending == null || !positive(atr) || index <= pending.index || index - pending.index > ADD_PULLBACK_MAX_AGE) return false
+  const tolerance = atr * ADD_PULLBACK_TOLERANCE_ATR
+  return bar.low >= pending.triggerPrice - tolerance - TRIAL_NUMERIC_EPSILON
+    && bar.low <= pending.triggerPrice + tolerance + TRIAL_NUMERIC_EPSILON
+    && bar.close > pending.triggerPrice
+}
+
+function breakoutCloseQuality(bar: ActionBar): boolean {
+  const range = bar.high - bar.low
+  return range <= 0 || bar.close >= bar.low + range * 0.6
 }
 
 function trialStructureEvidence(
@@ -665,16 +1082,45 @@ function trialStructureEvidence(
   return { improved: false, label: '', triggerPrice: null }
 }
 
-function entryTooExtended(features: ActionFeatures, close: number): boolean {
-  const distance = finite(features.ma20) && positive(features.atr) ? (close - features.ma20!) / features.atr! : null
-  return (distance != null && distance > 0.9)
-    || (features.position20 != null && features.position20 > 0.78)
-    || (features.bollUpper != null && positive(features.atr) && close >= features.bollUpper - features.atr * 0.1)
+function defenseFor(structure: HigherLowStructure, features: ActionFeatures): number {
+  const buffer = positive(structure.formationAtr)
+    ? structure.formationAtr * DEFENSE_ATR_BUFFER
+    : positive(features.atr)
+      ? features.atr * DEFENSE_ATR_BUFFER
+      : structure.latestLow * 0.0025
+  return structure.latestLow - buffer
 }
 
-function defenseFor(structure: HigherLowStructure, features: ActionFeatures): number {
-  const buffer = positive(features.atr) ? features.atr * 0.15 : structure.latestLow * 0.002
-  return structure.latestLow - buffer
+function defenseForLow(low: number, atr: number | null): number {
+  return low - (positive(atr) ? atr * DEFENSE_ATR_BUFFER : low * 0.0025)
+}
+
+function raiseDefense(
+  state: ReplayState,
+  candidate: number | null,
+  atr: number | null,
+  structureLow: number | null,
+): void {
+  if (!positive(candidate)) return
+  if (state.defensePrice == null || candidate > state.defensePrice + TRIAL_NUMERIC_EPSILON) {
+    state.defensePrice = candidate
+    state.defenseAtr = positive(atr) ? atr : state.defenseAtr
+    state.defenseStructureLow = positive(structureLow) ? structureLow : state.defenseStructureLow
+  }
+}
+
+function defenseMomentumRecoveryReasons(
+  bars: ActionBar[],
+  index: number,
+  features: ActionFeatures,
+  roc20Percentiles?: Map<string, number>,
+): string[] {
+  const previous = index > 0 ? featureAt(bars, index - 1, roc20Percentiles) : null
+  return [
+    macdRisingMoves(bars, index, roc20Percentiles) >= TRIAL_MACD_RISING_MOVES ? 'MACD柱连续增强' : null,
+    features.roc5 != null && (features.roc5 > 0 || (previous?.roc5 != null && features.roc5 > previous.roc5)) ? 'ROC5重新抬升' : null,
+    features.rsi != null && previous?.rsi != null && features.rsi >= 55 && features.rsi > previous.rsi ? 'RSI重新站上55并抬升' : null,
+  ].filter((item): item is string => item != null)
 }
 
 function trialDefenseFor(pressure: BottomPressureTest, features: ActionFeatures): TrialDefenseCandidate {
@@ -752,14 +1198,16 @@ function createEvent(
 
 function actionForState(state: ReplayState): ActionCurrentAction {
   if (state.phase === 'bullish') return 'hold'
-  if (state.phase === 'defensive') {
-    if (state.bottomObservedAt != null) return 'bottom_observe'
-    if (state.extremeTopObservedAt != null) return 'extreme_top_observe'
-    return state.topObservedAt != null ? 'top_observe' : 'defensive'
-  }
+  if (state.phase === 'defensive') return state.defenseStatus === 'test' ? 'defense_test' : 'defensive'
   if (state.bottomObservedAt != null) return 'bottom_observe'
   if (state.extremeTopObservedAt != null) return 'extreme_top_observe'
   return state.topObservedAt != null ? 'top_observe' : 'wait'
+}
+
+function observationForState(state: ReplayState): ActionObservation | null {
+  if (state.bottomObservedAt != null) return 'bottom_observe'
+  if (state.extremeTopObservedAt != null) return 'extreme_top_observe'
+  return state.topObservedAt != null ? 'top_observe' : null
 }
 
 function cloneScore(score: ActionScore): ActionScore {
@@ -771,6 +1219,8 @@ function historyState(state: ReplayState, bar: ActionBar, score: ActionScore, ev
     date: bar.date,
     phase: state.phase,
     action: event?.type ?? actionForState(state),
+    observation: observationForState(state),
+    defenseStatus: state.defenseStatus,
     score: cloneScore(score),
     defensePrice: state.defensePrice,
     eventId: event?.id ?? state.lastEventId,
@@ -795,25 +1245,25 @@ function emptyResult(
     reason,
     analysisStartDate: null,
     latestClosedDate: null,
-    current: { date: null, phase: 'wait', action: 'wait', score: null, defensePrice: null, eventId: null },
+    current: { date: null, phase: 'wait', action: 'wait', observation: null, defenseStatus: 'normal', score: null, defensePrice: null, eventId: null },
     currentEvent: null,
     events: [],
     history: [],
     pendingConfirmation: false,
-    nextConditions: ['超跌只进入底部观察；衰竭评分达标且反转或结构改善后才试仓', '突破抬高低点后的颈线才加仓'],
-    riskConditions: ['高位动能衰竭先减仓', '连续收盘跌破核心防守位且反抽失败后退出'],
+    nextConditions: ['超跌只进入底部观察；衰竭评分达标且反转或结构改善后才试仓', '试仓/防守后 HL + 颈线突破或减仓前高 + 动能恢复 → 加仓/回补'],
+    riskConditions: ['近8根有高位观察、当前仍在高位、衰竭评分≥2且价格反转 → 减仓（不依赖持仓/加仓状态）', '防守位测试不退出；连续2根收盘跌破或单根深破 → 退出'],
   }
 }
 
 function nextConditions(phase: ActionPhase): string[] {
-  if (phase === 'wait') return ['底部观察 → 衰竭评分达标 + 反转或结构改善 → 试仓', '试仓后收盘突破颈线 → 加仓']
-  if (phase === 'defensive') return ['重新出现低点抬高和颈线突破后再加仓', '跌破核心防守位并反抽失败 → 退出']
-  return ['高位出现顶分型和动能衰竭 → 减仓', '跌破抬高低点防守位，二次确认反抽失败 → 退出']
+  if (phase === 'wait') return ['底部观察 → 衰竭评分达标 + 反转或结构改善 → 试仓', '试仓后突破颈线/近5或10根高点，满足2/3确认；弱突破等待回踩 → 加仓']
+  if (phase === 'defensive') return ['HL + 颈线突破且不追高，或突破减仓前高 + 动能恢复 → 加仓/回补', '防守位测试不退出；连续2根收盘跌破或单根深破 → 退出']
+  return ['本轮只减一次；重新突破前高、确认 Higher Low→Higher High 或从减仓低点反弹≥1 ATR 后，才开启下一轮减仓', '跌破抬高低点防守位，二次确认反抽失败 → 退出']
 }
 
 function riskConditions(phase: ActionPhase, defensePrice: number | null): string[] {
-  if (defensePrice != null) return [`收盘跌破核心防守位 ${defensePrice.toFixed(3)}，连续确认并反抽失败 → 退出`, '高位扩张后动能衰竭 → 减仓']
-  if (phase === 'wait') return ['尚未建立仓位；超跌阶段只观察，不追涨杀跌']
+  if (defensePrice != null) return [`核心防守位 ${defensePrice.toFixed(3)}：下影测试不退出，连续2根收盘跌破或单根深破 → 退出`, '近8根有高位观察、当前仍在高位、衰竭评分≥2且价格反转 → 减仓（不依赖持仓/加仓状态）']
+  if (phase === 'wait') return ['尚未建立仓位；超跌阶段只观察，不追涨杀跌', '高位观察 + 当前仍在高位 + 顶部衰竭评分≥2 + 价格反转 → 减仓（不依赖持仓/加仓状态）']
   return ['核心防守位暂不可用，暂不确认退出']
 }
 
@@ -825,7 +1275,7 @@ function selectStateAt(
 ): { state: ActionSignalState; event: ActionSignalEvent | null } {
   const target = selectedDate ? normalizeKey(selectedDate, period) : null
   const states = target ? stateHistory.filter(item => item.date && normalizeKey(item.date, period) <= target) : stateHistory
-  const state = states.at(-1) ?? { date: null, phase: 'wait', action: 'wait', score: null, defensePrice: null, eventId: null }
+  const state = states.at(-1) ?? { date: null, phase: 'wait', action: 'wait', observation: null, defenseStatus: 'normal' as const, score: null, defensePrice: null, eventId: null }
   const event = events.filter(item => !target || normalizeKey(item.date, period) <= target).at(-1) ?? null
   return { state, event }
 }
@@ -856,10 +1306,18 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
   const state: ReplayState = {
     phase: 'wait',
     defensePrice: null,
+    defenseAtr: null,
+    defenseStructureLow: null,
+    defenseReference: null,
+    defenseStatus: 'normal',
     events: [],
     history: [],
     usedStructureKeys: new Set(),
-    reducedInRound: false,
+    positionStage: null,
+    reducedThisSwing: false,
+    reduceIndex: null,
+    reduceSwingHigh: null,
+    reduceSwingLow: null,
     lastActionIndex: -Infinity,
     lastEventId: null,
     bottomObservedAt: null,
@@ -867,6 +1325,7 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
     extremeTopObservedAt: null,
     topNeutralStreak: 0,
     breakBelowDefenseStreak: 0,
+    pendingAddBreakout: null,
   }
   let analysisStartDate: string | null = null
 
@@ -909,16 +1368,37 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
     if (index < ACTION_SIGNAL_WARMUP_BARS - 1) continue
     analysisStartDate ??= bar.date
 
-    if (state.phase !== 'wait' && validDefense(state.defensePrice, bar.close)) {
+    const structure = higherLowStructure(closedBars, index, features)
+    const addStructureCandidate = higherLowStructure(closedBars, index, features, ADD_LOW_TOLERANCE_ATR)
+    const addStructure = addStructureCandidate != null && !state.usedStructureKeys.has(addStructureCandidate.key)
+      ? addStructureCandidate
+      : null
+    const defenseStartIndex = state.defenseReference?.reduceIndex ?? state.reduceIndex
+    const postReduceStructure = state.phase === 'defensive'
+      && structure != null
+      && (defenseStartIndex == null || structure.latestIndex > defenseStartIndex)
+      ? structure
+      : null
+    if (postReduceStructure != null) {
+      raiseDefense(state, defenseFor(postReduceStructure, features), postReduceStructure.formationAtr, postReduceStructure.latestLow)
+    }
+    state.defenseStatus = 'normal'
+    const defenseTest = state.phase !== 'wait'
+      && positive(state.defensePrice)
+      && bar.low < state.defensePrice
+      && bar.close >= state.defensePrice
+    if (defenseTest) {
       state.breakBelowDefenseStreak = 0
+      state.defenseStatus = 'test'
     } else if (state.phase !== 'wait' && positive(state.defensePrice) && bar.close < state.defensePrice) {
       state.breakBelowDefenseStreak += 1
+      state.defenseStatus = 'break_pending'
     } else {
       state.breakBelowDefenseStreak = 0
     }
 
-    const structure = higherLowStructure(closedBars, index, features)
-    const defenseCandidate = structure ? defenseFor(structure, features) : null
+    const addTriggerStructure = state.phase === 'defensive' ? postReduceStructure : addStructure
+    const addTrigger = addTriggerAt(closedBars, index, features, addTriggerStructure)
     const pressure = lowerExhaustion.pressure
     const trialDefenseCandidate = pressure ? trialDefenseFor(pressure, features) : null
     const reversalEvidence = pressure ? bullishReversalWithin(closedBars, pressure.latestIndex, index) : null
@@ -926,23 +1406,100 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
     const trialTriggerPrice = reversalEvidence?.triggerPrice ?? trialStructure.triggerPrice
     const riskAtr = trialRiskAtr(trialDefenseCandidate?.price ?? null, bar.close, features.atr)
     const bottomObservationFresh = state.bottomObservedAt != null && index - state.bottomObservedAt <= OBSERVATION_MAX_AGE
-    const topObservationFresh = state.topObservedAt != null && index - state.topObservedAt <= OBSERVATION_MAX_AGE
-    const addCooldownReady = index - state.lastActionIndex >= ACTION_COOLDOWN_BARS
-    const coreInvalidation = state.phase !== 'wait'
+    rearmReduceSwing(state, index, bar, features, structure)
+    const hadPosition = state.phase !== 'wait' && state.positionStage != null
+    const recentHighWatch = state.topObservedAt != null && index - state.topObservedAt <= REDUCE_HIGH_WATCH_MAX_AGE
+    const stillHigh = reduceStillHigh(closedBars, index, features, bar.close)
+    const reduceExhaustionResult = reduceExhaustion(closedBars, index, roc20Percentiles)
+    const priceReversal = reducePriceReversalAt(closedBars, index, features)
+    const reduceReady = state.phase !== 'defensive'
+      && !state.reducedThisSwing
+      && recentHighWatch
+      && stillHigh.confirmed
+      && reduceExhaustionResult.score >= 2
+      && reduceExhaustionResult.coreWeakening
+      && priceReversal != null
+    const addConfirmationResult = addTrigger == null
+      ? null
+      : addConfirmation(closedBars, index, features, addTrigger.triggerPrice, roc20Percentiles)
+    const addDistance = addTrigger == null ? null : triggerDistanceAtr(bar.close, addTrigger.triggerPrice, features.atr)
+    const addStrong = addConfirmationResult != null && addConfirmationResult.count >= 3
+    const defenseAddTriggerAllowed = state.phase !== 'defensive' || addTrigger?.trigger === 'neckline_break'
+    const defensePullbackAllowed = state.phase !== 'defensive' || state.pendingAddBreakout?.trigger === 'neckline_break'
+    const defenseImmediateRecoveryAllowed = state.phase !== 'defensive'
+      || addTrigger?.trigger !== 'neckline_break'
+      || breakoutCloseQuality(bar)
+    const addDistanceWithinLimit = state.phase !== 'defensive'
+      || (addDistance != null && addDistance <= TRIAL_MAX_TRIGGER_DISTANCE_ATR + TRIAL_NUMERIC_EPSILON)
+    const minimumBreakoutDistance = state.phase === 'defensive' && addTrigger?.trigger === 'neckline_break'
+      ? ADD_BREAKOUT_STRONG_ATR
+      : addStrong ? ADD_BREAKOUT_STRONG_ATR : ADD_BREAKOUT_NORMAL_ATR
+    const recoveryMomentumReasons = defenseMomentumRecoveryReasons(closedBars, index, features, roc20Percentiles)
+    const recoveryAtr = state.defenseReference?.atr ?? features.atr
+    const recoveryDistance = state.defenseReference?.reduceHigh != null
+      ? triggerDistanceAtr(bar.close, state.defenseReference.reduceHigh, recoveryAtr)
+      : null
+    const defenseVRecovery = state.phase === 'defensive'
+      && state.defenseReference?.reduceHigh != null
+      && positive(recoveryAtr)
+      && bar.close >= state.defenseReference.reduceHigh + recoveryAtr * DEFENSE_RECOVERY_ATR
+      && recoveryDistance != null
+      && recoveryDistance <= DEFENSE_RECOVERY_MAX_DISTANCE_ATR + TRIAL_NUMERIC_EPSILON
+      && recoveryMomentumReasons.length > 0
+    const immediateBreakout = addTrigger != null
+      && addConfirmationResult != null
+      && defenseAddTriggerAllowed
+      && defenseImmediateRecoveryAllowed
+      && addConfirmationResult.count >= 2
+      && (addTrigger.trigger !== 'breakout' || (addConfirmationResult.momentum && addConfirmationResult.volumePrice))
+      && addDistance != null
+      && addDistance <= ADD_MAX_TRIGGER_DISTANCE_ATR + TRIAL_NUMERIC_EPSILON
+      && addDistanceWithinLimit
+      && addDistance >= minimumBreakoutDistance - TRIAL_NUMERIC_EPSILON
+    const pullbackTrigger = state.pendingAddBreakout != null
+      && pullbackConfirmed(state.pendingAddBreakout, index, bar, features.atr)
+      ? {
+          trigger: 'pullback' as const,
+          triggerPrice: state.pendingAddBreakout.triggerPrice,
+          structureId: state.pendingAddBreakout.structureId,
+          structure: null,
+          label: `${state.pendingAddBreakout.label}后回踩收回${state.pendingAddBreakout.trigger === 'neckline_break' ? '颈线' : '突破位'}`,
+        }
+      : null
+    const pullbackConfirmation = pullbackTrigger == null
+      ? null
+      : addConfirmation(closedBars, index, features, pullbackTrigger.triggerPrice, roc20Percentiles)
+    const addBaseReady = state.phase !== 'wait'
+      && addDefenseIntact(state, bar.close)
+      && !upperExhaustion
+      && !topWatch
+    const addTriggerReady = addBaseReady
+      && ((immediateBreakout && addCooldownReady(index, state.lastActionIndex, addStrong))
+        || (pullbackTrigger != null
+          && defensePullbackAllowed
+          && pullbackConfirmation != null
+          && pullbackConfirmation.count >= 2
+          && (state.pendingAddBreakout?.trigger !== 'breakout' || pullbackConfirmation.momentum)
+          && addCooldownReady(index, state.lastActionIndex, false)))
+    const defenseBreakDistance = positive(state.defensePrice) && positive(recoveryAtr)
+      ? (state.defensePrice - bar.close) / recoveryAtr
+      : null
+    const defenseInvalidation = state.phase === 'defensive'
+      && positive(state.defensePrice)
+      && (state.breakBelowDefenseStreak >= 2
+        || (defenseBreakDistance != null && defenseBreakDistance >= DEFENSE_CONFIRMED_BREAK_ATR - TRIAL_NUMERIC_EPSILON))
+    const legacyInvalidation = state.phase === 'bullish'
       && state.breakBelowDefenseStreak >= 2
       && previous != null
       && bar.close >= previous.close
       && positive(state.defensePrice)
       && bar.close < state.defensePrice
-    const structureBreak = state.phase !== 'wait'
-      && structure != null
-      && structure.necklineBreak
-      && !state.usedStructureKeys.has(structure.key)
-      && !entryTooExtended(features, bar.close)
+    const coreInvalidation = defenseInvalidation || legacyInvalidation
     const trialEntry = state.phase !== 'bullish'
       && bottomObservationFresh
       && lowerExhaustion.confirmed
       && (reversalEvidence != null || trialStructure.improved)
+      && (state.phase !== 'defensive' || addDefenseIntact(state, bar.close))
       && trialDefenseCandidate != null
       && riskAtr != null
       && riskAtr <= TRIAL_MAX_RISK_ATR + TRIAL_NUMERIC_EPSILON
@@ -952,13 +1509,25 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
     let event: ActionSignalEvent | undefined
     if (!stale && coreInvalidation) {
       event = createEvent('retreat', 'core_invalidation', period, bar, score, state.defensePrice, state.defensePrice, null, [
-        `连续收盘跌破核心防守位 ${state.defensePrice!.toFixed(3)}`,
-        '反抽仍未收回，确认上涨结构失效',
+        defenseBreakDistance != null && defenseBreakDistance >= DEFENSE_STRONG_BREAK_ATR
+          ? `单根收盘深破核心防守位 ${state.defensePrice!.toFixed(3)} 达 ${defenseBreakDistance.toFixed(1)} ATR`
+          : state.breakBelowDefenseStreak >= 2
+            ? `连续 ${state.breakBelowDefenseStreak} 根收盘跌破核心防守位 ${state.defensePrice!.toFixed(3)}`
+            : `收盘跌破核心防守位 ${state.defensePrice!.toFixed(3)} 达 ${defenseBreakDistance?.toFixed(1) ?? '—'} ATR`,
+        hadPosition ? '确认防守失败，退出剩余仓位' : '确认防守失败，结束当前高位风险状态',
         ...auxiliaryScoreReason(score),
       ])
       state.phase = 'wait'
       state.defensePrice = null
-      state.reducedInRound = false
+      state.defenseAtr = null
+      state.defenseStructureLow = null
+      state.defenseReference = null
+      state.defenseStatus = 'normal'
+      state.positionStage = null
+      state.reducedThisSwing = false
+      state.reduceIndex = null
+      state.reduceSwingHigh = null
+      state.reduceSwingLow = null
       state.lastActionIndex = index
       state.lastEventId = event.id
       state.bottomObservedAt = null
@@ -966,44 +1535,112 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
       state.extremeTopObservedAt = null
       state.topNeutralStreak = 0
       state.breakBelowDefenseStreak = 0
-    } else if (!stale && state.phase === 'bullish' && !state.reducedInRound && topObservationFresh && upperExhaustion) {
-      event = createEvent('reduce', 'exhaustion', period, bar, score, bar.close, state.defensePrice, null, [
-        '高位扩张后出现顶分型/回落确认',
-        '价格仍在高位，但 ROC、RSI、MACD 柱中至少两项出现衰竭',
+    } else if (!stale && defenseVRecovery && index > (state.defenseReference?.reduceIndex ?? state.reduceIndex ?? -1)) {
+      event = createEvent('add', 'recovery', period, bar, score, state.defenseReference!.reduceHigh, state.defensePrice, null, [
+        `防守期间突破减仓前高 ${state.defenseReference!.reduceHigh.toFixed(3)} + ${DEFENSE_RECOVERY_ATR.toFixed(1)} ATR`,
+        '动能重新增强，允许小幅回补',
+        ...recoveryMomentumReasons,
+        recoveryDistance != null ? `突破距离 ${recoveryDistance.toFixed(1)} ATR，未追高` : null,
+        ...auxiliaryScoreReason(score),
+      ].filter((item): item is string => item != null))
+      state.phase = 'bullish'
+      state.positionStage = 'trial'
+      state.lastActionIndex = index
+      state.lastEventId = event.id
+      state.pendingAddBreakout = null
+      state.defenseStatus = 'normal'
+      state.breakBelowDefenseStreak = 0
+      state.bottomObservedAt = null
+      state.topObservedAt = null
+      state.extremeTopObservedAt = null
+      state.topNeutralStreak = 0
+    } else if (!stale && reduceReady && priceReversal != null) {
+      const highWatchAge = state.topObservedAt == null ? null : index - state.topObservedAt
+      const structureLow = structure?.latestLow ?? latestConfirmedSwingLow(closedBars, index) ?? state.reduceSwingLow ?? bar.low
+      const structureAtr = structure?.formationAtr ?? features.atr ?? state.defenseAtr
+      const candidateDefense = structure != null ? defenseFor(structure, features) : defenseForLow(structureLow, structureAtr)
+      raiseDefense(state, candidateDefense, structureAtr, structureLow)
+      const reduceHigh = currentSwingHigh(closedBars, index) ?? latestConfirmedSwingHigh(closedBars, index) ?? bar.high
+      state.defenseReference = {
+        reduceIndex: index,
+        reducePrice: bar.close,
+        reduceHigh,
+        structureLow,
+        atr: positive(features.atr) ? features.atr : structureAtr,
+        initialDefensePrice: state.defensePrice,
+      }
+      event = createEvent('reduce', priceReversal.trigger, period, bar, score, priceReversal.referencePrice, state.defensePrice, priceReversal.structureId, [
+        priceReversal.label,
+        hadPosition ? '减仓后进入防守，冻结减仓参考高点、结构低点和 ATR' : '高位风险确认，进入防守并冻结参考高点、结构低点和 ATR',
+        `减仓参考高点 ${reduceHigh.toFixed(3)}，结构低点 ${structureLow.toFixed(3)}`,
+        `防守 ATR ${state.defenseReference.atr?.toFixed(3) ?? '—'}，核心防守位 ${state.defensePrice?.toFixed(3) ?? '—'}`,
+        `高位观察距今 ${highWatchAge ?? '—'} 根，当前仍处于相对高位`,
+        ...stillHigh.reasons,
+        ...reduceExhaustionResult.reasons,
+        `顶部衰竭评分 ${reduceExhaustionResult.score.toFixed(1)}（门槛 2.0）`,
         ...locationReasons(features, bar.close),
         ...auxiliaryScoreReason(score),
-      ])
+      ].filter((item): item is string => item != null))
+      // 一轮上涨只执行一次减仓；新波段恢复后由 rearmReduceSwing 解锁。
       state.phase = 'defensive'
-      state.reducedInRound = true
+      state.reducedThisSwing = true
+      state.reduceIndex = index
+      state.reduceSwingHigh = reduceHigh
+      state.reduceSwingLow = bar.low
       state.lastActionIndex = index
       state.lastEventId = event.id
       state.bottomObservedAt = null
       state.topObservedAt = null
       state.extremeTopObservedAt = null
       state.topNeutralStreak = 0
-    } else if (!stale && structureBreak && addCooldownReady && structure && defenseCandidate != null) {
-      event = createEvent('add', 'neckline_break', period, bar, score, structure.neckline, state.defensePrice, structure.key, [
-        `低点抬高后收盘突破颈线 ${structure.neckline!.toFixed(3)}`,
-        '结构由低点抬高进一步确认高点突破，允许加仓',
+      state.pendingAddBreakout = null
+      state.defenseStatus = 'normal'
+    } else if (!stale && addTriggerReady && (pullbackTrigger != null || addTrigger != null)) {
+      const recoveringFromDefense = state.phase === 'defensive'
+      const trigger = pullbackTrigger ?? addTrigger!
+      const confirmation = pullbackConfirmation ?? addConfirmationResult!
+      const pendingDefense = state.pendingAddBreakout?.defensePrice ?? null
+      const nextDefense = trigger.structure ? defenseFor(trigger.structure, features) : pendingDefense
+      const distance = triggerDistanceAtr(bar.close, trigger.triggerPrice, features.atr)
+      event = createEvent('add', trigger.trigger, period, bar, score, trigger.triggerPrice, state.defensePrice, trigger.structureId, [
+        trigger.label,
+        recoveringFromDefense
+          ? '防守阶段 HL + 颈线突破确认，恢复持有/加仓'
+          : pullbackTrigger != null ? '突破后回踩未有效跌破，重新收回确认' : '底部结构转强，允许从试仓切换到进攻仓位',
+        `${trigger.structureId != null ? '低点' : '回踩'}容错 ${ADD_LOW_TOLERANCE_ATR.toFixed(1)} ATR，确认维度 ${confirmation.count}/3`,
+        ...confirmation.reasons,
+        distance != null ? `触发距离 ${distance.toFixed(1)} ATR` : null,
         ...auxiliaryScoreReason(score),
-      ])
+      ].filter((item): item is string => item != null))
       state.phase = 'bullish'
-      state.defensePrice = validDefense(defenseCandidate, bar.close) ? defenseCandidate : state.defensePrice
-      state.reducedInRound = false
+      if (validDefense(nextDefense, bar.close)) {
+        raiseDefense(state, nextDefense, trigger.structure?.formationAtr ?? state.defenseAtr, trigger.structure?.latestLow ?? null)
+      }
+      state.positionStage = 'established'
+      state.reducedThisSwing = false
+      state.reduceIndex = null
+      state.reduceSwingHigh = null
+      state.reduceSwingLow = null
       state.lastActionIndex = index
       state.lastEventId = event.id
-      state.usedStructureKeys.add(structure.key)
+      if (trigger.structureId != null) state.usedStructureKeys.add(trigger.structureId)
+      state.pendingAddBreakout = null
       state.bottomObservedAt = null
       state.topObservedAt = null
       state.extremeTopObservedAt = null
       state.topNeutralStreak = 0
       state.breakBelowDefenseStreak = 0
-    } else if (!stale && trialEntry && addCooldownReady && pressure != null && trialDefenseCandidate != null && riskAtr != null) {
+      state.defenseStatus = 'normal'
+      state.defenseReference = null
+    } else if (!stale && trialEntry && addCooldownReady(index, state.lastActionIndex, false) && pressure != null && trialDefenseCandidate != null && riskAtr != null) {
+      const recoveringFromDefense = state.phase === 'defensive'
       const type: ActionSignalType = state.phase === 'wait' ? 'attack' : 'add'
       const bottomDistanceAtr = (bar.close - pressure.latestLow) / (features.atr ?? 1)
       const structureId = structure?.key ?? pressure.key
-      event = createEvent(type, 'structure', period, bar, score, pressure.latestLow, trialDefenseCandidate.price, structureId, [
-        type === 'attack' ? '超跌后空头动能衰竭，反转或结构改善确认，试仓' : '新的底部证据确认，回到加仓候选',
+      event = createEvent(type, recoveringFromDefense ? 'recovery' : 'structure', period, bar, score, pressure.latestLow, trialDefenseCandidate.price, structureId, [
+        type === 'attack'
+          ? '超跌后空头动能衰竭，反转或结构改善确认，试仓'
+          : recoveringFromDefense ? '防守期间再次出现底部反转，允许小幅回补' : '新的底部证据确认，回到加仓候选',
         ...lowerExhaustion.reasons,
         reversalEvidence != null ? `上涨反转：${reversalEvidence.label}` : `结构改善：${trialStructure.label}`,
         ...locationReasons(features, bar.close),
@@ -1012,18 +1649,51 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
         ...auxiliaryScoreReason(score),
       ])
       state.phase = 'bullish'
-      state.defensePrice = trialDefenseCandidate.price
-      state.reducedInRound = false
+      if (recoveringFromDefense) {
+        raiseDefense(state, trialDefenseCandidate.price, features.atr, pressure.latestLow)
+        state.positionStage = 'trial'
+      } else {
+        state.defensePrice = trialDefenseCandidate.price
+        state.defenseAtr = features.atr
+        state.defenseStructureLow = pressure.latestLow
+        state.positionStage = type === 'attack' ? 'trial' : 'established'
+        state.reducedThisSwing = false
+        state.reduceIndex = null
+        state.reduceSwingHigh = null
+        state.reduceSwingLow = null
+        state.defenseReference = null
+      }
       state.lastActionIndex = index
       state.lastEventId = event.id
       state.breakBelowDefenseStreak = 0
+      state.defenseStatus = 'normal'
       state.bottomObservedAt = null
       state.topObservedAt = null
       state.extremeTopObservedAt = null
       state.topNeutralStreak = 0
     }
 
-    if (event) state.events.push(event)
+    if (event) {
+      state.pendingAddBreakout = null
+      state.events.push(event)
+    } else if (!stale) {
+      if (!addBaseReady || (state.pendingAddBreakout != null && index - state.pendingAddBreakout.index > ADD_PULLBACK_MAX_AGE)) {
+        state.pendingAddBreakout = null
+      }
+      if (addBaseReady
+        && addTrigger != null
+        && defenseAddTriggerAllowed
+        && (addTrigger.trigger !== 'breakout' || (addConfirmationResult?.momentum === true && addConfirmationResult.volumePrice))) {
+        state.pendingAddBreakout = {
+          index,
+          trigger: addTrigger.trigger,
+          triggerPrice: addTrigger.triggerPrice,
+          structureId: addTrigger.structureId,
+          defensePrice: addTrigger.structure ? defenseFor(addTrigger.structure, features) : state.defensePrice,
+          label: addTrigger.label,
+        }
+      }
+    }
     state.history.push(historyState(state, bar, score, event))
   }
 
@@ -1031,15 +1701,18 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
   const selected = selectStateAt(state.history, state.events, selectedDate, period)
   const latestFeatures = featureAt(closedBars, closedBars.length - 1, roc20Percentiles)
   const inputHasUnclosed = rows.at(-1)?.isClosed !== true
+  const awaitingAddPullback = state.pendingAddBreakout != null
   const featuresUnavailable = !positive(latestFeatures.atr) || !positive(latestFeatures.ma20) || latestFeatures.position20 == null
   const status: ActionSignalStatus = stale ? 'stale' : inputHasUnclosed || featuresUnavailable ? 'provisional' : 'ready'
   const reason = stale
     ? '当前为过期快照，不确认新的行动信号。'
+    : awaitingAddPullback
+      ? `已出现${state.pendingAddBreakout!.label}，等待回踩不破并重新收回后加仓。`
     : inputHasUnclosed
       ? '当前 K 线尚未收盘，新的行动信号待收盘确认。'
       : featuresUnavailable
         ? '最新闭合 K 线基础指标不足，保留结构回放结果但暂不确认最新状态。'
-        : '行动信号基于闭合 K 线、位置、动能衰竭和价格结构；技术评分仅作辅助。'
+        : '行动信号基于闭合 K 线、位置、动能/量价衰竭和价格结构；技术评分仅作辅助。'
   return {
     version: ACTION_SIGNAL_VERSION,
     symbol: symbol ?? null,
@@ -1060,7 +1733,7 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
     currentEvent: selected.event,
     events: state.events,
     history: state.history,
-    pendingConfirmation: inputHasUnclosed,
+    pendingConfirmation: inputHasUnclosed || awaitingAddPullback,
     nextConditions: nextConditions(selected.state.phase),
     riskConditions: riskConditions(selected.state.phase, selected.state.defensePrice),
   }
@@ -1098,7 +1771,7 @@ export function actionSignalMarkers(result: ActionSignalResult): ActionSignalMar
 
 function actionPolarity(action: ActionCurrentAction): 'bullish' | 'defensive' | 'wait' {
   if (action === 'attack' || action === 'add' || action === 'hold') return 'bullish'
-  if (action === 'reduce' || action === 'retreat' || action === 'defensive' || action === 'top_observe' || action === 'extreme_top_observe' || action === 'wait_defensive') return 'defensive'
+  if (action === 'reduce' || action === 'retreat' || action === 'defensive' || action === 'defense_test' || action === 'top_observe' || action === 'extreme_top_observe' || action === 'wait_defensive') return 'defensive'
   return 'wait'
 }
 

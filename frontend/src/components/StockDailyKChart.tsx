@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Check, Settings2 } from 'lucide-react'
 import { type KlinePeriod, type KlineRow } from '@/lib/api'
-import type { ActionCurrentAction, ActionSignalStatus } from '@/lib/actionSignals'
+import type { ActionCurrentAction, ActionDefenseStatus, ActionObservation, ActionSignalStatus } from '@/lib/actionSignals'
 import type { ChanlunAnalysis } from '@/lib/chanlun'
 import type { ElliottAnalysis } from '@/lib/elliott'
 import { DEFAULT_30M_DAYS, defaultKlineRange, filterKlineRowsThrough, klinePeriodQueryOptions } from '@/lib/kline'
@@ -87,6 +87,8 @@ interface Props {
   /** 当前行动状态；与事件标记使用同一套闭合K线回放。 */
   actionState?: {
     action: ActionCurrentAction
+    observation: ActionObservation | null
+    defenseStatus: ActionDefenseStatus
     status: ActionSignalStatus
     reason: string
   }
@@ -132,6 +134,7 @@ const ACTION_STATE_LABELS: Record<ActionCurrentAction, string> = {
   retreat: '退出',
   hold: '持有',
   defensive: '防守',
+  defense_test: '防守位测试',
   wait: '等待',
   wait_defensive: '高位观察',
 }
@@ -140,8 +143,16 @@ function actionStateClass(action: ActionCurrentAction): string {
   if (action === 'attack') return 'text-bull bg-bull/10'
   if (action === 'add' || action === 'hold') return 'text-accent bg-accent/10'
   if (action === 'reduce' || action === 'top_observe' || action === 'extreme_top_observe' || action === 'wait_defensive') return 'text-warning bg-warning/10'
-  if (action === 'retreat' || action === 'defensive') return 'text-bear bg-bear/10'
+  if (action === 'defense_test' || action === 'defensive') return 'text-warning bg-warning/10'
+  if (action === 'retreat') return 'text-bear bg-bear/10'
   return 'text-muted bg-elevated'
+}
+
+function actionStateLabel(state: NonNullable<Props['actionState']>): string {
+  const label = ACTION_STATE_LABELS[state.action]
+  return state.action === 'defensive' || state.action === 'defense_test'
+    ? `${label}${state.observation ? ` · ${ACTION_STATE_LABELS[state.observation]}` : ''}`
+    : label
 }
 
 function isValidRow(r: any): boolean {
@@ -515,7 +526,7 @@ export function StockDailyKChart({
               className={`ml-auto rounded px-2 py-0.5 text-[10px] font-mono ${actionStateClass(actionState.action)}`}
               title={actionState.reason}
             >
-              {ACTION_STATE_LABELS[actionState.action]}{actionState.status === 'provisional' ? '（待收盘）' : ''}
+              {actionStateLabel(actionState)}{actionState.status === 'provisional' ? '（待收盘）' : ''}
             </span>
           )}
           {(actionMarkers?.length ?? 0) > 0 && (period === '1d' || period === '30m') && (
