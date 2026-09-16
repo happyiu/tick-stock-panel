@@ -45,7 +45,6 @@ const REDUCE_TOP_BREAK_ATR = 0.1
 const REDUCE_LOCAL_LOW_BREAK_ATR = 0.1
 const REDUCE_FALSE_BREAKOUT_LOOKBACK = 4
 const DEFENSE_ATR_BUFFER = 0.25
-const DEFENSE_CONFIRMED_BREAK_ATR = 0.1
 const DEFENSE_STRONG_BREAK_ATR = 0.3
 const DEFENSE_RECOVERY_ATR = 0.1
 const DEFENSE_RECOVERY_MAX_DISTANCE_ATR = 0.8
@@ -1331,7 +1330,6 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
 
   for (let index = 0; index < closedBars.length; index += 1) {
     const bar = closedBars[index]
-    const previous = closedBars[index - 1] ?? null
     const score = scoreFor(scoreMap, bar, period)
     const features = featureAt(closedBars, index, roc20Percentiles)
     const lowerExhaustion = evaluateBottomExhaustion(closedBars, index, features, roc20Percentiles)
@@ -1435,7 +1433,7 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
       ? ADD_BREAKOUT_STRONG_ATR
       : addStrong ? ADD_BREAKOUT_STRONG_ATR : ADD_BREAKOUT_NORMAL_ATR
     const recoveryMomentumReasons = defenseMomentumRecoveryReasons(closedBars, index, features, roc20Percentiles)
-    const recoveryAtr = state.defenseReference?.atr ?? features.atr
+    const recoveryAtr = state.defenseReference?.atr ?? state.defenseAtr ?? features.atr
     const recoveryDistance = state.defenseReference?.reduceHigh != null
       ? triggerDistanceAtr(bar.close, state.defenseReference.reduceHigh, recoveryAtr)
       : null
@@ -1484,17 +1482,12 @@ export function buildActionSignals({ symbol, assetType, period, rows, technicalS
     const defenseBreakDistance = positive(state.defensePrice) && positive(recoveryAtr)
       ? (state.defensePrice - bar.close) / recoveryAtr
       : null
-    const defenseInvalidation = state.phase === 'defensive'
+    // 防守位统一按“连续两根收盘跌破”或“单根收盘深破 0.3 ATR”确认失效。
+    // 下影测试会在上面清零连续计数，不应直接触发退出。
+    const coreInvalidation = state.phase !== 'wait'
       && positive(state.defensePrice)
       && (state.breakBelowDefenseStreak >= 2
-        || (defenseBreakDistance != null && defenseBreakDistance >= DEFENSE_CONFIRMED_BREAK_ATR - TRIAL_NUMERIC_EPSILON))
-    const legacyInvalidation = state.phase === 'bullish'
-      && state.breakBelowDefenseStreak >= 2
-      && previous != null
-      && bar.close >= previous.close
-      && positive(state.defensePrice)
-      && bar.close < state.defensePrice
-    const coreInvalidation = defenseInvalidation || legacyInvalidation
+        || (defenseBreakDistance != null && defenseBreakDistance >= DEFENSE_STRONG_BREAK_ATR - TRIAL_NUMERIC_EPSILON))
     const trialEntry = state.phase !== 'bullish'
       && bottomObservationFresh
       && lowerExhaustion.confirmed

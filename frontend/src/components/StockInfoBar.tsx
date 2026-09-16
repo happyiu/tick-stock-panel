@@ -21,6 +21,8 @@ interface Props {
   onFieldsChange: (fields: ColumnConfig[]) => void
   /** 财务指标最新一期（来自 useFinancialMetrics，受 Cap.FINANCIAL 门控） */
   financialMetrics?: FinancialMetricRecord
+  /** 当前行动状态，与图表工具栏使用同一来源。 */
+  actionStatus?: ReactNode
   /** 加监控回调 (个股弹窗传入, 有值时渲染 RadioTower 图标) */
   onMonitor?: () => void
   /** 自选状态与操作（传入对应回调时渲染 Star 图标） */
@@ -105,6 +107,7 @@ export function StockInfoBar({
   fields,
   onFieldsChange,
   financialMetrics,
+  actionStatus,
   onMonitor,
   inWatchlist,
   onAddToWatchlist,
@@ -255,6 +258,7 @@ export function StockInfoBar({
         <span style={{ color: clr }} className="tabular-nums">
           {isUp ? '+' : ''}{fmtPrice(chgPct)}%
         </span>
+        {actionStatus}
         {/* 右侧操作按钮：外链 + 加自选 + 加监控 + 信息条配置 */}
         <div className="ml-auto self-center flex items-center gap-1">
           {extUrl && (

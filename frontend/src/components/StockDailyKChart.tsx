@@ -85,13 +85,7 @@ interface Props {
   /** 行动决策层历史事件标记；仅日线和30分钟周期接入。 */
   actionMarkers?: ChartMarker[]
   /** 当前行动状态；与事件标记使用同一套闭合K线回放。 */
-  actionState?: {
-    action: ActionCurrentAction
-    observation: ActionObservation | null
-    defenseStatus: ActionDefenseStatus
-    status: ActionSignalStatus
-    reason: string
-  }
+  actionState?: StockActionState
   ranges?: ChartRange[]
   priceBands?: ChartPriceBand[]
   priceLines?: ChartPriceLine[]
@@ -130,6 +124,14 @@ interface Props {
   onClearStrategy?: () => void
 }
 
+export type StockActionState = {
+  action: ActionCurrentAction
+  observation: ActionObservation | null
+  defenseStatus: ActionDefenseStatus
+  status: ActionSignalStatus
+  reason: string
+}
+
 export type ChartStrategySelection = NonNullable<Props['selectedStrategy']>
 
 const ACTION_STATE_LABELS: Record<ActionCurrentAction, string> = {
@@ -147,7 +149,7 @@ const ACTION_STATE_LABELS: Record<ActionCurrentAction, string> = {
   wait_defensive: '高位观察',
 }
 
-function actionStateClass(action: ActionCurrentAction): string {
+export function actionStateClass(action: ActionCurrentAction): string {
   if (action === 'attack') return 'text-bull bg-bull/10'
   if (action === 'add' || action === 'hold') return 'text-accent bg-accent/10'
   if (action === 'reduce' || action === 'top_observe' || action === 'extreme_top_observe' || action === 'wait_defensive') return 'text-warning bg-warning/10'
@@ -156,7 +158,7 @@ function actionStateClass(action: ActionCurrentAction): string {
   return 'text-muted bg-elevated'
 }
 
-function actionStateLabel(state: NonNullable<Props['actionState']>): string {
+export function actionStateLabel(state: StockActionState): string {
   const label = ACTION_STATE_LABELS[state.action]
   return state.action === 'defensive' || state.action === 'defense_test'
     ? `${label}${state.observation ? ` · ${ACTION_STATE_LABELS[state.observation]}` : ''}`
@@ -391,21 +393,7 @@ export function StockDailyKChart({
     <div className={className} style={{ minHeight: chartHeight }}>
       {(showIndicatorControls || onAddStrategy) && rows.length > 0 && (
         <div className="px-1 pb-0.5">
-          {onAddStrategy && chartAssetType && (
-            <div className="flex justify-end pb-1">
-              <button
-                type="button"
-                onClick={() => onAddStrategy(chartAssetType, period)}
-                title={`添加${chartAssetType === 'etf' ? ' ETF' : '股票'}策略`}
-                aria-label={`添加${chartAssetType === 'etf' ? ' ETF' : '股票'}策略`}
-                className="inline-flex shrink-0 items-center gap-1 rounded border border-accent/30 bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent transition-colors hover:border-accent/50 hover:bg-accent/15"
-              >
-                <Plus className="h-3 w-3" />
-                <span>添加策略</span>
-              </button>
-            </div>
-          )}
-          {(showIndicatorControls || selectedStrategy) && (
+          {(showIndicatorControls || selectedStrategy || (onAddStrategy && chartAssetType)) && (
           <div className="flex items-center gap-1.5">
           {showIndicatorControls && (<>
             {SUB_CHARTS.map(ind => (
@@ -546,6 +534,19 @@ export function StockDailyKChart({
               )}
             </div>
           )}
+          {(actionMarkers?.length ?? 0) > 0 && (period === '1d' || period === '30m') && (
+            <button
+              type="button"
+              onClick={toggleActionSignals}
+              className={`ml-1 px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors ${
+                showActionSignals ? 'text-accent bg-accent/10' : 'bg-elevated text-muted hover:text-secondary'
+              }`}
+              aria-pressed={showActionSignals}
+              title={showActionSignals ? '隐藏行动信号' : '显示行动信号'}
+            >
+              行动信号
+            </button>
+          )}
           {activeIndicators.includes('vol') && (
             <div className="ml-0.5 flex h-5 items-center gap-1.5 border-l border-border/70 pl-2">
               <span className="text-[10px] text-muted">量比</span>
@@ -589,50 +590,45 @@ export function StockDailyKChart({
               异动
             </button>
           )}
-          {actionState && (period === '1d' || period === '30m') && (
-            <span
-              className={`ml-auto rounded px-2 py-0.5 text-[10px] font-mono ${actionStateClass(actionState.action)}`}
-              title={actionState.reason}
-            >
-              {actionStateLabel(actionState)}{actionState.status === 'provisional' ? '（待收盘）' : ''}
-            </span>
-          )}
-          {(actionMarkers?.length ?? 0) > 0 && (period === '1d' || period === '30m') && (
-            <button
-              type="button"
-              onClick={toggleActionSignals}
-              className={`ml-1 px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors ${
-                showActionSignals ? 'text-accent bg-accent/10' : 'bg-elevated text-muted hover:text-secondary'
-              }`}
-              aria-pressed={showActionSignals}
-              title={showActionSignals ? '隐藏行动信号' : '显示行动信号'}
-            >
-              行动信号
-            </button>
-          )}
           </>)}
-          {selectedStrategy && (
-            <button
-              type="button"
-              onClick={onClearStrategy}
-              title={`移除策略：${selectedStrategy.name}`}
-              className="inline-flex max-w-[190px] shrink-0 items-center gap-1 rounded border border-accent/30 bg-accent/10 px-2 py-0.5 text-[10px] text-accent transition-colors hover:border-accent/50 hover:bg-accent/15"
-            >
-              <Layers className="h-3 w-3 shrink-0" />
-              <span className="truncate">{selectedStrategy.name}</span>
-              {strategySignalsQuery.isLoading && (
-                <Loader2 className="h-3 w-3 shrink-0 animate-spin opacity-80" aria-label="策略信号加载中" />
+          {(selectedStrategy || (onAddStrategy && chartAssetType)) && (
+            <div className="ml-auto flex shrink-0 items-center gap-1.5">
+              {selectedStrategy && (
+                <button
+                  type="button"
+                  onClick={onClearStrategy}
+                  title={`移除策略：${selectedStrategy.name}`}
+                  className="inline-flex max-w-[190px] shrink-0 items-center gap-1 rounded border border-accent/30 bg-accent/10 px-2 py-0.5 text-[10px] text-accent transition-colors hover:border-accent/50 hover:bg-accent/15"
+                >
+                  <Layers className="h-3 w-3 shrink-0" />
+                  <span className="truncate">{selectedStrategy.name}</span>
+                  {strategySignalsQuery.isLoading && (
+                    <Loader2 className="h-3 w-3 shrink-0 animate-spin opacity-80" aria-label="策略信号加载中" />
+                  )}
+                  {strategySignalsQuery.isError && (
+                    <span className="shrink-0 text-danger" title="策略信号加载失败">!</span>
+                  )}
+                  {strategySignalsQuery.isSuccess && (
+                    <span className="shrink-0 text-[9px] text-muted" title={`策略命中 ${strategySignalsQuery.data.count} 处`}>
+                      {strategySignalsQuery.data.count}处
+                    </span>
+                  )}
+                  <X className="h-3 w-3 shrink-0 opacity-70" />
+                </button>
               )}
-              {strategySignalsQuery.isError && (
-                <span className="shrink-0 text-danger" title="策略信号加载失败">!</span>
+              {onAddStrategy && chartAssetType && (
+                <button
+                  type="button"
+                  onClick={() => onAddStrategy(chartAssetType, period)}
+                  title={`添加${chartAssetType === 'etf' ? ' ETF' : '股票'}策略`}
+                  aria-label={`添加${chartAssetType === 'etf' ? ' ETF' : '股票'}策略`}
+                  className="inline-flex shrink-0 items-center gap-1 rounded border border-accent/30 bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent transition-colors hover:border-accent/50 hover:bg-accent/15"
+                >
+                  <Plus className="h-3 w-3" />
+                  <span>添加策略</span>
+                </button>
               )}
-              {strategySignalsQuery.isSuccess && (
-                <span className="shrink-0 text-[9px] text-muted" title={`策略命中 ${strategySignalsQuery.data.count} 处`}>
-                  {strategySignalsQuery.data.count}处
-                </span>
-              )}
-              <X className="h-3 w-3 shrink-0 opacity-70" />
-            </button>
+            </div>
           )}
           </div>
           )}

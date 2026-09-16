@@ -16,7 +16,15 @@ import {
   nextThirtyMinuteBoundaryAt,
 } from '@/lib/kline'
 import { StockInfoBar } from '@/components/StockInfoBar'
-import { StockDailyKChart, getDefaultRange, toOHLC, type ChartStrategySelection } from '@/components/StockDailyKChart'
+import {
+  StockDailyKChart,
+  actionStateClass,
+  actionStateLabel,
+  getDefaultRange,
+  toOHLC,
+  type ChartStrategySelection,
+  type StockActionState,
+} from '@/components/StockDailyKChart'
 import { StockIntradayChart } from '@/components/StockIntradayChart'
 import { StockTechnicalPanel } from '@/components/StockTechnicalPanel'
 import { StockChanlunPanel } from '@/components/StockChanlunPanel'
@@ -905,73 +913,93 @@ export function StockPanel({
   const rightPaneLabel = resolvedRightPaneMode === 'technical'
     ? '技术指标'
     : resolvedRightPaneMode === 'intraday' ? '分时图' : '右侧面板'
+  const actionState: StockActionState | undefined = actionSignals ? {
+    action: actionSignals.current.action,
+    observation: actionSignals.current.observation,
+    defenseStatus: actionSignals.current.defenseStatus,
+    status: actionSignals.status,
+    reason: actionStateReason(actionSignals),
+  } : undefined
+  const actionStatus = actionState && (period === '1d' || period === '30m') ? (
+    <span
+      className={`shrink-0 rounded px-2 py-0.5 text-[11px] font-mono ${actionStateClass(actionState.action)}`}
+      title={actionState.reason}
+    >
+      {actionStateLabel(actionState)}{actionState.status === 'provisional' ? '（待收盘）' : ''}
+    </span>
+  ) : undefined
+  // 详情页的独立滚动布局把信息条归入左栏，让右侧分析面板从同一高度开始。
+  const splitInfoBar = independentPaneScroll && !infoBarOnly
+  const infoBar = (
+    <StockInfoBar
+      symbol={symbol}
+      name={name}
+      stockInfo={stockInfo}
+      rows={infoRows}
+      assetType={assetType}
+      fields={fields}
+      onFieldsChange={handleFieldsChange}
+      financialMetrics={financialMetrics}
+      actionStatus={actionStatus}
+      onMonitor={onMonitor}
+      inWatchlist={inWatchlist}
+      onAddToWatchlist={onAddToWatchlist}
+      onRemoveFromWatchlist={onRemoveFromWatchlist}
+      watchlistPending={watchlistPending}
+    />
+  )
 
   return (
-    <div className={`${independentPaneScroll ? 'flex h-full min-h-0 flex-col' : ''} ${className ?? ''}`}>
-      <div className={independentPaneScroll ? 'shrink-0' : ''}>
-        <StockInfoBar
-          symbol={symbol}
-          name={name}
-          stockInfo={stockInfo}
-          rows={infoRows}
-          assetType={assetType}
-          fields={fields}
-          onFieldsChange={handleFieldsChange}
-          financialMetrics={financialMetrics}
-          onMonitor={onMonitor}
-          inWatchlist={inWatchlist}
-          onAddToWatchlist={onAddToWatchlist}
-          onRemoveFromWatchlist={onRemoveFromWatchlist}
-          watchlistPending={watchlistPending}
-        />
-      </div>
+    <div className={`${splitInfoBar ? 'flex h-full min-h-0' : independentPaneScroll ? 'flex h-full min-h-0 flex-col' : ''} ${className ?? ''}`}>
+      {!splitInfoBar && (
+        <div className={independentPaneScroll ? 'shrink-0' : ''}>
+          {infoBar}
+        </div>
+      )}
 
       {infoBarOnly ? null : (
       <div
         ref={splitContainerRef}
-        className={`relative flex gap-3 items-stretch ${independentPaneScroll ? 'min-h-0 flex-1 overflow-hidden' : ''} ${splitDragging ? 'select-none' : ''}`}
+        className={`relative flex gap-3 items-stretch ${splitInfoBar || independentPaneScroll ? 'min-h-0 flex-1 overflow-hidden' : ''} ${splitDragging ? 'select-none' : ''}`}
       >
         <div
           ref={dailyPaneRef}
-          className={`${dailyKlineFlex} min-w-0 ${independentPaneScroll ? 'min-h-0 overflow-y-auto' : ''}`}
+          className={`${dailyKlineFlex} min-w-0 ${splitInfoBar ? 'flex min-h-0 flex-col' : independentPaneScroll ? 'min-h-0 overflow-y-auto' : ''}`}
           style={dailyPaneStyle}
         >
-          <StockDailyKChart
-            symbol={symbol}
-            height={height}
-            dateRange={chartDateRange}
-            markers={markers}
-            actionMarkers={actionMarkers}
-            actionState={actionSignals ? {
-              action: actionSignals.current.action,
-              observation: actionSignals.current.observation,
-              defenseStatus: actionSignals.current.defenseStatus,
-              status: actionSignals.status,
-              reason: actionStateReason(actionSignals),
-            } : undefined}
-            ranges={ranges}
-            priceBands={decisionSections.showPriceZones ? priceBands : undefined}
-            priceLines={chartPriceLines}
-            showLimitMarkers={showLimitMarkers}
-            showMarkerToggle={showMarkerToggle}
-            linkedPrice={linkedPrice}
-            onDateClick={handleDateClick}
-            selectedDate={effectiveSelectedBarKey}
-            onPriceDoubleClick={onPriceDoubleClick}
-            visibleBars={visibleBars ?? (showIntraday ? 40 : 60)}
-            extColumns={extColumns}
-            refetchIntervalMs={refetchIntervalMs}
-            period={period}
-            periodDays={periodDays}
-            includeTechnicalScores={includeTechnicalScores}
-            chanlunAnalysis={resolvedRightPaneMode === 'technical' ? chanlunAnalysis : undefined}
-            elliottAnalysis={resolvedRightPaneMode === 'technical' ? elliottAnalysis : undefined}
-            visibleThrough={visibleThrough}
-            hideCurrentDate={hideCurrentDate}
-            onAddStrategy={onAddStrategy}
-            selectedStrategy={selectedStrategy}
-            onClearStrategy={onClearStrategy}
-          />
+          {splitInfoBar && <div className="shrink-0">{infoBar}</div>}
+          <div className={splitInfoBar ? 'min-h-0 flex-1 overflow-y-auto' : undefined}>
+            <StockDailyKChart
+              symbol={symbol}
+              height={height}
+              dateRange={chartDateRange}
+              markers={markers}
+              actionMarkers={actionMarkers}
+              actionState={actionState}
+              ranges={ranges}
+              priceBands={decisionSections.showPriceZones ? priceBands : undefined}
+              priceLines={chartPriceLines}
+              showLimitMarkers={showLimitMarkers}
+              showMarkerToggle={showMarkerToggle}
+              linkedPrice={linkedPrice}
+              onDateClick={handleDateClick}
+              selectedDate={effectiveSelectedBarKey}
+              onPriceDoubleClick={onPriceDoubleClick}
+              visibleBars={visibleBars ?? (showIntraday ? 40 : 60)}
+              extColumns={extColumns}
+              refetchIntervalMs={refetchIntervalMs}
+              period={period}
+              periodDays={periodDays}
+              includeTechnicalScores={includeTechnicalScores}
+              chanlunAnalysis={resolvedRightPaneMode === 'technical' ? chanlunAnalysis : undefined}
+              elliottAnalysis={resolvedRightPaneMode === 'technical' ? elliottAnalysis : undefined}
+              visibleThrough={visibleThrough}
+              hideCurrentDate={hideCurrentDate}
+              onAddStrategy={onAddStrategy}
+              selectedStrategy={selectedStrategy}
+              onClearStrategy={onClearStrategy}
+            />
+          </div>
         </div>
 
         {rightPaneVisible && (

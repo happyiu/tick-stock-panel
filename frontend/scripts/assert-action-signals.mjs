@@ -326,13 +326,48 @@ for (const assetType of ['stock', 'etf']) {
     assert.equal(beforeExit.current.phase, 'defensive')
     assert.equal(beforeExit.current.observation, 'bottom_observe', `${assetType}/${period} 底部观察不能覆盖防守主状态`)
     assert.equal(beforeExit.events.at(-1)?.type, 'reduce')
+    const defensePrice = beforeExit.events.at(-1)?.invalidationPrice
+    const defenseAtr = rows[72].atr14
+    assert.ok(Number.isFinite(defensePrice) && Number.isFinite(defenseAtr))
 
     const shallowBreakRows = rows.slice(0, 73).map(bar => ({ ...bar }))
-    shallowBreakRows[72] = { ...shallowBreakRows[72], close: 98.42, open: 98.8, high: 99.0, low: 98.2 }
+    shallowBreakRows[72] = {
+      ...shallowBreakRows[72],
+      close: defensePrice - defenseAtr * 0.2,
+      open: defensePrice - defenseAtr * 0.1,
+      high: defensePrice + defenseAtr * 0.05,
+      low: defensePrice - defenseAtr * 0.25,
+    }
     const shallowBreak = buildActionSignals({ assetType, period, rows: shallowBreakRows })
     assert.equal(shallowBreak.current.action, 'defensive', `${assetType}/${period} 轻微收盘跌破只进入防守确认中`)
     assert.equal(shallowBreak.current.defenseStatus, 'break_pending')
     assert.equal(shallowBreak.events.at(-1)?.type, 'reduce')
+
+    const deepBreakRows = rows.slice(0, 73).map(bar => ({ ...bar }))
+    deepBreakRows[72] = {
+      ...deepBreakRows[72],
+      close: defensePrice - defenseAtr * 0.35,
+      open: defensePrice - defenseAtr * 0.25,
+      high: defensePrice - defenseAtr * 0.1,
+      low: defensePrice - defenseAtr * 0.4,
+    }
+    const deepBreak = buildActionSignals({ assetType, period, rows: deepBreakRows })
+    assert.equal(deepBreak.current.action, 'retreat', `${assetType}/${period} 单根深破达到0.3 ATR才退出`)
+    assert.equal(deepBreak.events.at(-1)?.type, 'retreat')
+
+    const consecutiveBreakRows = rows.slice(0, 74).map(bar => ({ ...bar }))
+    for (const index of [72, 73]) {
+      consecutiveBreakRows[index] = {
+        ...consecutiveBreakRows[index],
+        close: defensePrice - defenseAtr * 0.2,
+        open: defensePrice - defenseAtr * 0.1,
+        high: defensePrice + defenseAtr * 0.05,
+        low: defensePrice - defenseAtr * 0.25,
+      }
+    }
+    const consecutiveBreak = buildActionSignals({ assetType, period, rows: consecutiveBreakRows })
+    assert.equal(consecutiveBreak.current.action, 'retreat', `${assetType}/${period} 连续两根浅破应退出`)
+    assert.equal(consecutiveBreak.events.at(-1)?.type, 'retreat')
 
     const topThenBottomRows = rows.map(bar => ({ ...bar }))
     topThenBottomRows[72] = {
