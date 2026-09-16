@@ -13,10 +13,11 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
+from app.indicators.pipeline import compute_enriched, compute_enriched_single
 from app.db_safe import is_valid_ext_ident
 from app.market_time import cn_now, cn_today, in_continuous_session
 from app.price_limits import is_risk_warning_name, price_limit_pct
-from app.services import kline_sync
+from app.services import kline_sync, trading_day
 from app.services.chart_data import ChartSnapshot
 from app.services.kline_periods import aggregate_daily_period, aggregate_minute_30m
 from app.services.technical_scoring import (
@@ -1056,7 +1057,9 @@ def get_minute_batch(request: Request, body: dict):
     #  节假日当日分区恒为空, 不影响该回退判据。)
     if not trade_date_str:
         today = cn_today()
-        need_fallback = today.weekday() >= 5  # 周六/周日必非交易日
+        # 周六/周日必非交易日; 工作日休市 (国庆等) 以交易日探针的「确定休市」为准,
+        # 与 /api/index/minute 同口径 — 未知 (None) 维持下方收盘后判据
+        need_fallback = today.weekday() >= 5 or trading_day.is_trading_day() is False
         if not need_fallback:
             now_cn = cn_now()
             after_close = now_cn.hour > 15 or (now_cn.hour == 15 and now_cn.minute >= 30)
@@ -1343,7 +1346,7 @@ def get_minute(
     stock_name = stock_info.get("name")
 
     default_snapshot = None
-    if live and trade_date is None and in_continuous_session():
+    if live and trade_date is None and in_continuous_session() and trading_day.is_trading_day() is not False:
         trade_date = cn_today()
     elif trade_date is None and getattr(request.app.state, "chart_data_service", None) is not None:
         # 周末或本地历史滞后时, 最新交易日由展示源返回日期决定。
@@ -1360,7 +1363,8 @@ def get_minute(
         # 默认看今天, 而不是本地落盘的最近日 (盘中后者是昨天)。
         # 非交易日(周末/节假日)才回退到本地最近有数据的交易日。
         today = cn_today()
-        need_fallback = today.weekday() >= 5  # 周六/周日必非交易日
+        # 同 /minute-batch: 周末必回退, 工作日休市以交易日探针「确定休市」为准
+        need_fallback = today.weekday() >= 5 or trading_day.is_trading_day() is False
         if not need_fallback:
             now_cn = cn_now()
             after_close = now_cn.hour > 15 or (now_cn.hour == 15 and now_cn.minute >= 30)
@@ -1501,8 +1505,12 @@ def sync_symbol(
     """手动触发单股同步(Free 用户在 K 线页用)。"""
     repo = request.app.state.repo
     capset = request.app.state.capabilities
-    n = kline_sync.sync_and_persist_daily_batch([symbol], repo, capset, count=days)
-    return {"symbol": symbol, "rows_written": n}
+    zero: list[str] = []
+    n = kline_sync.sync_and_persist_daily_batch([symbol], repo, capset, count=days, zero_row_out=zero)
+    resp = {"symbol": symbol, "rows_written": n}
+    if zero:
+        resp["zero_row_symbols"] = zero
+    return resp
 
 
 @router.post("/sync_batch")
@@ -1513,8 +1521,14 @@ def sync_batch(
 ):
     repo = request.app.state.repo
     capset = request.app.state.capabilities
-    n = kline_sync.sync_and_persist_daily_batch(symbols, repo, capset, count=days)
-    return {"symbols": symbols, "rows_written": n}
+    zero: list[str] = []
+    n = kline_sync.sync_and_persist_daily_batch(symbols, repo, capset, count=days, zero_row_out=zero)
+    resp = {"symbols": symbols, "rows_written": n}
+    if zero:
+        # fail-loud (#302): 裸符号被跳过/上游 200 空数据的标的显式列出,
+        # 不再"回填显示成功、实际全库 0 行"
+        resp["zero_row_symbols"] = zero
+    return resp
 
 
 @router.post("/refresh_views")

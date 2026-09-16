@@ -71,7 +71,10 @@ export function StockMultiDayIntradayChart({
   const loading = sessions.length === 0 && (history.isLoading || latest.isLoading)
   const queryError = sessions.length === 0 ? history.error ?? latest.error : null
   const isIndex = history.data?.asset_type === 'index' || latest.data?.asset_type === 'index'
-  const missingDays = Math.max(0, days - sessions.length)
+  // 缺口只按本地落库的历史 session 数计算: 当日实时 (latest, 盘中不落盘) 只合并进
+  // sessions 供绘图, 若参与计数会把缺口撑成 0, 提示条与自动补齐将永不触发 (issue #305)
+  const localSessionCount = history.data?.sessions?.length ?? 0
+  const missingDays = Math.max(0, days - localSessionCount)
   const showCoverage = !history.isPlaceholderData && sessions.length > 0 && missingDays > 0 && !isIndex
 
   const chartHeight = Math.max(260, height - (showCoverage || syncMinute.isPending ? 32 : 0))

@@ -34,6 +34,7 @@ from app.services.elliott_wave_analyzer import (
     analyze_elliott,
     explain_elliott,
 )
+from app.services.ndjson_heartbeat import with_heartbeat
 from app.services.stock_analyzer import analyze_stock_stream
 from app.services.stock_chat import (
     StockChatError,
@@ -186,7 +187,7 @@ async def analyze_stock(request: Request, req: AnalyzeRequest):
     data_dir = repo.store.data_dir
 
     async def stream_gen():
-        async for chunk in analyze_stock_stream(repo, data_dir, req.symbol, req.focus):
+        async for chunk in with_heartbeat(analyze_stock_stream(repo, data_dir, req.symbol, req.focus)):
             yield chunk + "\n"
 
     return StreamingResponse(
