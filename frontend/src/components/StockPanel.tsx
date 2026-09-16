@@ -16,7 +16,7 @@ import {
   nextThirtyMinuteBoundaryAt,
 } from '@/lib/kline'
 import { StockInfoBar } from '@/components/StockInfoBar'
-import { StockDailyKChart, getDefaultRange, toOHLC } from '@/components/StockDailyKChart'
+import { StockDailyKChart, getDefaultRange, toOHLC, type ChartStrategySelection } from '@/components/StockDailyKChart'
 import { StockIntradayChart } from '@/components/StockIntradayChart'
 import { StockTechnicalPanel } from '@/components/StockTechnicalPanel'
 import { StockChanlunPanel } from '@/components/StockChanlunPanel'
@@ -171,6 +171,12 @@ interface Props {
   visibleThrough?: string | null
   /** 调试设置开启时，不显示当前推进 K 线的日期。 */
   hideCurrentDate?: boolean
+  /** 在日K图工具栏打开策略选择器。 */
+  onAddStrategy?: (assetType: 'stock' | 'etf', period: KlinePeriod) => void
+  /** 当前日K图已选中的策略。 */
+  selectedStrategy?: ChartStrategySelection | null
+  /** 清除当前日K图的策略选择。 */
+  onClearStrategy?: () => void
   /** 外部锁定的当前 K 线；用于逐根推进时保持详情页各区域同步。 */
   lockedSelectedDate?: string | null
   /** 初始可见蜡烛根数 (默认 60); 'all' = 初始适配显示全部数据 (用于全区间回放) */
@@ -219,6 +225,9 @@ export function StockPanel({
   periodDays = DEFAULT_30M_DAYS,
   visibleThrough,
   hideCurrentDate = false,
+  onAddStrategy,
+  selectedStrategy,
+  onClearStrategy,
   lockedSelectedDate,
   visibleBars,
 }: Props) {
@@ -959,6 +968,9 @@ export function StockPanel({
             elliottAnalysis={resolvedRightPaneMode === 'technical' ? elliottAnalysis : undefined}
             visibleThrough={visibleThrough}
             hideCurrentDate={hideCurrentDate}
+            onAddStrategy={onAddStrategy}
+            selectedStrategy={selectedStrategy}
+            onClearStrategy={onClearStrategy}
           />
         </div>
 

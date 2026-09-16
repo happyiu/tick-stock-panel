@@ -42,7 +42,7 @@ export const QK = {
 
   // Screener
   screener:             ['screener'] as const,
-  screenerStrategies:   (assetType: string = 'stock', timeframe: '1d' | '1m' | 'all' = '1d') => ['screener-strategies', assetType, timeframe] as const,
+  screenerStrategies:   (assetType: string = 'stock', timeframe: '1d' | '1w' | '30m' | '1m' | 'all' = '1d') => ['screener-strategies', assetType, timeframe] as const,
   screenerCachedSummary: ['screener-cached', 'summary'] as const,
   screenerCachedResult: (strategyId: string, asOf?: string, ext?: string) => ['screener-cached', 'strategy', strategyId, asOf ?? '', ext ?? ''] as const,
   screenerCached:       (asOf?: string, ext?: string) => ['screener-cached', 'all', asOf ?? '', ext ?? ''] as const,
@@ -65,6 +65,8 @@ export const QK = {
     ? ['strategy-link-options', assetType] as const
     : ['strategy-link-options'] as const,
   strategyDetail:       (id: string) => ['strategy-detail', id] as const,
+  strategySignals:      (strategyId: string, symbol: string, assetType: string, timeframe: string, start: string, end: string, days: number) =>
+                          ['strategy-signals', strategyId, symbol, assetType, timeframe, start, end, days] as const,
 
   // ETF 模拟交易（独立 SSE 只失效当前账户）
   paperSnapshot:        (accountId: string) => ['paper-trading', 'snapshot', accountId] as const,

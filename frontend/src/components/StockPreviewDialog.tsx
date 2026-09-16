@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, RefreshCw, Clock, Gamepad2, LineChart, Star, RadioTower, Maximize2, Minimize2, Activity, ChevronLeft, ChevronRight, ArrowLeftRight } from 'lucide-react'
-import { api, type KlinePeriod, type KlineRow } from '@/lib/api'
+import { api, type KlinePeriod, type KlineRow, type StrategyDetail } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { cn } from '@/lib/cn'
 import { cnSignal } from '@/lib/signals'
@@ -29,6 +29,7 @@ import {
   defaultKlineRange,
 } from '@/lib/kline'
 import { ExtensionSlot } from '@/extensions/ExtensionSlot'
+import { StrategyPickerDialog } from '@/components/screener/StrategyPickerDialog'
 
 interface Props {
   symbol: string | null
@@ -152,6 +153,11 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
   const [findFeelDate, setFindFeelDate] = useState<string | null>(null)
   const [findFeelPhase, setFindFeelPhase] = useState<'setup' | 'playing' | 'finished'>('setup')
   const [showMonitorEditor, setShowMonitorEditor] = useState(false)
+  const [strategyPicker, setStrategyPicker] = useState<{
+    assetType: 'stock' | 'etf'
+    period: KlinePeriod
+  } | null>(null)
+  const [selectedStrategy, setSelectedStrategy] = useState<StrategyDetail | null>(null)
   const customNames = useCustomSignalNames()
   const [priceAlertDraft, setPriceAlertDraft] = useState<PriceAlertDraft | null>(null)
   const [maximized, setMaximized] = useState(false)
@@ -353,6 +359,8 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
       setFindFeelLock(null)
       setFindFeelDate(null)
       setFindFeelPhase('setup')
+      setStrategyPicker(null)
+      setSelectedStrategy(null)
     }
     prevSymbolRef.current = symbol
     setAssetType(triggerInfo?.asset_type)
@@ -431,7 +439,19 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
     if (findFeelLocked) return
     setPeriod(next)
     setDateRange(previewKlineRange(next, assetType, periodDays))
+    setStrategyPicker(null)
+    setSelectedStrategy(null)
   }
+
+  const handleOpenStrategyPicker = useCallback((nextAssetType: 'stock' | 'etf', nextPeriod: KlinePeriod) => {
+    if (findFeelLocked) return
+    setStrategyPicker({ assetType: nextAssetType, period: nextPeriod })
+  }, [findFeelLocked])
+
+  const handleStrategySelected = useCallback((strategy: StrategyDetail) => {
+    setSelectedStrategy(strategy)
+    setStrategyPicker(null)
+  }, [])
 
   const openPriceAlert = (targetPrice: number, currentPrice: number) => {
     setPriceAlertDraft({ id: Date.now(), targetPrice, currentPrice })
@@ -927,6 +947,9 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                       independentPaneScroll
                       period={period}
                       periodDays={periodDays}
+                      onAddStrategy={findFeelLocked ? undefined : handleOpenStrategyPicker}
+                      selectedStrategy={selectedStrategy}
+                      onClearStrategy={() => setSelectedStrategy(null)}
                       visibleThrough={findFeelLocked ? findFeelDate : null}
                       lockedSelectedDate={findFeelLocked ? findFeelDate : null}
                       hideCurrentDate={findFeelLocked && findFeelLock ? findFeelLock.hideCurrentDate : false}
@@ -1020,6 +1043,15 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
           initialTarget={priceAlertDraft.targetPrice}
           initialCurrentPrice={priceAlertDraft.currentPrice}
           onClose={() => setPriceAlertDraft(null)}
+        />
+      )}
+      {strategyPicker && (
+        <StrategyPickerDialog
+          open
+          assetType={strategyPicker.assetType}
+          period={strategyPicker.period}
+          onClose={() => setStrategyPicker(null)}
+          onSelect={handleStrategySelected}
         />
       )}
     </AnimatePresence>

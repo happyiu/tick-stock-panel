@@ -716,9 +716,11 @@ export interface ScreenerStrategy {
   name: string
   description: string
   source?: string
-  /** 支持的周期, 如 ['1d'] / ['1m'] (分钟策略) */
+  /** 支持的周期: 1d(日线) / 1w(周线) / 30m(30F) / 1m(分钟策略) */
   timeframes?: string[]
 }
+
+export type StrategyTimeframe = '1d' | '1w' | '30m' | '1m'
 
 export interface StrategyLoadError {
   file: string
@@ -1130,6 +1132,21 @@ export interface StrategyDetail {
   limit: number
   // 叠加策略(composite)专属: 子策略列表与合并模式。非 composite 时为 null。
   composite_children?: CompositeChildInfo[] | null
+}
+
+export interface StrategySignalMarker {
+  date: string
+  kind: 'entry' | 'exit'
+  signals: string[]
+}
+
+export interface StrategySignalResponse {
+  symbol: string
+  asset_type: 'stock' | 'etf'
+  timeframe: StrategyTimeframe
+  strategy_id: string
+  markers: StrategySignalMarker[]
+  count: number
 }
 
 export type ScoringDirection = 'high' | 'low'
@@ -3270,8 +3287,8 @@ export const api = {
         : '/api/watchlist/enriched',
     ),
 
-  // timeframe='all' 时不传参数 → 后端不过滤周期, 返回日线+分钟合并列表
-  screenerStrategies: async (assetType?: 'stock' | 'etf' | 'index', timeframe: '1d' | '1m' | 'all' = '1d') => {
+  // timeframe='all' 时不传参数 → 后端不过滤周期, 返回所有周期策略
+  screenerStrategies: async (assetType?: 'stock' | 'etf' | 'index', timeframe: '1d' | '1w' | '30m' | '1m' | 'all' = '1d') => {
     const data = await request<{ strategies: StrategyDetail[]; load_errors?: StrategyLoadError[] }>(
       `/api/strategies?${assetType ? `asset_type=${assetType}&` : ''}${timeframe !== 'all' ? `timeframe=${timeframe}` : ''}`,
     )
@@ -4202,6 +4219,27 @@ export const api = {
 
   strategyGet: (id: string) =>
     request<StrategyDetail>(`/api/strategies/${id}`),
+
+  strategySignals: (
+    strategyId: string,
+    symbol: string,
+    assetType: 'stock' | 'etf',
+    timeframe: '1d' | '1w' | '30m',
+    range: { start: string; end: string },
+    days = 20,
+  ) => {
+    const params = new URLSearchParams({
+      symbol,
+      asset_type: assetType,
+      timeframe,
+      start_date: range.start,
+      end_date: range.end,
+      days: String(days),
+    })
+    return request<StrategySignalResponse>(
+      `/api/strategy-chart/signals/${encodeURIComponent(strategyId)}?${params.toString()}`,
+    )
+  },
 
   /** 发布 research_only 的 AI 草稿策略(翻转为公开) */
   strategyPublish: (strategyId: string) =>

@@ -1,12 +1,12 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Check, Settings2 } from 'lucide-react'
-import { type KlinePeriod, type KlineRow } from '@/lib/api'
+import { Check, Layers, Loader2, Plus, Settings2, X } from 'lucide-react'
+import { api, type KlinePeriod, type KlineRow } from '@/lib/api'
 import type { ActionCurrentAction, ActionDefenseStatus, ActionObservation, ActionSignalStatus } from '@/lib/actionSignals'
 import type { ChanlunAnalysis } from '@/lib/chanlun'
 import type { ElliottAnalysis } from '@/lib/elliott'
-import { DEFAULT_30M_DAYS, defaultKlineRange, filterKlineRowsThrough, klinePeriodQueryOptions } from '@/lib/kline'
-import { ChartDataNotice } from '@/components/ChartDataNotice'
+import { DEFAULT_30M_DAYS, defaultKlineRange, filterKlineRowsThrough, klinePeriodQueryOptions, normalizeKlineBarKey } from '@/lib/kline'
+import { QK } from '@/lib/queryKeys'
 import { storage, type StockPreviewChanlunOverlayConfig, type StockPreviewElliottOverlayConfig } from '@/lib/storage'
 import {
   EChartsCandlestick,
@@ -122,7 +122,15 @@ interface Props {
   visibleThrough?: string | null
   /** 调试设置开启时隐藏当前推进 K 线的日期。 */
   hideCurrentDate?: boolean
+  /** 在图表工具栏打开当前资产/周期的策略选择器。 */
+  onAddStrategy?: (assetType: 'stock' | 'etf', period: KlinePeriod) => void
+  /** 当前已选中的策略；其入场/退出信号会叠加在 K 线。 */
+  selectedStrategy?: { id: string; name: string; source?: string } | null
+  /** 清除当前图表上的策略选择。 */
+  onClearStrategy?: () => void
 }
+
+export type ChartStrategySelection = NonNullable<Props['selectedStrategy']>
 
 const ACTION_STATE_LABELS: Record<ActionCurrentAction, string> = {
   bottom_observe: '底部观察',
@@ -241,6 +249,9 @@ export function StockDailyKChart({
   elliottAnalysis,
   visibleThrough,
   hideCurrentDate = false,
+  onAddStrategy,
+  selectedStrategy,
+  onClearStrategy,
 }: Props) {
   const [activeIndicators, setActiveIndicators] = useState<string[]>(loadActiveSubCharts)
   const [showMarkers, setShowMarkers] = useState(true)
@@ -270,6 +281,50 @@ export function StockDailyKChart({
     [kline.data?.rows, period, visibleThrough],
   )
   const rows = useMemo(() => toOHLC(displayRawRows, period), [displayRawRows, period])
+  const chartAssetType = kline.data?.asset_type === 'stock' || kline.data?.asset_type === 'etf'
+    ? kline.data.asset_type
+    : undefined
+  const strategyTimeframe: '1d' | '1w' | '30m' | null = period === '1mo' ? null : period
+  const strategySignalsQuery = useQuery({
+    queryKey: QK.strategySignals(
+      selectedStrategy?.id ?? '',
+      symbol,
+      chartAssetType ?? '',
+      strategyTimeframe ?? '',
+      dateRange.start,
+      dateRange.end,
+      periodDays,
+    ),
+    queryFn: () => api.strategySignals(
+      selectedStrategy!.id,
+      symbol,
+      chartAssetType!,
+      strategyTimeframe!,
+      dateRange,
+      periodDays,
+    ),
+    enabled: Boolean(
+      selectedStrategy
+      && chartAssetType
+      && strategyTimeframe
+      && kline.data
+      && rows.length > 0,
+    ),
+    retry: 1,
+  })
+  const strategyMarkers = useMemo<ChartMarker[]>(() => {
+    const visibleThroughKey = visibleThrough
+      ? normalizeKlineBarKey(visibleThrough, period)
+      : ''
+    return (strategySignalsQuery.data?.markers ?? [])
+      .map(marker => ({
+        date: normalizeKlineBarKey(marker.date, period),
+        kind: marker.kind === 'entry' ? 'buy' as const : 'sell' as const,
+        label: marker.kind === 'entry' ? '策略入' : '策略出',
+        color: marker.kind === 'entry' ? '#60A5FA' : '#F59E0B',
+      }))
+      .filter(marker => !visibleThroughKey || marker.date <= visibleThroughKey)
+  }, [period, strategySignalsQuery.data?.markers, visibleThrough])
   const stockInfo = kline.data?.stock_info
   const limitMarkers = useMemo(() => buildLimitUpMarkers(displayRawRows), [displayRawRows])
   const effectiveShowLimitMarkers = showLimitMarkers && period === '1d' && kline.data?.asset_type !== 'etf'
@@ -277,7 +332,8 @@ export function StockDailyKChart({
     ...(markers ?? []),
     ...(showActionSignals && (period === '1d' || period === '30m') ? (actionMarkers ?? []) : []),
     ...(effectiveShowLimitMarkers ? limitMarkers : []),
-  ], [actionMarkers, effectiveShowLimitMarkers, limitMarkers, markers, period, showActionSignals])
+    ...strategyMarkers,
+  ], [actionMarkers, effectiveShowLimitMarkers, limitMarkers, markers, period, showActionSignals, strategyMarkers])
 
   const toggleActionSignals = useCallback(() => {
     setShowActionSignals(value => {
@@ -331,41 +387,53 @@ export function StockDailyKChart({
 
   if (!symbol) return null
 
-  const dataStatus = visibleThrough && kline.data?.data_status
-    ? { ...kline.data.data_status, data_through: visibleThrough }
-    : kline.data?.data_status
-
   return (
     <div className={className} style={{ minHeight: chartHeight }}>
-      <ChartDataNotice status={dataStatus} hideDate={hideCurrentDate} />
-      {showIndicatorControls && rows.length > 0 && (
-        <div className="flex items-center gap-1.5 px-1 pb-0.5">
-          {SUB_CHARTS.map(ind => (
-            <button
-              key={ind.key}
-              onClick={() => toggleIndicator(ind.key)}
-              className={`px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors ${
-                activeIndicators.includes(ind.key)
-                  ? 'bg-accent/20 text-accent'
-                  : 'bg-elevated text-muted hover:text-secondary'
-              }`}
-            >
-              {ind.label}
-            </button>
-          ))}
-          {OVERLAY_INDICATORS.map(ind => (
-            <button
-              key={ind.key}
-              onClick={() => toggleIndicator(ind.key)}
-              className={`px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors ${
-                activeIndicators.includes(ind.key)
-                  ? 'bg-accent/20 text-accent'
-                  : 'bg-elevated text-muted hover:text-secondary'
-              }`}
-            >
-              {ind.label}
-            </button>
-          ))}
+      {(showIndicatorControls || onAddStrategy) && rows.length > 0 && (
+        <div className="px-1 pb-0.5">
+          {onAddStrategy && chartAssetType && (
+            <div className="flex justify-end pb-1">
+              <button
+                type="button"
+                onClick={() => onAddStrategy(chartAssetType, period)}
+                title={`添加${chartAssetType === 'etf' ? ' ETF' : '股票'}策略`}
+                aria-label={`添加${chartAssetType === 'etf' ? ' ETF' : '股票'}策略`}
+                className="inline-flex shrink-0 items-center gap-1 rounded border border-accent/30 bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent transition-colors hover:border-accent/50 hover:bg-accent/15"
+              >
+                <Plus className="h-3 w-3" />
+                <span>添加策略</span>
+              </button>
+            </div>
+          )}
+          {(showIndicatorControls || selectedStrategy) && (
+          <div className="flex items-center gap-1.5">
+          {showIndicatorControls && (<>
+            {SUB_CHARTS.map(ind => (
+              <button
+                key={ind.key}
+                onClick={() => toggleIndicator(ind.key)}
+                className={`px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors ${
+                  activeIndicators.includes(ind.key)
+                    ? 'bg-accent/20 text-accent'
+                    : 'bg-elevated text-muted hover:text-secondary'
+                }`}
+              >
+                {ind.label}
+              </button>
+            ))}
+            {OVERLAY_INDICATORS.map(ind => (
+              <button
+                key={ind.key}
+                onClick={() => toggleIndicator(ind.key)}
+                className={`px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors ${
+                  activeIndicators.includes(ind.key)
+                    ? 'bg-accent/20 text-accent'
+                    : 'bg-elevated text-muted hover:text-secondary'
+                }`}
+              >
+                {ind.label}
+              </button>
+            ))}
           {chanlunAnalysis && (
             <div
               className="relative ml-0.5 flex items-center"
@@ -541,6 +609,32 @@ export function StockDailyKChart({
             >
               行动信号
             </button>
+          )}
+          </>)}
+          {selectedStrategy && (
+            <button
+              type="button"
+              onClick={onClearStrategy}
+              title={`移除策略：${selectedStrategy.name}`}
+              className="inline-flex max-w-[190px] shrink-0 items-center gap-1 rounded border border-accent/30 bg-accent/10 px-2 py-0.5 text-[10px] text-accent transition-colors hover:border-accent/50 hover:bg-accent/15"
+            >
+              <Layers className="h-3 w-3 shrink-0" />
+              <span className="truncate">{selectedStrategy.name}</span>
+              {strategySignalsQuery.isLoading && (
+                <Loader2 className="h-3 w-3 shrink-0 animate-spin opacity-80" aria-label="策略信号加载中" />
+              )}
+              {strategySignalsQuery.isError && (
+                <span className="shrink-0 text-danger" title="策略信号加载失败">!</span>
+              )}
+              {strategySignalsQuery.isSuccess && (
+                <span className="shrink-0 text-[9px] text-muted" title={`策略命中 ${strategySignalsQuery.data.count} 处`}>
+                  {strategySignalsQuery.data.count}处
+                </span>
+              )}
+              <X className="h-3 w-3 shrink-0 opacity-70" />
+            </button>
+          )}
+          </div>
           )}
         </div>
       )}

@@ -854,7 +854,7 @@ function buildOption(
           symbol: 'arrow', symbolSize: 12,
           symbolRotate: isBuy ? 0 : 180,
           symbolOffset: isBuy ? [0, '60%'] : [0, '-60%'],
-          itemStyle: { color: isBuy ? THEME.bull : isSell ? THEME.bear : CT().text },
+          itemStyle: { color: m.color ?? (isBuy ? THEME.bull : isSell ? THEME.bear : CT().text) },
           label: {
             show: !!m.label, formatter: m.label ?? '',
             position: isBuy ? 'bottom' : 'top', distance: 8,
@@ -1538,7 +1538,7 @@ export function EChartsCandlestick({
           symbol: 'arrow', symbolSize: 12,
           symbolRotate: isBuy ? 0 : 180,
           symbolOffset: isBuy ? [0, '60%'] : [0, '-60%'],
-          itemStyle: { color: isBuy ? THEME.bull : isSell ? THEME.bear : CT().text },
+          itemStyle: { color: m.color ?? (isBuy ? THEME.bull : isSell ? THEME.bear : CT().text) },
           label: {
             show: !!m.label, formatter: m.label ?? '',
             position: isBuy ? 'bottom' : 'top', distance: 8,
