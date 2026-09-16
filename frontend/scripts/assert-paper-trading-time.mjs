@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import {
+  createPaperTradingSessions,
   PAPER_TRADING_SESSIONS,
+  PAPER_TRADING_STEP_OPTIONS,
   PAPER_TRADING_STEP_MINUTES,
   PAPER_TRADING_TIMELINE,
   buildPaperTradingTimelineState,
@@ -9,6 +11,7 @@ import {
 } from '../src/lib/paper-trading-time.ts'
 
 assert.equal(PAPER_TRADING_STEP_MINUTES, 15)
+assert.deepEqual(PAPER_TRADING_STEP_OPTIONS, [5, 15, 30, 60])
 assert.deepEqual(PAPER_TRADING_SESSIONS.map(session => [session.start, session.end]), [
   ['09:30', '11:30'],
   ['13:00', '15:00'],
@@ -18,6 +21,15 @@ assert.equal(PAPER_TRADING_TIMELINE[0].label, '09:30')
 assert.equal(PAPER_TRADING_TIMELINE[8].label, '11:30')
 assert.equal(PAPER_TRADING_TIMELINE[9].label, '13:00')
 assert.equal(PAPER_TRADING_TIMELINE[17].label, '15:00')
+
+for (const step of PAPER_TRADING_STEP_OPTIONS) {
+  const sessions = createPaperTradingSessions(step)
+  assert.equal(sessions[0].points.length, 120 / step + 1)
+  assert.equal(sessions[1].points.length, 120 / step + 1)
+  assert.equal(sessions[0].points.at(-1).label, '11:30')
+  assert.equal(sessions[1].points.at(-1).label, '15:00')
+  assert.equal(buildPaperTradingTimelineState(10 * 60, true, step).currentStepLabel, step === 60 ? '09:30' : '10:00')
+}
 
 const stateAt = time => buildPaperTradingTimelineState(parsePaperClockMinutes(`2026-09-14T${time}:00`))
 assert.equal(stateAt('09:30').currentStepLabel, '09:30')

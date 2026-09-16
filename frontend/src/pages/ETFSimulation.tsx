@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as echarts from 'echarts'
-import { Archive, ChevronDown, ChevronUp, Pause, Play, RotateCcw, Settings, StepForward, X } from 'lucide-react'
+import { Archive, ChevronDown, ChevronUp, Pause, Play, Plus, RotateCcw, Save, Settings, StepForward, Trash2, X } from 'lucide-react'
 import { Modal } from '@/components/Modal'
 import { PageHeader } from '@/components/PageHeader'
 import { PaperTradingControls, PaperTradingSymbolField } from '@/components/PaperTradingControls'
@@ -9,15 +9,18 @@ import { StockPreviewDialog, toNavItems } from '@/components/StockPreviewDialog'
 import { api, type PaperPosition, type PaperSnapshot, type PositionEquityPoint } from '@/lib/api'
 import {
   buildPaperTradingTimelineState,
+  createPaperTradingSessions,
   getBeijingPaperClock,
-  PAPER_TRADING_SESSIONS,
+  PAPER_TRADING_STEP_OPTIONS,
   PAPER_TRADING_STEP_MINUTES,
   parsePaperClockMinutes,
   type PaperTradingClock,
+  type PaperTradingStepMinutes,
   type PaperTradingSession,
   type PaperTradingTimelineState,
 } from '@/lib/paper-trading-time'
 import { QK } from '@/lib/queryKeys'
+import { storage } from '@/lib/storage'
 import { useChartTheme } from '@/lib/theme'
 
 type Mode = 'live' | 'replay'
@@ -38,9 +41,66 @@ type AccountFormState = {
   max_exposure_pct: number
   max_symbol_exposure_pct: number
 }
+type TimelineCustomPoint = {
+  id: number
+  time: string
+  description: string
+  timerMethod: string
+}
+type TimelineSystemPoint = {
+  time: string
+  minutes: number
+  description: string
+}
+type TimelineSettings = {
+  stepMinutes: PaperTradingStepMinutes
+  timerMethod: string
+  customPoints: TimelineCustomPoint[]
+}
+
+const DEFAULT_TIMELINE_SETTINGS: TimelineSettings = {
+  stepMinutes: PAPER_TRADING_STEP_MINUTES,
+  timerMethod: '',
+  customPoints: [],
+}
+const cloneTimelineSettings = (settings: TimelineSettings): TimelineSettings => ({
+  ...settings,
+  customPoints: settings.customPoints.map(point => ({ ...point })),
+})
+const isTimelineStepMinutes = (value: unknown): value is PaperTradingStepMinutes => PAPER_TRADING_STEP_OPTIONS.some(step => step === value)
+const loadTimelineSettings = (): TimelineSettings => {
+  const saved = storage.paperTimelineSettings.get(null)
+  if (!saved || typeof saved !== 'object') return cloneTimelineSettings(DEFAULT_TIMELINE_SETTINGS)
+  const raw = saved as Partial<TimelineSettings>
+  const customPoints = Array.isArray(raw.customPoints) ? raw.customPoints.flatMap(point => {
+    if (!point || typeof point !== 'object') return []
+    const value = point as Partial<TimelineCustomPoint>
+    return typeof value.id === 'number' && Number.isInteger(value.id) && typeof value.time === 'string' && typeof value.description === 'string' && typeof value.timerMethod === 'string'
+      ? [{ id: value.id, time: value.time, description: value.description, timerMethod: value.timerMethod }]
+      : []
+  }) : []
+  return {
+    stepMinutes: isTimelineStepMinutes(raw.stepMinutes) ? raw.stepMinutes : PAPER_TRADING_STEP_MINUTES,
+    timerMethod: typeof raw.timerMethod === 'string' ? raw.timerMethod : '',
+    customPoints,
+  }
+}
+const parseTimelinePointMinutes = (value: string) => {
+  const match = value.match(/^(\d{2}):(\d{2})$/)
+  if (!match) return null
+  const hours = Number(match[1])
+  const minutes = Number(match[2])
+  return hours <= 23 && minutes <= 59 ? hours * 60 + minutes : null
+}
 const input = 'h-9 w-full rounded-btn border border-border bg-base px-2.5 text-sm outline-none focus:border-accent'
 const button = 'inline-flex h-9 items-center justify-center gap-1.5 rounded-btn border border-border bg-surface px-3 text-sm font-medium transition-colors hover:border-accent/50 disabled:cursor-not-allowed disabled:opacity-40'
 const primary = `${button} border-accent bg-accent text-white hover:bg-accent/90`
+const TIMELINE_PRE_POST_WIDTH = 144
+const TIMELINE_LUNCH_WIDTH = 96
+const SYSTEM_TIMELINE_POINTS: readonly TimelineSystemPoint[] = [
+  { time: '09:10', minutes: 9 * 60 + 10, description: '数据-自动调度-盘前 · 个股维表' },
+  { time: '15:35', minutes: 15 * 60 + 35, description: '盘后 · 全量管道' },
+]
 
 const money = (v?: number | null, digits = 2) => v == null || !Number.isFinite(v) ? '—' : v.toLocaleString('zh-CN', { minimumFractionDigits: digits, maximumFractionDigits: digits })
 const price = (v?: number | null) => v == null || !Number.isFinite(v) ? '—' : v.toLocaleString('zh-CN', { minimumFractionDigits: 3, maximumFractionDigits: 3 })
@@ -57,14 +117,106 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   return <label className="block space-y-1"><span className="text-xs text-secondary">{label}</span>{children}</label>
 }
 
-function TimelineSegment({ session, offset, state }: { session: PaperTradingSession; offset: number; state: PaperTradingTimelineState }) {
-  return <div className="min-w-[340px] flex-1"><div className="relative flex items-center"><div className="absolute left-1 right-1 top-1/2 h-px bg-border" />{session.points.map((point, index) => { const globalIndex = offset + index; const active = state.activeIndex === globalIndex; const complete = globalIndex <= state.completedIndex; return <div key={point.label} className="relative flex flex-1 justify-center"><span title={`${point.label} · ${active ? '当前时间步' : complete ? '已完成' : '待推进'}`} className={`h-2.5 w-2.5 rounded-full border transition-colors ${active ? 'border-accent bg-accent ring-4 ring-accent/20' : complete ? 'border-accent bg-accent/80' : 'border-border bg-base'}`} /></div> })}</div><div className="mt-2 flex justify-between text-[10px] tabular-nums text-muted">{session.points.map((point, index) => { const globalIndex = offset + index; const current = state.activeIndex === globalIndex; return <span key={point.label} className={current ? 'font-semibold text-accent' : globalIndex <= state.completedIndex ? 'text-secondary' : undefined}>{point.label}</span> })}</div></div>
+type ParsedTimelineCustomPoint = TimelineCustomPoint & { minutes: number }
+
+const parseTimelineCustomPoints = (points: TimelineCustomPoint[]): ParsedTimelineCustomPoint[] => points.flatMap(point => {
+  const minutes = parseTimelinePointMinutes(point.time)
+  return minutes == null ? [] : [{ ...point, minutes }]
+})
+
+function TimelineCustomMarker({ point, left, reached }: { point: ParsedTimelineCustomPoint; left: string; reached: boolean }) {
+  return <div
+    className="absolute top-0 z-20 -translate-x-1/2 text-purple-400"
+    style={{ left }}
+    title={`${point.time} · ${point.description || '未填写说明'} · ${point.timerMethod || '后端方法待返回'}`}
+    aria-label={`自定义时间点 ${point.time}`}
+  >
+    <span className="block h-4 whitespace-nowrap text-center text-[10px] font-medium leading-4 tabular-nums">{point.time}</span>
+    <span className={`mx-auto mt-1 block h-2.5 w-2.5 rounded-full border transition-colors ${reached ? 'border-purple-300 bg-purple-500 ring-4 ring-purple-400/20' : 'border-purple-400 bg-base'}`} />
+  </div>
 }
 
-function TradingSessionTimeline({ clock }: { clock: PaperTradingClock | null }) {
-  const state = buildPaperTradingTimelineState(clock?.minutes ?? null, clock?.tradingDay ?? false)
-  const afternoonOffset = PAPER_TRADING_SESSIONS[0].points.length
-  return <div className="basis-full border-t border-border/70 pt-3"><div className="overflow-x-auto pb-1"><div className="flex min-w-[736px] items-start gap-5"><TimelineSegment session={PAPER_TRADING_SESSIONS[0]} offset={0} state={state} /><div className="w-12 shrink-0 pt-4 text-center text-[10px] text-muted">午休</div><TimelineSegment session={PAPER_TRADING_SESSIONS[1]} offset={afternoonOffset} state={state} /></div></div></div>
+function TimelineSystemMarker({ point, left }: { point: TimelineSystemPoint; left: string }) {
+  return <div
+    className="absolute top-5 z-20 -translate-x-1/2 text-yellow-400"
+    style={{ left }}
+    title={`${point.description} · ${point.time}`}
+    aria-label={`系统时间点 ${point.time} ${point.description}`}
+  >
+    <span className="mx-auto block h-2.5 w-2.5 rounded-full border border-yellow-300 bg-yellow-400" />
+    <span className="mt-2 block whitespace-nowrap text-center text-[10px] font-medium leading-4 tabular-nums">{point.time}</span>
+  </div>
+}
+
+function timelineSessionMarkerLeft(minutes: number, session: PaperTradingSession) {
+  const start = session.points[0]?.minutes ?? minutes
+  const end = session.points[session.points.length - 1]?.minutes ?? start
+  const ratio = end === start ? 0 : Math.max(0, Math.min(1, (minutes - start) / (end - start)))
+  return `${ratio * 100}%`
+}
+
+function TimelineCustomSegment({ label, width, customPoints, systemPoints, clock }: { label: string; width: number; customPoints: ParsedTimelineCustomPoint[]; systemPoints: TimelineSystemPoint[]; clock: PaperTradingClock | null }) {
+  return <div className="relative h-[4.5rem] shrink-0 pt-5" style={{ width, minWidth: width }}>
+    <div className="relative flex flex-col items-center">
+      <span className="z-10 h-2.5 w-2.5 rounded-full border border-border bg-base" />
+      <span className="absolute left-1/2 top-14 -translate-x-1/2 whitespace-nowrap text-[10px] text-muted">{label}</span>
+    </div>
+    {systemPoints.map((point, index) => <TimelineSystemMarker
+      key={`${point.time}-${point.description}`}
+      point={point}
+      left={`${((index + 0.5) / systemPoints.length) * 100}%`}
+    />)}
+    {customPoints.map((point, index) => <TimelineCustomMarker
+      key={point.id}
+      point={point}
+      left={`${((index + 0.5) / customPoints.length) * 100}%`}
+      reached={Boolean(clock?.tradingDay) && (clock?.minutes ?? -1) >= point.minutes}
+    />)}
+  </div>
+}
+
+function TimelineSegment({ session, offset, state, customPoints, clock }: { session: PaperTradingSession; offset: number; state: PaperTradingTimelineState; customPoints: ParsedTimelineCustomPoint[]; clock: PaperTradingClock | null }) {
+  const start = session.points[0]?.minutes ?? 0
+  const end = session.points[session.points.length - 1]?.minutes ?? start
+  const markers = customPoints.filter(point => point.minutes >= start && point.minutes <= end)
+  return <div className="flex-1" style={{ minWidth: Math.max(340, session.points.length * 32) }}>
+    <div className="relative h-[4.5rem]">
+      <div className="relative h-full">
+        {session.points.map((point, index) => {
+          const globalIndex = offset + index
+          const active = state.activeIndex === globalIndex
+          const complete = globalIndex <= state.completedIndex
+          return <div key={point.label} className="absolute top-5 flex -translate-x-1/2 flex-col items-center" style={{ left: `${(index / Math.max(session.points.length - 1, 1)) * 100}%` }}>
+            <span title={`${point.label} · ${active ? '当前时间步' : complete ? '已完成' : '待推进'}`} className={`z-10 h-2.5 w-2.5 rounded-full border transition-colors ${active ? 'border-blue-300 bg-blue-500 ring-4 ring-blue-400/20' : complete ? 'border-blue-400 bg-blue-500' : 'border-blue-400 bg-base'}`} />
+            <span className={`mt-2 whitespace-nowrap text-center text-[10px] tabular-nums text-blue-400 ${active ? 'font-semibold' : ''}`}>{point.label}</span>
+          </div>
+        })}
+      </div>
+      {markers.map(point => <TimelineCustomMarker
+        key={point.id}
+        point={point}
+        left={timelineSessionMarkerLeft(point.minutes, session)}
+        reached={Boolean(clock?.tradingDay) && (clock?.minutes ?? -1) >= point.minutes}
+      />)}
+    </div>
+  </div>
+}
+
+function TradingSessionTimeline({ clock, settings }: { clock: PaperTradingClock | null; settings: TimelineSettings }) {
+  const sessions = createPaperTradingSessions(settings.stepMinutes)
+  const state = buildPaperTradingTimelineState(clock?.minutes ?? null, clock?.tradingDay ?? false, settings.stepMinutes)
+  const afternoonOffset = sessions[0].points.length
+  const customPoints = parseTimelineCustomPoints(settings.customPoints).sort((left, right) => left.minutes - right.minutes || left.id - right.id)
+  const morningStart = 9 * 60 + 30
+  const morningEnd = 11 * 60 + 30
+  const afternoonStart = 13 * 60
+  const afternoonEnd = 15 * 60
+  const preopenPoints = customPoints.filter(point => point.minutes < morningStart)
+  const lunchPoints = customPoints.filter(point => point.minutes > morningEnd && point.minutes < afternoonStart)
+  const postclosePoints = customPoints.filter(point => point.minutes > afternoonEnd)
+  const preopenSystemPoints = SYSTEM_TIMELINE_POINTS.filter(point => point.minutes < morningStart)
+  const postcloseSystemPoints = SYSTEM_TIMELINE_POINTS.filter(point => point.minutes > afternoonEnd)
+  return <div className="basis-full border-t border-border/70 pt-3"><div className="overflow-x-auto pb-1"><div className="relative flex min-w-[736px] items-start gap-0"><div className="pointer-events-none absolute inset-x-0 top-[25px] h-px bg-border" /><TimelineCustomSegment label="盘前" width={TIMELINE_PRE_POST_WIDTH} customPoints={preopenPoints} systemPoints={preopenSystemPoints} clock={clock} /><TimelineSegment session={sessions[0]} offset={0} state={state} customPoints={customPoints} clock={clock} /><TimelineCustomSegment label="午休" width={TIMELINE_LUNCH_WIDTH} customPoints={lunchPoints} systemPoints={[]} clock={clock} /><TimelineSegment session={sessions[1]} offset={afternoonOffset} state={state} customPoints={customPoints} clock={clock} /><TimelineCustomSegment label="盘后" width={TIMELINE_PRE_POST_WIDTH} customPoints={postclosePoints} systemPoints={postcloseSystemPoints} clock={clock} /></div></div></div>
 }
 
 function EquityChart({ rows, emptyMessage = '成交后将按分钟形成权益曲线' }: { rows: EquityChartPoint[]; emptyMessage?: string }) {
@@ -416,6 +568,10 @@ export function ETFSimulation() {
   const [replayId, setReplayId] = useState('')
   const [symbol, setSymbol] = useState('')
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false)
+  const [timelineSettingsOpen, setTimelineSettingsOpen] = useState(false)
+  const [timelineSettings, setTimelineSettings] = useState<TimelineSettings>(() => loadTimelineSettings())
+  const [timelineSettingsDraft, setTimelineSettingsDraft] = useState<TimelineSettings>(() => loadTimelineSettings())
+  const nextTimelinePointId = useRef(Math.max(0, ...timelineSettings.customPoints.map(point => point.id)) + 1)
   const [manualPositionOpen, setManualPositionOpen] = useState(false)
   const [editingPosition, setEditingPosition] = useState<PaperPosition | null>(null)
   const [previewPosition, setPreviewPosition] = useState<{ symbol: string; name: string } | null>(null)
@@ -447,6 +603,35 @@ export function ETFSimulation() {
   const closeManualPosition = () => {
     setManualPositionOpen(false)
     setEditingPosition(null)
+  }
+  const openTimelineSettings = () => {
+    setTimelineSettingsDraft(cloneTimelineSettings(timelineSettings))
+    setTimelineSettingsOpen(true)
+  }
+  const updateTimelineDraft = (patch: Partial<TimelineSettings>) => {
+    setTimelineSettingsDraft(current => ({ ...current, ...patch }))
+  }
+  const updateTimelinePoint = (id: number, patch: Partial<Omit<TimelineCustomPoint, 'id'>>) => {
+    setTimelineSettingsDraft(current => ({
+      ...current,
+      customPoints: current.customPoints.map(point => point.id === id ? { ...point, ...patch } : point),
+    }))
+  }
+  const addTimelinePoint = () => {
+    const id = nextTimelinePointId.current++
+    setTimelineSettingsDraft(current => ({
+      ...current,
+      customPoints: [...current.customPoints, { id, time: '09:30', description: '', timerMethod: '' }],
+    }))
+  }
+  const removeTimelinePoint = (id: number) => {
+    setTimelineSettingsDraft(current => ({ ...current, customPoints: current.customPoints.filter(point => point.id !== id) }))
+  }
+  const saveTimelineSettings = () => {
+    const next = cloneTimelineSettings(timelineSettingsDraft)
+    setTimelineSettings(next)
+    storage.paperTimelineSettings.set(next)
+    setTimelineSettingsOpen(false)
   }
   const openPositionPreview = (position: PaperPosition) => {
     setSymbol(position.symbol)
@@ -482,7 +667,7 @@ export function ETFSimulation() {
   useEffect(() => { if (!data?.account.id) return; const es = new EventSource(`/api/paper-trading/stream?account_id=${encodeURIComponent(data.account.id)}`); es.addEventListener('paper_revision', () => { void client.invalidateQueries({ queryKey: QK.paperSnapshot(accountKey) }) }); return () => es.close() }, [accountKey, client, data?.account.id])
   useEffect(() => { if (!symbol && data?.positions[0]) setSymbol(data.positions[0].symbol) }, [data?.positions, symbol])
   const control = useMutation({ mutationFn: (x: { action: 'play' | 'pause' | 'archive'; speed?: number }) => api.paperControlReplay(replayId, x.action, x.speed), onSuccess: (_result, variables) => { refresh(); if (variables.action === 'archive') void client.invalidateQueries({ queryKey: QK.paperArchivedAccounts }) } })
-  const step = useMutation({ mutationFn: () => api.paperStepReplay(replayId, PAPER_TRADING_STEP_MINUTES), onSuccess: refresh })
+  const step = useMutation({ mutationFn: () => api.paperStepReplay(replayId, timelineSettings.stepMinutes), onSuccess: refresh })
   const rebuild = useMutation({ mutationFn: api.paperRebuildLive, onSuccess: () => { refresh(); void client.invalidateQueries({ queryKey: QK.paperArchivedAccounts }) } })
   const [metricsExpanded, setMetricsExpanded] = useState(false)
   const cards = data ? [['总资产', `¥${money(data.summary.equity)}`], ['现金', `¥${money(data.summary.cash)}`], ['持仓市值', `¥${money(data.summary.market_value)}`], ['当前仓位', pct(data.summary.exposure_pct)], ['累计盈亏', `¥${money(data.summary.total_pnl)}`], ['当日盈亏', `¥${money(data.summary.daily_pnl)}`], ['累计收益', pct(data.summary.total_return)], ['最大回撤', pct(data.summary.max_drawdown)], ['已实现', `¥${money(data.summary.realized_pnl)}`], ['未实现', `¥${money(data.summary.unrealized_pnl)}`]] : []
@@ -508,19 +693,17 @@ export function ETFSimulation() {
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-border bg-surface px-3 py-2 text-xs">
           <span className="font-medium">北京时间 / {mode === 'live' ? '实时钟' : '回放时钟'}：{paperClock?.display ?? '—'}</span>
           <span className="text-secondary">状态：{setupRequired ? '待设置' : data ? statusName(data.account.runtime_status) : '加载中'}</span>
-          <span className="text-muted">{setupRequired ? '请先命名并保存模拟账户' : data?.account.runtime_message || (mode === 'live' ? '实时按已完成 1 分钟 K 撮合' : '回放按 15 分钟步长推进')}</span>
-          <span className="ml-auto text-muted" title="当前模拟账户">账户：{data?.account.name ?? (setupRequired ? '待设置' : '加载中')}</span>
+          <span className="text-muted">{setupRequired ? '请先命名并保存模拟账户' : data?.account.runtime_message || (mode === 'live' ? '实时按已完成 1 分钟 K 撮合' : `回放按 ${timelineSettings.stepMinutes} 分钟步长推进`)}</span>
           <button
             type="button"
-            disabled={!data}
-            onClick={() => setAccountSettingsOpen(true)}
-            aria-label="打开账户设置"
-            title={data ? '账户设置' : '账户设置（账户加载中）'}
-            className="inline-flex h-7 w-7 items-center justify-center rounded-btn text-muted transition-colors hover:bg-elevated/70 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={openTimelineSettings}
+            aria-label="打开时间轴设置"
+            title="时间轴设置"
+            className="ml-auto inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-btn text-muted transition-colors hover:bg-elevated/70 hover:text-foreground"
           >
             <Settings className="h-3.5 w-3.5" aria-hidden="true" />
           </button>
-          <TradingSessionTimeline clock={paperClock} />
+          <TradingSessionTimeline clock={paperClock} settings={timelineSettings} />
         </div>
         <div className="grid items-start gap-3 xl:grid-cols-[280px_minmax(0,1fr)]">
           <div className="space-y-3 xl:sticky xl:top-3">
@@ -538,7 +721,7 @@ export function ETFSimulation() {
                     </button>
                     <button className={button} disabled={step.isPending} onClick={() => step.mutate()}>
                       <StepForward className="h-4 w-4" />
-                      单步 {PAPER_TRADING_STEP_MINUTES} 分钟
+                      单步 {timelineSettings.stepMinutes} 分钟
                     </button>
                     <select
                       className={input + ' w-24'}
@@ -570,6 +753,19 @@ export function ETFSimulation() {
             )}
             {data && (
               <>
+                <div className="flex items-center justify-start gap-2">
+                  <span className="text-xs text-muted" title="当前模拟账户">账户：{data?.account.name ?? (setupRequired ? '待设置' : '加载中')}</span>
+                  <button
+                    type="button"
+                    disabled={!data}
+                    onClick={() => setAccountSettingsOpen(true)}
+                    aria-label="打开账户设置"
+                    title={data ? '账户设置' : '账户设置（账户加载中）'}
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-btn text-muted transition-colors hover:bg-elevated/70 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Settings className="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
+                </div>
                 <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-8">
                   {cards.map(([label, value], index) => (
                     <div key={label} className={`rounded-xl border border-border bg-surface p-3 ${!metricsExpanded ? index >= 8 ? 'hidden md:hidden' : index >= 4 ? 'hidden md:block' : '' : ''}`}>
@@ -707,6 +903,115 @@ export function ETFSimulation() {
           </div>
           <div className="p-4">
             <ManualPositionForm key={editingPosition?.symbol ?? 'new'} data={data} position={editingPosition} done={finishManualPosition} />
+          </div>
+        </Modal>
+      )}
+      {timelineSettingsOpen && (
+        <Modal
+          onClose={() => setTimelineSettingsOpen(false)}
+          labelledBy="paper-timeline-settings-title"
+          panelClassName="w-[96vw] max-h-[90vh] max-w-4xl rounded-xl border border-border bg-surface shadow-xl"
+        >
+          <div className="flex items-center justify-between border-b border-border px-4 py-3">
+            <h2 id="paper-timeline-settings-title" className="flex items-center gap-2 text-sm font-semibold">
+              <Settings className="h-4 w-4 text-accent" aria-hidden="true" />
+              时间轴设置
+            </h2>
+            <button
+              type="button"
+              onClick={() => setTimelineSettingsOpen(false)}
+              className="rounded-btn p-1 text-muted transition-colors hover:bg-elevated hover:text-foreground"
+              aria-label="关闭时间轴设置"
+              title="关闭"
+            >
+              <X className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
+          <div className="max-h-[calc(90vh-7rem)] overflow-y-auto p-4">
+            <div className="grid gap-4 lg:grid-cols-[minmax(260px,0.8fr)_minmax(0,1.5fr)]">
+              <section className="rounded-lg border border-border/70 bg-base/30 p-3">
+                <h3 className="text-sm font-semibold">定时任务</h3>
+                <div className="mt-3 space-y-3">
+                  <label className="block space-y-1">
+                    <span className="text-xs text-secondary">时间轴步长</span>
+                    <select
+                      className={input}
+                      value={timelineSettingsDraft.stepMinutes}
+                      onChange={event => updateTimelineDraft({ stepMinutes: Number(event.target.value) as PaperTradingStepMinutes })}
+                    >
+                      {PAPER_TRADING_STEP_OPTIONS.map(stepMinutes => <option key={stepMinutes} value={stepMinutes}>{stepMinutes} 分钟</option>)}
+                    </select>
+                  </label>
+                  <label className="block space-y-1">
+                    <span className="text-xs text-secondary">定时器方法</span>
+                    <input type="text" className={input} value={timelineSettingsDraft.timerMethod} readOnly placeholder="由后端返回可执行方法" aria-label="步长定时器方法" />
+                  </label>
+                </div>
+              </section>
+
+              <section className="rounded-lg border border-border/70 bg-base/30 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm font-semibold">自定义时间点</h3>
+                    <p className="mt-1 text-xs text-muted">可配置多个时间点、说明和触发方法。</p>
+                  </div>
+                  <button type="button" className={button + ' shrink-0'} onClick={addTimelinePoint}>
+                    <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                    新增时间点
+                  </button>
+                </div>
+                <div className="mt-3 space-y-2">
+                  {timelineSettingsDraft.customPoints.length > 0 && (
+                    <div className="hidden grid-cols-[7rem_minmax(0,1fr)_minmax(0,1fr)_2.25rem] gap-2 px-1 text-[11px] text-muted sm:grid">
+                      <span>时间点</span><span>说明</span><span>定时器方法</span><span />
+                    </div>
+                  )}
+                  {timelineSettingsDraft.customPoints.map((point, index) => (
+                    <div key={point.id} className="grid gap-2 rounded-btn border border-border/70 bg-surface p-2 sm:grid-cols-[7rem_minmax(0,1fr)_minmax(0,1fr)_2.25rem] sm:items-center sm:border-0 sm:bg-transparent sm:p-0">
+                      <label className="space-y-1 sm:space-y-0">
+                        <span className="text-[11px] text-muted sm:hidden">时间点</span>
+                        <input type="time" className={input} value={point.time} aria-label={`第 ${index + 1} 个自定义时间点`} onChange={event => updateTimelinePoint(point.id, { time: event.target.value })} />
+                      </label>
+                      <label className="space-y-1 sm:space-y-0">
+                        <span className="text-[11px] text-muted sm:hidden">说明</span>
+                        <input type="text" className={input} placeholder="例如：开盘检查" value={point.description} aria-label={`第 ${index + 1} 个时间点说明`} onChange={event => updateTimelinePoint(point.id, { description: event.target.value })} />
+                      </label>
+                      <label className="space-y-1 sm:space-y-0">
+                        <span className="text-[11px] text-muted sm:hidden">定时器方法</span>
+                        <input type="text" className={input} value={point.timerMethod} readOnly placeholder="由后端返回可执行方法" aria-label={`第 ${index + 1} 个时间点定时器方法`} />
+                      </label>
+                      <button type="button" className="inline-flex h-9 w-9 items-center justify-center rounded-btn text-muted transition-colors hover:bg-elevated hover:text-bear" aria-label={`删除第 ${index + 1} 个自定义时间点`} title="删除时间点" onClick={() => removeTimelinePoint(point.id)}>
+                        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
+                    </div>
+                  ))}
+                  {!timelineSettingsDraft.customPoints.length && <div className="rounded-btn border border-dashed border-border px-3 py-6 text-center text-xs text-muted">暂无自定义时间点，点击“新增时间点”开始配置。</div>}
+                </div>
+              </section>
+
+              <section className="rounded-lg border border-border/70 bg-base/30 p-3 lg:col-span-2">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-semibold">系统时间点</h3>
+                  <span className="rounded border border-yellow-400/30 px-1.5 py-0.5 text-[10px] text-yellow-400">只读</span>
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {SYSTEM_TIMELINE_POINTS.map(point => (
+                    <div key={point.time} className="flex items-center gap-3 rounded-btn border border-border/70 bg-surface px-3 py-2">
+                      <span className="shrink-0 font-medium tabular-nums text-yellow-400">{point.time}</span>
+                      <span className="min-w-0 truncate text-xs text-secondary" title={point.description}>{point.description}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </div>
+            <p className="mt-4 text-xs leading-5 text-muted">步长任务默认循环执行；自定义时间点的定时器方法由后端返回，前端只保存后端提供的方法标识，不执行任意输入代码。</p>
+          </div>
+          <div className="flex justify-end gap-2 border-t border-border px-4 py-3">
+            <button type="button" className={button} onClick={() => setTimelineSettingsOpen(false)}>取消</button>
+            <button type="button" className={primary} onClick={saveTimelineSettings}>
+              <Save className="h-3.5 w-3.5" aria-hidden="true" />
+              保存并生效
+            </button>
           </div>
         </Modal>
       )}

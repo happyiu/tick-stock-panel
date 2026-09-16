@@ -1,4 +1,6 @@
-export const PAPER_TRADING_STEP_MINUTES = 15
+export const PAPER_TRADING_STEP_MINUTES = 15 as const
+export const PAPER_TRADING_STEP_OPTIONS = [5, PAPER_TRADING_STEP_MINUTES, 30, 60] as const
+export type PaperTradingStepMinutes = typeof PAPER_TRADING_STEP_OPTIONS[number]
 
 export interface PaperTradingTimelinePoint {
   label: string
@@ -37,18 +39,22 @@ const pad = (value: number) => String(value).padStart(2, '0')
 
 const formatTimelineTime = (minutes: number) => `${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}`
 
-export const PAPER_TRADING_SESSIONS: readonly PaperTradingSession[] = SESSION_DEFINITIONS.map(session => ({
-  label: session.label,
-  start: formatTimelineTime(session.startMinutes),
-  end: formatTimelineTime(session.endMinutes),
-  points: Array.from(
-    { length: Math.floor((session.endMinutes - session.startMinutes) / PAPER_TRADING_STEP_MINUTES) + 1 },
-    (_, index) => {
-      const minutes = session.startMinutes + index * PAPER_TRADING_STEP_MINUTES
-      return { label: formatTimelineTime(minutes), minutes }
-    },
-  ),
-}))
+export function createPaperTradingSessions(stepMinutes: PaperTradingStepMinutes = PAPER_TRADING_STEP_MINUTES): readonly PaperTradingSession[] {
+  return SESSION_DEFINITIONS.map(session => ({
+    label: session.label,
+    start: formatTimelineTime(session.startMinutes),
+    end: formatTimelineTime(session.endMinutes),
+    points: Array.from(
+      { length: Math.floor((session.endMinutes - session.startMinutes) / stepMinutes) + 1 },
+      (_, index) => {
+        const minutes = session.startMinutes + index * stepMinutes
+        return { label: formatTimelineTime(minutes), minutes }
+      },
+    ),
+  }))
+}
+
+export const PAPER_TRADING_SESSIONS: readonly PaperTradingSession[] = createPaperTradingSessions()
 
 export const PAPER_TRADING_TIMELINE = PAPER_TRADING_SESSIONS.flatMap(session => session.points)
 
@@ -99,6 +105,7 @@ export function getBeijingPaperClock(value: Date = new Date()): PaperTradingCloc
 export function buildPaperTradingTimelineState(
   minutes: number | null,
   tradingDay = true,
+  stepMinutes: PaperTradingStepMinutes = PAPER_TRADING_STEP_MINUTES,
 ): PaperTradingTimelineState {
   if (minutes == null || !tradingDay) {
     return { phase: 'closed', activeIndex: null, completedIndex: -1, currentStepIndex: null, currentStepLabel: null }
@@ -106,18 +113,17 @@ export function buildPaperTradingTimelineState(
 
   const morning = SESSION_DEFINITIONS[0]
   const afternoon = SESSION_DEFINITIONS[1]
-  const morningPointCount = PAPER_TRADING_SESSIONS[0].points.length
+  const sessions = createPaperTradingSessions(stepMinutes)
+  const timeline = sessions.flatMap(session => session.points)
+  const morningPointCount = sessions[0].points.length
 
   if (minutes < morning.startMinutes) {
     return { phase: 'preopen', activeIndex: null, completedIndex: -1, currentStepIndex: null, currentStepLabel: null }
   }
 
   if (minutes <= morning.endMinutes) {
-    const localIndex = Math.min(
-      Math.floor((minutes - morning.startMinutes) / PAPER_TRADING_STEP_MINUTES),
-      morningPointCount - 1,
-    )
-    const point = PAPER_TRADING_TIMELINE[localIndex]
+    const localIndex = Math.min(Math.floor((minutes - morning.startMinutes) / stepMinutes), morningPointCount - 1)
+    const point = timeline[localIndex]
     return {
       phase: 'morning',
       activeIndex: localIndex,
@@ -138,12 +144,9 @@ export function buildPaperTradingTimelineState(
   }
 
   if (minutes <= afternoon.endMinutes) {
-    const localIndex = Math.min(
-      Math.floor((minutes - afternoon.startMinutes) / PAPER_TRADING_STEP_MINUTES),
-      PAPER_TRADING_SESSIONS[1].points.length - 1,
-    )
+    const localIndex = Math.min(Math.floor((minutes - afternoon.startMinutes) / stepMinutes), sessions[1].points.length - 1)
     const globalIndex = morningPointCount + localIndex
-    const point = PAPER_TRADING_TIMELINE[globalIndex]
+    const point = timeline[globalIndex]
     return {
       phase: 'afternoon',
       activeIndex: globalIndex,
@@ -156,7 +159,7 @@ export function buildPaperTradingTimelineState(
   return {
     phase: 'closed',
     activeIndex: null,
-    completedIndex: PAPER_TRADING_TIMELINE.length - 1,
+    completedIndex: timeline.length - 1,
     currentStepIndex: null,
     currentStepLabel: null,
   }

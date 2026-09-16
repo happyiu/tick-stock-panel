@@ -102,6 +102,9 @@ export const storage = {
   /** 页面显示大小 */
   pageSize:             kv<'standard' | 'large'>('tf-page-size'),
 
+  /** ETF 模拟交易时间轴设置 */
+  paperTimelineSettings: kv<unknown>('tf-paper-timeline-settings-v1'),
+
   /** 查询轮询 / SSE 配置 */
   queryConfig:          kv<unknown>('tf-stocks-query-config'),
 
