@@ -13,10 +13,7 @@ from typing import Any
 import polars as pl
 
 from app.backtest.strategy import _basic_filter_for_asset
-from app.services.screener import (
-    _aggregate_weekly_strategy_frame,
-    _prepare_30m_strategy_frame,
-)
+from app.services.kline_periods import aggregate_daily_period, prepare_native_30m
 
 SUPPORTED_TIMEFRAMES = ("1d", "1w", "30m")
 _THIRTY_MINUTE_BARS_PER_SESSION = 8
@@ -441,7 +438,7 @@ class StrategyChartService:
         elif timeframe == "1w":
             warmup_start = start - timedelta(days=max(730, required_bars * 10))
             daily = self.repo.get_daily_asset(asset_type, symbol, warmup_start, end)
-            frame = _aggregate_weekly_strategy_frame(daily, end)
+            frame = aggregate_daily_period(daily, "1w")
         else:
             sessions = max(
                 20,
@@ -458,7 +455,7 @@ class StrategyChartService:
                 minute = self.repo.get_minute_range([symbol], warmup_start, end)
             if minute.is_empty():
                 raise ValueError("无 30F 分钟K数据 — 请先在 数据→分钟K 完成对应资产的历史同步")
-            frame = _prepare_30m_strategy_frame(minute)
+            frame = prepare_native_30m(minute)
 
         if frame.is_empty():
             return frame
