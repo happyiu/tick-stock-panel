@@ -975,7 +975,6 @@ export function StockPanel({
               dateRange={chartDateRange}
               markers={markers}
               actionMarkers={actionMarkers}
-              actionState={actionState}
               ranges={ranges}
               priceBands={decisionSections.showPriceZones ? priceBands : undefined}
               priceLines={chartPriceLines}

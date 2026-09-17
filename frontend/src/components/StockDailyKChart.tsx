@@ -84,8 +84,6 @@ interface Props {
   markers?: ChartMarker[]
   /** 行动决策层历史事件标记；仅日线和30分钟周期接入。 */
   actionMarkers?: ChartMarker[]
-  /** 当前行动状态；与事件标记使用同一套闭合K线回放。 */
-  actionState?: StockActionState
   ranges?: ChartRange[]
   priceBands?: ChartPriceBand[]
   priceLines?: ChartPriceLine[]
@@ -228,7 +226,6 @@ export function StockDailyKChart({
   dateRange: externalDateRange,
   markers,
   actionMarkers,
-  actionState,
   ranges,
   priceBands,
   priceLines,
