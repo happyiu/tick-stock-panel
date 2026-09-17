@@ -113,6 +113,24 @@ def test_save_strategy_code_creates_custom_strategy_in_custom_dir(tmp_path):
     assert loaded.file_path == tmp_path / "strategies" / "custom" / "custom_saved.py"
 
 
+def test_save_strategy_code_persists_selected_asset_types_and_timeframes(tmp_path):
+    request = _request(tmp_path)
+    req = StrategyCodeSaveRequest(
+        strategy_id="custom_etf",
+        target_source="custom",
+        mode="create",
+        code=_code("wrong"),
+        asset_types=["etf"],
+        timeframes=["1w", "30m"],
+    )
+
+    _save_strategy_code(req, request)
+
+    loaded = request.app.state.strategy_engine.get("custom_etf")
+    assert loaded.meta["asset_types"] == ["etf"]
+    assert loaded.meta["timeframes"] == ["1w", "30m"]
+
+
 def test_save_strategy_code_updates_existing_source_file(tmp_path):
     request = _request(tmp_path)
     create = StrategyCodeSaveRequest(

@@ -752,7 +752,7 @@ export interface ScreenerCachedSummary {
 /** run_all 渐进式返回: 快策略已算完, 慢策略后台继续算 */
 export interface ScreenerRunAllSummary {
   as_of: string | null
-  results: Record<string, ScreenerResultSummary>
+  results: Record<string, ScreenerResultSummary & { rows?: any[] }>
   /** 尚未算完的策略 (后台继续, 逐个写入缓存) */
   pending?: string[]
   /** 全部算完时为 true */
@@ -3294,7 +3294,7 @@ export const api = {
     )
     return { presets: data.strategies, load_errors: data.load_errors }
   },
-  screenerRunPreset: (strategy_id: string, pool?: string[], asOf?: string, extColumns?: string, assetType: 'stock' | 'etf' = 'stock', timeframe: '1d' | '1m' = '1d') =>
+  screenerRunPreset: (strategy_id: string, pool?: string[], asOf?: string, extColumns?: string, assetType: 'stock' | 'etf' = 'stock', timeframe: '1d' | '1w' | '30m' | '1m' = '1d') =>
     request<ScreenerResult>('/api/screener/run_preset', {
       method: 'POST',
       timeoutMs: COMPUTE_REQUEST_TIMEOUT_MS,
@@ -3306,9 +3306,9 @@ export const api = {
       timeoutMs: COMPUTE_REQUEST_TIMEOUT_MS,
       body: JSON.stringify({ conditions, order_by: orderBy, limit, pool, ext_columns: extColumns || null, asset_type: assetType }),
     }),
-  screenerRunAll: (asOf?: string, strategyIds?: string[], assetType: 'stock' | 'etf' = 'stock') =>
+  screenerRunAll: (asOf?: string, strategyIds?: string[], assetType: 'stock' | 'etf' = 'stock', timeframe: '1d' | '1w' | '30m' | '1m' = '1d', summaryOnly = true) =>
     request<ScreenerRunAllSummary>(
-      '/api/screener/run_all', { method: 'POST', timeoutMs: COMPUTE_REQUEST_TIMEOUT_MS, body: JSON.stringify({ as_of: asOf ?? null, strategy_ids: strategyIds ?? null, asset_type: assetType, timeframe: '1d', summary_only: true }) },
+      '/api/screener/run_all', { method: 'POST', timeoutMs: COMPUTE_REQUEST_TIMEOUT_MS, body: JSON.stringify({ as_of: asOf ?? null, strategy_ids: strategyIds ?? null, asset_type: assetType, timeframe, summary_only: summaryOnly }) },
     ),
   screenerCachedSummary: () =>
     request<ScreenerCachedSummary>('/api/screener/cached-summary'),
@@ -4206,7 +4206,7 @@ export const api = {
   },
 
   // ===== Strategy Engine =====
-  strategyList: (assetType?: 'stock' | 'etf', timeframe: '1d' | '1m' | 'all' = '1d', includeResearch = false) => {
+  strategyList: (assetType?: 'stock' | 'etf', timeframe: '1d' | '1w' | '30m' | '1m' | 'all' = '1d', includeResearch = false) => {
     const params = new URLSearchParams()
     if (assetType) params.set('asset_type', assetType)
     if (timeframe && timeframe !== 'all') params.set('timeframe', timeframe)
@@ -4449,7 +4449,14 @@ export const api = {
     }
   },
 
-  strategyValidateCode: (payload: { code: string; strategy_id?: string; name?: string; description?: string }) =>
+  strategyValidateCode: (payload: {
+    code: string
+    strategy_id?: string
+    name?: string
+    description?: string
+    asset_types?: ('stock' | 'etf')[]
+    timeframes?: StrategyTimeframe[]
+  }) =>
     request<StrategyBuildResult>('/api/strategies/code/validate', {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -4462,6 +4469,8 @@ export const api = {
     mode: 'create' | 'update'
     name?: string
     description?: string
+    asset_types?: ('stock' | 'etf')[]
+    timeframes?: StrategyTimeframe[]
   }) =>
     request<StrategyCodeSaveResult>('/api/strategies/code/save', {
       method: 'POST',
@@ -4497,6 +4506,8 @@ export const api = {
     direction?: string
     rules?: string
     execution_backend?: 'polars_expr' | 'matrix_native'
+    asset_types?: ('stock' | 'etf')[]
+    timeframes?: StrategyTimeframe[]
     max_rounds?: number
   }) =>
     request<AiIterateResult>('/api/strategies/ai/iterate', {

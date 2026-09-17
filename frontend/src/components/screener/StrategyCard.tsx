@@ -1,4 +1,4 @@
-import { Settings2, TrendingDown, RadioTower } from 'lucide-react'
+import { Settings2, TrendingDown, RadioTower, Trash2, X } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { storage } from '@/lib/storage'
 
@@ -92,7 +92,11 @@ interface StrategyCardProps {
   monitored?: boolean
   /** 切换策略监控 (点击 RadioTower 图标) */
   onToggleMonitor?: () => void
-  /** 周期徽章 (如 '分钟'); 日线策略不传 */
+  /** 删除自定义策略 (由上层负责确认) */
+  onDelete?: () => void
+  /** 仅从当前策略池移出，不删除策略 */
+  onRemove?: () => void
+  /** 周期徽章 (如 '周线' / '30F' / '分钟'); 日线策略不传 */
   timeframeBadge?: string
   /** 后台计算中 (渐进式 run_all): 数字未出时显示脉冲占位 */
   computing?: boolean
@@ -101,9 +105,12 @@ interface StrategyCardProps {
 export function StrategyCard({
   name, description, source, active, count, expiredCount,
   loading, cardSize,
-  onRun, disabled, onSettings, monitored, onToggleMonitor, timeframeBadge, computing,
+  onRun, disabled, onSettings, monitored, onToggleMonitor, onDelete, onRemove, timeframeBadge, computing,
 }: StrategyCardProps) {
   const cs = CARD_STYLES[cardSize]
+  const actionPadding = cardSize !== 'mini'
+    ? onDelete && onRemove ? 'pr-24' : onDelete || onRemove ? 'pr-20' : ''
+    : ''
   const activeCls = active
     ? 'border-accent/50 bg-accent/10 shadow-[0_0_10px_rgba(59,130,246,0.1)]'
     : 'border-border bg-surface hover:border-accent/40 hover:bg-accent/[0.03]'
@@ -121,7 +128,7 @@ export function StrategyCard({
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
       transition={{ duration: 0.12, ease: [0.16, 1, 0.3, 1] }}
-      className={`${cs.card} border transition-all duration-150 text-left group ${activeCls}`}
+      className={`${cs.card} ${actionPadding} border transition-all duration-150 text-left group ${activeCls}`}
     >
       {cardSize === 'large' ? (
         <>
@@ -160,6 +167,18 @@ export function StrategyCard({
             className="absolute top-1.5 right-1.5 p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer" title="策略设置">
             <Settings2 className="h-3 w-3 text-muted hover:text-accent transition-colors" />
           </button>
+          {onDelete && (
+            <button onClick={(e) => { e.stopPropagation(); onDelete() }}
+              className="absolute top-1.5 right-11 p-0.5 rounded hover:bg-danger/10 transition-colors cursor-pointer" title="删除策略" aria-label="删除策略">
+              <Trash2 className="h-3 w-3 text-muted hover:text-danger transition-colors" />
+            </button>
+          )}
+          {onRemove && (
+            <button onClick={(e) => { e.stopPropagation(); onRemove() }}
+              className="absolute top-1.5 right-[3.75rem] p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer" title="移出当前策略池" aria-label="移出当前策略池">
+              <X className="h-3 w-3 text-muted hover:text-foreground transition-colors" />
+            </button>
+          )}
           {onToggleMonitor && (
             <button onClick={(e) => { e.stopPropagation(); onToggleMonitor() }}
               className="absolute top-1.5 right-7 p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer" title={monitored ? '取消策略监控' : '开启策略监控'}>
@@ -199,6 +218,18 @@ export function StrategyCard({
             className="absolute top-1.5 right-1.5 p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer" title="策略设置">
             <Settings2 className="h-3 w-3 text-muted hover:text-accent transition-colors" />
           </button>
+          {onDelete && (
+            <button onClick={(e) => { e.stopPropagation(); onDelete() }}
+              className="absolute top-1.5 right-11 p-0.5 rounded hover:bg-danger/10 transition-colors cursor-pointer" title="删除策略" aria-label="删除策略">
+              <Trash2 className="h-3 w-3 text-muted hover:text-danger transition-colors" />
+            </button>
+          )}
+          {onRemove && (
+            <button onClick={(e) => { e.stopPropagation(); onRemove() }}
+              className="absolute top-1.5 right-[3.75rem] p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer" title="移出当前策略池" aria-label="移出当前策略池">
+              <X className="h-3 w-3 text-muted hover:text-foreground transition-colors" />
+            </button>
+          )}
           {onToggleMonitor && (
             <button onClick={(e) => { e.stopPropagation(); onToggleMonitor() }}
               className="absolute top-1.5 right-7 p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer" title={monitored ? '取消策略监控' : '开启策略监控'}>
@@ -236,6 +267,18 @@ export function StrategyCard({
             className="p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer" title="策略设置">
             <Settings2 className="h-3 w-3 text-muted hover:text-accent transition-colors" />
           </button>
+          {onDelete && (
+            <button onClick={(e) => { e.stopPropagation(); onDelete() }}
+              className="p-0.5 rounded hover:bg-danger/10 transition-colors cursor-pointer" title="删除策略" aria-label="删除策略">
+              <Trash2 className="h-3 w-3 text-muted hover:text-danger transition-colors" />
+            </button>
+          )}
+          {onRemove && (
+            <button onClick={(e) => { e.stopPropagation(); onRemove() }}
+              className="p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer" title="移出当前策略池" aria-label="移出当前策略池">
+              <X className="h-3 w-3 text-muted hover:text-foreground transition-colors" />
+            </button>
+          )}
         </>
       )}
     </motion.div>

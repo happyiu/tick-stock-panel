@@ -21,6 +21,7 @@ from app.strategy.ai_generator import AIStrategyGenerator, _SYSTEM_PREFIX, find_
 # 每轮 (生成/诊断/修改一次) 内部的工具调用预算: 至少 2 次 LLM 调用
 # (1 次发起 run_backtest, 1 次读结果产出改进版), 留少量检索/换参余量。
 _CYCLE_TOOL_BUDGET = 4
+_SUPPORTED_TIMEFRAMES = ("1d", "1w", "30m", "1m")
 
 _ITERATION_SUFFIX = """
 
@@ -53,6 +54,8 @@ class AIStrategyIterator:
         *,
         engine,
         data_dir: str,
+        asset_types: list[str] | None = None,
+        timeframes: list[str] | None = None,
     ) -> dict[str, Any]:
         """执行有界迭代, 返回:
         {
@@ -64,6 +67,19 @@ class AIStrategyIterator:
         """
         generator = AIStrategyGenerator()
         tools = tool_catalog.build_tool_schemas()
+        selected_asset_types = None
+        if asset_types is not None:
+            selected_asset_types = list(dict.fromkeys(
+                asset_type for asset_type in asset_types if asset_type in {"stock", "etf"}
+            )) or ["stock"]
+        backtest_asset_type = (
+            "etf" if selected_asset_types == ["etf"] else "stock"
+        )
+        selected_timeframes = None
+        if timeframes is not None:
+            selected_timeframes = list(dict.fromkeys(
+                timeframe for timeframe in timeframes if timeframe in _SUPPORTED_TIMEFRAMES
+            )) or ["1d"]
 
         # 1. 生成 v1 (复用现有单次生成 + 结构修复)
         result = await generator.generate(prompt)
@@ -74,6 +90,12 @@ class AIStrategyIterator:
 
         draft_id = self._alloc_draft_id(engine)
         code, meta = result["code"], result["meta"]
+        if selected_asset_types is not None:
+            meta = {**meta, "asset_types": selected_asset_types}
+            code = _rewrite_meta_id(code, draft_id, meta)
+        if selected_timeframes is not None:
+            meta = {**meta, "timeframes": selected_timeframes}
+            code = _rewrite_meta_id(code, draft_id, meta)
         self._save_draft(engine, data_dir, draft_id, code, meta)
         current_code, current_meta = code, {**meta, "id": draft_id}
 
@@ -83,7 +105,11 @@ class AIStrategyIterator:
             full = await generate_ai_text_with_tools(
                 self._iteration_messages(generator, current_code, prompt, draft_id),
                 tools,
-                execute_tool=self._make_execute_tool(engine, data_dir),
+                execute_tool=self._make_execute_tool(
+                    engine,
+                    data_dir,
+                    default_asset_type=backtest_asset_type if selected_asset_types is not None else None,
+                ),
                 max_rounds=_CYCLE_TOOL_BUDGET,
                 temperature=0.3,
                 max_tokens=None,
@@ -110,6 +136,12 @@ class AIStrategyIterator:
                 })
                 final_backtested = True  # 收敛, final 仍是 current_code
                 break
+            if selected_asset_types is not None:
+                new_meta = {**new_meta, "asset_types": selected_asset_types}
+                new_code = _rewrite_meta_id(new_code, draft_id, new_meta)
+            if selected_timeframes is not None:
+                new_meta = {**new_meta, "timeframes": selected_timeframes}
+                new_code = _rewrite_meta_id(new_code, draft_id, new_meta)
 
             self._save_draft(engine, data_dir, draft_id, new_code, new_meta)
             current_code, current_meta = new_code, {**new_meta, "id": draft_id}
@@ -122,7 +154,12 @@ class AIStrategyIterator:
 
         # 循环耗尽且末轮是改进版时, final 版从未被回测, 补一次作为末行证据
         if not final_backtested:
-            final_stats = await self._backtest_final(data_dir, draft_id)
+            if selected_asset_types is None:
+                final_stats = await self._backtest_final(data_dir, draft_id)
+            else:
+                final_stats = await self._backtest_final(
+                    data_dir, draft_id, asset_type=backtest_asset_type,
+                )
             rounds.append({
                 "round": len(rounds) + 1,
                 "stats": final_stats,
@@ -136,11 +173,20 @@ class AIStrategyIterator:
             "final_meta": current_meta,
         }
 
-    async def _backtest_final(self, data_dir: str, draft_id: str) -> dict | None:
+    async def _backtest_final(
+        self,
+        data_dir: str,
+        draft_id: str,
+        *,
+        asset_type: str = "stock",
+    ) -> dict | None:
         """对最终版草稿补一次回测, 返回精简 stats; 失败返回 None (末行证据尽力而为)。"""
         try:
             result = await asyncio.to_thread(
-                tool_catalog.run_backtest, data_dir, strategy_id=draft_id
+                tool_catalog.run_backtest,
+                data_dir,
+                strategy_id=draft_id,
+                asset_type=asset_type,
             )
             return result.get("stats")
         except Exception:  # noqa: BLE001 — 末行证据不强依赖回测成功
@@ -188,8 +234,16 @@ class AIStrategyIterator:
             {"role": "user", "content": user},
         ]
 
-    def _make_execute_tool(self, engine, data_dir: str):
+    def _make_execute_tool(
+        self,
+        engine,
+        data_dir: str,
+        *,
+        default_asset_type: str | None = None,
+    ):
         async def _execute(name: str, args: dict) -> dict:
+            if default_asset_type is not None and name == tool_catalog.RUN_BACKTEST:
+                args = {**args, "asset_type": default_asset_type}
             return await tool_catalog.execute_tool(name, args, engine=engine, data_dir=data_dir)
 
         return _execute

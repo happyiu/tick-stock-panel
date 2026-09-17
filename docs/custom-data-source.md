@@ -347,7 +347,8 @@ datasets:
 设置页的「图表行情」通过独立偏好 `chart_data_provider` 选择提供方, 默认
 `tickflow`。它是组合路由, 候选源必须同时声明 `daily`、`adj_factor` 和
 `minute` 三个已有数据集; 不改变原有日线、复权、分钟同步的独立路由。
-使用 a-stock-data 展示行情时, 将该选项设为 `astockdata`。
+使用 a-stock-data v3.8.0 展示行情时, 将该选项设为 `astockdata`; 当前适配基线固定到
+上游 commit `2012ce7cd0e75d379c5e6cbd3115514f300f3bc8`。
 
 详情日K、30F、周/月K及单日/多日分时优先请求该源。展示服务只维护有界内存
 缓存, 不调用仓库写入, 不刷新 enriched generation、策略或回测缓存。

@@ -64,11 +64,13 @@ TickFlow 的「先探后存」语义:
 > 反爬风险)。如需关闭 Docker 内置依赖,传 `--build-arg INCLUDE_STOCKSDK=0`；使用风险自负。
 > 详见 [deployment.md](./deployment.md)。
 
-仓库还提供 `backend/app/plugins/astockdata/` 作为 Python 型可选插件：它按
-[a-stock-data](https://github.com/simonlin1212/a-stock-data) 的行情层接入 mootdx
-日K/分钟K（7709 不可达时降级腾讯最近分钟K）、新浪复权因子和腾讯实时行情，当前只声明 `daily`、`adj_factor`、`minute`、
-`realtime` 四个标准数据集。研报、资金流、新闻、公告等端点没有对应的系统 service/API，
-因此暂不随 provider 暴露；标的维表也继续走系统现有 TickFlow/本地 instruments 路径。它随基础环境默认安装；
+仓库还提供 `backend/app/plugins/astockdata/` 作为 Python 型可选插件：当前适配
+[a-stock-data](https://github.com/simonlin1212/a-stock-data) `v3.8.0`
+（commit `2012ce7cd0e75d379c5e6cbd3115514f300f3bc8`）的行情层，接入 mootdx
+日K/分钟K/沪深五档盘口（7709 不可达时分钟K降级腾讯）、新浪复权因子和腾讯实时行情，当前声明 `daily`、`adj_factor`、`minute`、
+`realtime`、`depth5` 五个标准数据集。上游 v3.8.0 新增的官方指数成分/权重、指数估值、交易日历、
+沪深两融和北交所备胎没有对应的系统 service/API，因此暂不随 provider 暴露；研报、资金流、
+新闻、公告等既有端点同理。标的维表也继续走系统现有 TickFlow/本地 instruments 路径。它随基础环境默认安装；
 由于 mootdx 的上游元数据包含过时的 httpx/py-mini-racer 约束，安装入口对 mootdx 本体使用 `--no-deps`，
 其 `quotes` 路径所需的兼容依赖由后端基础环境锁定。
 
@@ -196,6 +198,9 @@ class MyProvider:
 `get_depth_batch` 返回结构如下。价格和数量数组均按一档到五档排列;数量单位为“手”,
 `timestamp` 为毫秒 Unix 时间戳。服务层按 capability 的 `batch` / `rpm` 统一分片限速,
 provider 不应自行切换或回退到其他数据源。
+
+`astockdata` 插件的 `depth5` 当前优先通过 `mootdx.quotes()` 提供盘口；北交所代码会从
+mootdx 请求中隔离，mootdx 不可达或单票无结果时降级到已有腾讯实时接口的五档字段。
 
 ```python
 {

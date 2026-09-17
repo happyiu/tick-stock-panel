@@ -266,6 +266,8 @@ class AIIterateRequest(BaseModel):
     direction: str = "long"
     rules: str = ""
     execution_backend: Literal["polars_expr", "matrix_native"] = "polars_expr"
+    asset_types: list[Literal["stock", "etf"]] | None = Field(default=None, min_length=1)
+    timeframes: list[Literal["1d", "1w", "30m", "1m"]] | None = Field(default=None, min_length=1)
     max_rounds: int = Field(default=4, ge=1, le=10)
 
 
@@ -281,6 +283,8 @@ class StrategyCodeValidateRequest(BaseModel):
     strategy_id: str = ""
     name: str = ""
     description: str = ""
+    asset_types: list[Literal["stock", "etf"]] | None = Field(default=None, min_length=1)
+    timeframes: list[Literal["1d", "1w", "30m", "1m"]] | None = Field(default=None, min_length=1)
 
 
 class StrategyCodeSaveRequest(BaseModel):
@@ -290,6 +294,8 @@ class StrategyCodeSaveRequest(BaseModel):
     mode: Literal["create", "update"] = "create"
     name: str = ""
     description: str = ""
+    asset_types: list[Literal["stock", "etf"]] | None = Field(default=None, min_length=1)
+    timeframes: list[Literal["1d", "1w", "30m", "1m"]] | None = Field(default=None, min_length=1)
 
 
 class CompositeChildItem(BaseModel):
@@ -548,6 +554,8 @@ class BuildRequest(BaseModel):
     rules: str = ""
     strategy_id: str = ""
     execution_backend: Literal["polars_expr", "matrix_native"] = "polars_expr"
+    asset_types: list[Literal["stock", "etf"]] | None = Field(default=None, min_length=1)
+    timeframes: list[Literal["1d", "1w", "30m", "1m"]] | None = Field(default=None, min_length=1)
     # step2 字段
     current_code: str = ""
     instruction: str = ""
@@ -634,6 +642,71 @@ def _set_meta_bool_field(code: str, field: str, value: bool) -> str:
     return "".join(lines)
 
 
+def _set_meta_asset_types(code: str, asset_types: list[str]) -> str:
+    """设置 META.asset_types, 不执行策略代码。"""
+    found = find_meta_assignment(code)
+    if found is None:
+        raise ValueError("找不到 META 字典")
+    meta_node = found[1]
+    normalized = list(dict.fromkeys(
+        asset_type for asset_type in asset_types if asset_type in {"stock", "etf"}
+    ))
+    if not normalized:
+        raise ValueError("asset_types 至少包含 stock 或 etf")
+
+    lines = code.splitlines(keepends=True)
+    start = meta_node.lineno - 1
+    end = meta_node.end_lineno or meta_node.lineno
+    block = "".join(lines[start:end])
+    value_repr = json.dumps(normalized, ensure_ascii=False)
+    key_pattern = re.compile(
+        r"(?m)^(\s*[\"']asset_types[\"']\s*:\s*)\[[^\]]*\]"
+    )
+    next_block, count = key_pattern.subn(
+        lambda m: f"{m.group(1)}{value_repr}",
+        block,
+        count=1,
+    )
+    if not count:
+        next_block = _insert_meta_field(block, "asset_types", value_repr)
+    lines[start:end] = next_block.splitlines(keepends=True)
+    return "".join(lines)
+
+
+def _set_meta_timeframes(code: str, timeframes: list[str]) -> str:
+    """设置 META.timeframes, 不执行策略代码。"""
+    found = find_meta_assignment(code)
+    if found is None:
+        raise ValueError("找不到 META 字典")
+    meta_node = found[1]
+    allowed = ("1d", "1w", "30m", "1m")
+    normalized = list(dict.fromkeys(
+        timeframe for timeframe in timeframes if timeframe in allowed
+    ))
+    if not normalized:
+        raise ValueError("timeframes 至少包含 1d、1w、30m 或 1m")
+    # UI 与 API 统一按日线、周线、30F、分钟的顺序保存, 避免同一策略因选择顺序产生噪声。
+    normalized = [timeframe for timeframe in allowed if timeframe in normalized]
+
+    lines = code.splitlines(keepends=True)
+    start = meta_node.lineno - 1
+    end = meta_node.end_lineno or meta_node.lineno
+    block = "".join(lines[start:end])
+    value_repr = json.dumps(normalized, ensure_ascii=False)
+    key_pattern = re.compile(
+        r"(?m)^(\s*[\"']timeframes[\"']\s*:\s*)\[[^\]]*\]"
+    )
+    next_block, count = key_pattern.subn(
+        lambda m: f"{m.group(1)}{value_repr}",
+        block,
+        count=1,
+    )
+    if not count:
+        next_block = _insert_meta_field(block, "timeframes", value_repr)
+    lines[start:end] = next_block.splitlines(keepends=True)
+    return "".join(lines)
+
+
 def _normalize_strategy_meta(code: str, strategy_id: str,
                              name: str | None = None,
                              description: str | None = None) -> str:
@@ -672,7 +745,9 @@ def _normalize_strategy_meta(code: str, strategy_id: str,
 
 
 def _normalize_build_result(result: dict, strategy_id: str, name: str = "",
-                            description: str = "") -> dict:
+                            description: str = "",
+                            asset_types: list[str] | None = None,
+                            timeframes: list[str] | None = None) -> dict:
     if not result.get("valid") or not strategy_id:
         return result
     try:
@@ -682,6 +757,10 @@ def _normalize_build_result(result: dict, strategy_id: str, name: str = "",
             name.strip() or None,
             description.strip() or None,
         )
+        if asset_types is not None:
+            code = _set_meta_asset_types(code, asset_types)
+        if timeframes is not None:
+            code = _set_meta_timeframes(code, timeframes)
         return {**result, "code": code, "meta": AIStrategyGenerator._extract_meta(code)}
     except Exception as e:
         return {**result, "valid": False, "error": f"规范化 META 失败: {e}"}
@@ -717,6 +796,10 @@ def _prepare_strategy_code(req: StrategyCodeValidateRequest | StrategyCodeSaveRe
                 req.name.strip() or None,
                 req.description.strip() or None,
             )
+    if req.asset_types is not None:
+        code = _set_meta_asset_types(code, req.asset_types)
+    if req.timeframes is not None:
+        code = _set_meta_timeframes(code, req.timeframes)
     # 安全校验始终执行 (此前 strict 字段可被客户端设 false 绕过, 已移除)
     AIStrategyGenerator._validate_safety(code)
     meta = AIStrategyGenerator._extract_meta(code)
@@ -881,6 +964,8 @@ def _build_prompt(req: BuildRequest) -> str:
             req.rules,
             req.strategy_id,
             req.execution_backend,
+            req.asset_types,
+            req.timeframes,
         )
     if req.step == 2:
         return build_step2(req.current_code, req.instruction)
@@ -903,9 +988,11 @@ async def build_strategy(req: BuildRequest, request: Request):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     if req.step == 1:
-        result = _normalize_build_result(result, req.strategy_id, req.name, req.description)
+        result = _normalize_build_result(
+            result, req.strategy_id, req.name, req.description, req.asset_types, req.timeframes,
+        )
     elif req.strategy_id:
-        result = _normalize_build_result(result, req.strategy_id)
+        result = _normalize_build_result(result, req.strategy_id, timeframes=req.timeframes)
     return result
 
 
@@ -928,9 +1015,11 @@ async def build_strategy_stream(req: BuildRequest, request: Request):
             if gen.needs_structural_repair(result):
                 result = await gen.repair_code(result["code"], result["error"])
             if req.step == 1:
-                result = _normalize_build_result(result, req.strategy_id, req.name, req.description)
+                result = _normalize_build_result(
+                    result, req.strategy_id, req.name, req.description, req.asset_types, req.timeframes,
+                )
             elif req.strategy_id:
-                result = _normalize_build_result(result, req.strategy_id)
+                result = _normalize_build_result(result, req.strategy_id, timeframes=req.timeframes)
             yield json.dumps({"type": "result", **result}, ensure_ascii=False) + "\n"
         except RuntimeError as e:
             yield json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False) + "\n"
@@ -976,9 +1065,16 @@ async def ai_iterate(req: AIIterateRequest, request: Request):
         prompt = build_step1(
             req.name, req.description, req.direction, req.rules,
             strategy_id="", execution_backend=req.execution_backend,
+            asset_types=req.asset_types, timeframes=req.timeframes,
         )
         iterator = AIStrategyIterator(max_rounds=req.max_rounds)
-        result = await iterator.iterate(prompt, engine=engine, data_dir=str(data_dir))
+        result = await iterator.iterate(
+            prompt,
+            engine=engine,
+            data_dir=str(data_dir),
+            asset_types=req.asset_types,
+            timeframes=req.timeframes,
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception:

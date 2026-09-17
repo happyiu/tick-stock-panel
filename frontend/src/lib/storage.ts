@@ -112,6 +112,8 @@ export const storage = {
   strategyPool:         kv<string[]>('strategy-pool'),
   /** 旧分钟隔离池 — 仅作一次性迁移读取源, 迁移完成后移除该 key */
   strategyPoolMinute:   kv<string[]>('strategy-pool-1m'),
+  /** 策略页上次选择的资产类型 */
+  screenerAssetType:    kv<'stock' | 'etf'>('screener_assetType'),
 
   /** 自选列表列配置 */
   watchlistColumns:     kv<unknown[]>('watchlist_columns'),
@@ -222,13 +224,13 @@ export const storage = {
   limitLadderSealMode:  kv<'vol' | 'amount'>('limit-ladder-seal-mode'),
 
   /** 策略创建草稿（新建专用） */
-  strategyDraft: kv<{ name: string; description: string; direction: string; style?: string; rules: string; code: string; step: number; strategyId: string; source?: 'ai' | 'custom' } | null>('strategy-draft'),
+  strategyDraft: kv<{ name: string; description: string; direction: string; style?: string; rules: string; code: string; step: number; strategyId: string; source?: 'ai' | 'custom'; assetTypes?: ('stock' | 'etf')[]; timeframes?: ('1d' | '1w' | '30m' | '1m')[] } | null>('strategy-draft'),
 
   /** 策略修改草稿（AI修改专用，不影响创建按钮） */
-  strategyModify: kv<{ name: string; description: string; direction: string; style?: string; rules: string; code: string; step: number; strategyId: string; source?: 'ai' | 'custom' } | null>('strategy-modify'),
+  strategyModify: kv<{ name: string; description: string; direction: string; style?: string; rules: string; code: string; step: number; strategyId: string; source?: 'ai' | 'custom'; assetTypes?: ('stock' | 'etf')[]; timeframes?: ('1d' | '1w' | '30m' | '1m')[] } | null>('strategy-modify'),
 
   /** 策略构建器草稿（旧版兼容，逐渐废弃） */
-  strategyBuilderDraft: kv<{ name: string; description: string; direction: string; style?: string; rules: string; code: string; step: number; strategyId: string; source?: 'ai' | 'custom' } | null>('strategy-builder-draft'),
+  strategyBuilderDraft: kv<{ name: string; description: string; direction: string; style?: string; rules: string; code: string; step: number; strategyId: string; source?: 'ai' | 'custom'; assetTypes?: ('stock' | 'etf')[]; timeframes?: ('1d' | '1w' | '30m' | '1m')[] } | null>('strategy-builder-draft'),
 
   /** 已保存策略的原始规则（策略ID → 规则文本） */
   strategyRules: kv<Record<string, string>>('strategy-rules'),
