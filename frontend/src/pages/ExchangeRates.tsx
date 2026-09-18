@@ -29,6 +29,15 @@ function defaultStartDate() {
   return localDate(date)
 }
 
+function startDateMonthsAgo(months: number, end = localDate()) {
+  const date = new Date(`${end}T00:00:00`)
+  const day = date.getDate()
+  date.setDate(1)
+  date.setMonth(date.getMonth() - months)
+  date.setDate(Math.min(day, new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate()))
+  return localDate(date)
+}
+
 function formatRate(symbol: string, value: number | null | undefined) {
   if (value == null || !Number.isFinite(Number(value))) return '—'
   return Number(value).toFixed(symbol === 'DXY' ? 2 : 4)
@@ -80,15 +89,88 @@ function latestRowsBySymbol(rows: ExchangeRateRow[]) {
   return latest
 }
 
+type RateTrendState = 'strong_up' | 'up' | 'flat' | 'down' | 'strong_down' | 'insufficient'
+
+interface RateTrend {
+  state: RateTrendState
+  roc5: number | null
+  roc20: number | null
+  roc60: number | null
+  ma20Slope: number | null
+  ma60Slope: number | null
+}
+
+const TREND_META: Record<RateTrendState, { mark: string; label: string; className: string }> = {
+  strong_up: { mark: '↑↑', label: '持续走强', className: 'text-bull' },
+  up: { mark: '↑', label: '走强', className: 'text-bull' },
+  flat: { mark: '—', label: '震荡', className: 'text-muted' },
+  down: { mark: '↓', label: '走弱', className: 'text-bear' },
+  strong_down: { mark: '↓↓', label: '持续走弱', className: 'text-bear' },
+  insufficient: { mark: '—', label: '数据不足', className: 'text-muted' },
+}
+
+function dailyRowsBySymbol(rows: ExchangeRateRow[], symbol: string) {
+  const byDate = new Map<string, ExchangeRateRow>()
+  for (const row of rows) {
+    if (row.symbol !== symbol) continue
+    const previous = byDate.get(row.date)
+    if (!previous || row.retrieved_at > previous.retrieved_at) byDate.set(row.date, row)
+  }
+  return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date))
+}
+
+function buildRateTrend(rows: ExchangeRateRow[], symbol: string): RateTrend {
+  const points = dailyRowsBySymbol(rows, symbol)
+  const lastIndex = points.length - 1
+  const current = points[lastIndex]?.rate ?? null
+
+  const valueAt = (daysAgo: number) => points[lastIndex - daysAgo]?.rate ?? null
+  const averageAt = (period: number, daysAgo = 0) => {
+    const end = lastIndex - daysAgo
+    const start = end - period + 1
+    if (start < 0) return null
+    const values = points.slice(start, end + 1).map(point => point.rate)
+    return values.reduce((sum, value) => sum + value, 0) / values.length
+  }
+  const change = (daysAgo: number) => {
+    const previous = valueAt(daysAgo)
+    return current != null && previous != null && previous !== 0 ? current / previous - 1 : null
+  }
+
+  const ma20 = averageAt(20)
+  const ma60 = averageAt(60)
+  const ma20Previous = averageAt(20, 5)
+  const ma60Previous = averageAt(60, 5)
+  const roc5 = change(5)
+  const roc20 = change(20)
+  const roc60 = change(60)
+  const ma20Slope = ma20 != null && ma20Previous != null && ma20Previous !== 0 ? ma20 / ma20Previous - 1 : null
+  const ma60Slope = ma60 != null && ma60Previous != null && ma60Previous !== 0 ? ma60 / ma60Previous - 1 : null
+  const ready = current != null && ma20 != null && roc5 != null && roc20 != null && ma20Slope != null
+
+  let state: RateTrendState = 'insufficient'
+  if (ready) {
+    const sustainedUp = ma60 != null && ma60Slope != null
+      && current > ma20 && ma20 > ma60
+      && roc5 > 0 && roc20 > 0 && roc60 != null && roc60 > 0
+      && ma20Slope > 0 && ma60Slope > 0
+    const sustainedDown = ma60 != null && ma60Slope != null
+      && current < ma20 && ma20 < ma60
+      && roc5 < 0 && roc20 < 0 && roc60 != null && roc60 < 0
+      && ma20Slope < 0 && ma60Slope < 0
+    if (sustainedUp) state = 'strong_up'
+    else if (sustainedDown) state = 'strong_down'
+    else if (current > ma20 && roc20 > 0 && ma20Slope > 0) state = 'up'
+    else if (current < ma20 && roc20 < 0 && ma20Slope < 0) state = 'down'
+    else state = 'flat'
+  }
+
+  return { state, roc5, roc20, roc60, ma20Slope, ma60Slope }
+}
+
 function RateChart({ rows, symbol }: { rows: ExchangeRateRow[]; symbol: string }) {
   const points = useMemo(() => {
-    const byDate = new Map<string, ExchangeRateRow>()
-    for (const row of rows) {
-      if (row.symbol !== symbol) continue
-      const previous = byDate.get(row.date)
-      if (!previous || row.retrieved_at > previous.retrieved_at) byDate.set(row.date, row)
-    }
-    return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date)).slice(-180)
+    return dailyRowsBySymbol(rows, symbol).slice(-180)
   }, [rows, symbol])
 
   if (points.length === 0) {
@@ -150,6 +232,8 @@ export function ExchangeRates() {
   const [selectedSymbol, setSelectedSymbol] = useState('USD/CNY')
   const [intervalInput, setIntervalInput] = useState('3')
   const [editingInterval, setEditingInterval] = useState(false)
+  const trendStartDate = defaultStartDate()
+  const trendEndDate = localDate()
 
   const status = useDataStatus({ staleTime: 30_000, refetchInterval: 60_000 })
   const prefs = usePreferences()
@@ -160,11 +244,14 @@ export function ExchangeRates() {
     enabled: startDate <= endDate,
     placeholderData: previous => previous,
   })
+  const trendHistory = useQuery({
+    queryKey: [...QK.exchangeRate, trendStartDate, trendEndDate],
+    queryFn: () => api.exchangeRate({ startDate: trendStartDate, endDate: trendEndDate, limit: 10_000 }),
+    placeholderData: previous => previous,
+  })
 
   const sync = useMutation({
-    mutationFn: ({ historical }: { historical: boolean }) => historical
-      ? api.exchangeRateSync(startDate, endDate)
-      : api.exchangeRateSync(),
+    mutationFn: () => api.exchangeRateSync(),
     onSuccess: result => {
       qc.invalidateQueries({ queryKey: QK.dataStatus })
       qc.invalidateQueries({ queryKey: QK.exchangeRate })
@@ -175,7 +262,12 @@ export function ExchangeRates() {
 
   const stats = status.data?.exchange_rate
   const rows = history.data?.items ?? []
-  const latestRows = useMemo(() => latestRowsBySymbol(rows), [rows])
+  const snapshotRows = trendHistory.data?.items ?? rows
+  const latestRows = useMemo(() => latestRowsBySymbol(snapshotRows), [snapshotRows])
+  const trends = useMemo(
+    () => new Map(RATE_ITEMS.map(item => [item.symbol, buildRateTrend(snapshotRows, item.symbol)])),
+    [snapshotRows],
+  )
   const latestRetrievedAt = useMemo(
     () => [...latestRows.values()].reduce<string | null>((latest, row) => (
       !latest || row.retrieved_at > latest ? row.retrieved_at : latest
@@ -190,6 +282,12 @@ export function ExchangeRates() {
   const intervalHours = prefs.data?.exchange_rate_interval_hours ?? 3
   const canSync = routeCapUsable(matrix.data, 'exchange_rate') !== false
   const rangeValid = startDate <= endDate
+  const rangeBase = endDate || localDate()
+  const selectedRangeMonths = [1, 6].find(months => startDate === startDateMonthsAgo(months, rangeBase))
+
+  const setRangeMonths = (months: number) => {
+    setStartDate(startDateMonthsAgo(selectedRangeMonths === months ? 12 : months, rangeBase))
+  }
 
   useEffect(() => {
     setIntervalInput(String(intervalHours))
@@ -216,7 +314,7 @@ export function ExchangeRates() {
           <div className="flex flex-wrap items-center justify-end gap-2">
             <button
               type="button"
-              onClick={() => sync.mutate({ historical: false })}
+              onClick={() => sync.mutate()}
               disabled={!canSync || sync.isPending}
               className="inline-flex items-center gap-1.5 rounded-btn border border-border bg-elevated px-3 py-1.5 text-xs text-secondary transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -319,6 +417,8 @@ export function ExchangeRates() {
                 const rate = stats?.latest_rates?.[item.symbol] ?? row?.rate
                 const source = stats?.sources?.[item.symbol] ?? row?.source
                 const date = row?.date ?? stats?.latest_date
+                const trend = trends.get(item.symbol)
+                const trendMeta = TREND_META[trend?.state ?? 'insufficient']
                 return (
                   <button
                     key={item.symbol}
@@ -329,6 +429,7 @@ export function ExchangeRates() {
                   >
                     <div className="truncate text-[11px] text-muted">{item.label}</div>
                     <div className="mt-1 font-mono text-lg font-semibold tabular-nums text-foreground">{formatRate(item.symbol, rate)}</div>
+                    <div className={`mt-1 text-[10px] font-medium ${trendMeta.className}`}>{trendMeta.mark} {trendMeta.label}</div>
                     <div className="mt-1 flex items-center justify-between gap-1 text-[10px] text-muted">
                       <span>{sourceLabel(source)}</span>
                       <span>{date ?? '—'}</span>
@@ -358,6 +459,21 @@ export function ExchangeRates() {
                 </div>
               </div>
               <div className="flex flex-wrap items-end gap-2 text-xs">
+                <div className="flex flex-wrap items-center gap-1">
+                  {[{ label: '近1个月', months: 1 }, { label: '近半年', months: 6 }].map(range => (
+                    <button
+                      key={range.label}
+                      type="button"
+                      onClick={() => setRangeMonths(range.months)}
+                      aria-pressed={selectedRangeMonths === range.months}
+                      className={`rounded-btn border px-2 py-1.5 text-[11px] transition-colors ${selectedRangeMonths === range.months
+                        ? 'border-accent/30 bg-accent/15 text-accent'
+                        : 'border-border bg-elevated text-secondary hover:border-accent/40 hover:text-foreground'}`}
+                    >
+                      {range.label}
+                    </button>
+                  ))}
+                </div>
                 <label className="space-y-1">
                   <span className="block text-[10px] text-muted">开始日期</span>
                   <input type="date" value={startDate} onChange={event => setStartDate(event.target.value)} className="rounded-btn border border-border bg-base px-2 py-1.5 font-mono text-xs text-foreground outline-none focus:border-accent" />
@@ -367,15 +483,6 @@ export function ExchangeRates() {
                   <span className="block text-[10px] text-muted">结束日期</span>
                   <input type="date" value={endDate} onChange={event => setEndDate(event.target.value)} className="rounded-btn border border-border bg-base px-2 py-1.5 font-mono text-xs text-foreground outline-none focus:border-accent" />
                 </label>
-                <button
-                  type="button"
-                  onClick={() => sync.mutate({ historical: true })}
-                  disabled={!canSync || sync.isPending || !rangeValid}
-                  className="inline-flex items-center gap-1.5 rounded-btn bg-accent px-3 py-1.5 text-xs font-medium text-base transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {sync.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                  同步历史
-                </button>
               </div>
             </div>
             {!rangeValid && <div className="mt-3 text-xs text-danger">开始日期不能晚于结束日期</div>}
@@ -395,7 +502,7 @@ export function ExchangeRates() {
               <span className="text-[11px] text-muted">查询 {selectedRows.length} 条</span>
             </div>
             {selectedRows.length === 0 ? (
-              <div className="rounded-card bg-elevated/30 px-4 py-8 text-center text-sm text-muted">暂无明细数据，请先同步历史数据。</div>
+              <div className="rounded-card bg-elevated/30 px-4 py-8 text-center text-sm text-muted">暂无明细数据，请先在数据页同步日期范围。</div>
             ) : (
               <div className="max-h-[26rem] overflow-auto rounded-card border border-border/70">
                 <table className="w-full min-w-[38rem] text-left text-xs">
