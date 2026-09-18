@@ -7,6 +7,7 @@ import {
   PAPER_TRADING_TIMELINE,
   buildPaperTradingTimelineState,
   getBeijingPaperClock,
+  getPaperTradingSystemTimelinePoints,
   parsePaperClockMinutes,
 } from '../src/lib/paper-trading-time.ts'
 
@@ -48,5 +49,11 @@ assert.deepEqual(getBeijingPaperClock(new Date('2026-09-14T01:30:00Z')), {
   minutes: 570,
   tradingDay: true,
 })
+
+assert.deepEqual(getPaperTradingSystemTimelinePoints({ enabled: false, hour: 15, minute: 40 }).map(point => point.time), ['09:10', '15:35'])
+const enabledReviewPoints = getPaperTradingSystemTimelinePoints({ enabled: true, hour: 15, minute: 40 })
+assert.deepEqual(enabledReviewPoints.map(point => point.time), ['09:10', '15:35', '15:40'])
+assert.equal(enabledReviewPoints.at(-1).description, '每日复盘 · 生成并归档 AI 复盘报告')
+assert.deepEqual(getPaperTradingSystemTimelinePoints({ enabled: true, hour: 15, minute: 0 }).map(point => point.time), ['09:10', '15:00', '15:35'])
 
 console.log('paper trading time assertions passed')

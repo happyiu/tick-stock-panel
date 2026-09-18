@@ -5,6 +5,22 @@ import { api, friendlyStreamError } from '@/lib/api'
 import type { AiIterateRound } from '@/lib/api'
 import { storage } from '@/lib/storage'
 import { cn } from '@/lib/cn'
+import {
+  applyAssetTypes,
+  AssetTypePicker,
+  DEFAULT_ASSET_TYPES,
+  normalizeAssetTypes,
+  parseAssetTypes,
+  type StrategyAssetType,
+} from './StrategyAssetTypePicker'
+import {
+  applyStrategyTimeframes,
+  DEFAULT_STRATEGY_TIMEFRAMES,
+  normalizeStrategyTimeframes,
+  parseStrategyTimeframes,
+  StrategyTimeframePicker,
+  type StrategyTimeframe,
+} from './StrategyTimeframePicker'
 
 // ===== 工具函数 =====
 
@@ -205,6 +221,8 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [direction, setDirection] = useState('long')
+  const [assetTypes, setAssetTypes] = useState<StrategyAssetType[]>([...DEFAULT_ASSET_TYPES])
+  const [timeframes, setTimeframes] = useState<StrategyTimeframe[]>([...DEFAULT_STRATEGY_TIMEFRAMES])
   const [executionBackend, setExecutionBackend] = useState<'polars_expr' | 'matrix_native'>('polars_expr')
   const [rules, setRules] = useState('')
   const [code, setCode] = useState('')
@@ -229,6 +247,8 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
 
   const resetDraftState = useCallback(() => {
     setStep(1); setTab('ai'); setName(''); setDescription(''); setDirection('long')
+    setAssetTypes([...DEFAULT_ASSET_TYPES])
+    setTimeframes([...DEFAULT_STRATEGY_TIMEFRAMES])
     setExecutionBackend('polars_expr'); setRules(''); setCode(''); setInstruction('')
     setPreviewTab('params'); setStrategyId(''); setSource('ai'); setValidated(false); setError('')
     setIterateEnabled(false); setIterateRounds([]); setIterateDraftId('')
@@ -251,6 +271,8 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
       const restoredSource = d.source ?? (d.strategyId?.startsWith('custom_') ? 'custom' : 'ai')
       setStep(d.step ?? 1); setName(d.name ?? ''); setDescription(d.description ?? '')
       setDirection(d.direction ?? 'long')
+      setAssetTypes(normalizeAssetTypes(d.assetTypes ?? parseAssetTypes(d.code ?? '')))
+      setTimeframes(normalizeStrategyTimeframes(d.timeframes ?? parseStrategyTimeframes(d.code ?? '')))
       setExecutionBackend(
         (d as any).executionBackend
         ?? (String(d.code ?? '').includes('matrix_native') ? 'matrix_native' : 'polars_expr'),
@@ -276,9 +298,9 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
     if (!name && !rules && !code) {
       draftStore.set(null)
     } else {
-      draftStore.set({ name, description, direction, executionBackend, rules, code, step, strategyId, source } as any)
+      draftStore.set({ name, description, direction, executionBackend, rules, code, step, strategyId, source, assetTypes, timeframes } as any)
     }
-  }, [draftStore, name, description, direction, executionBackend, rules, code, step, strategyId, source])
+  }, [draftStore, name, description, direction, assetTypes, timeframes, executionBackend, rules, code, step, strategyId, source])
   useEffect(() => {
     if (loaded && !suppressPersistRef.current) persist()
   }, [loaded, persist])
@@ -299,10 +321,25 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
     return slugId(target)
   }
 
+  const handleAssetTypesChange = (next: StrategyAssetType[]) => {
+    const normalized = normalizeAssetTypes(next)
+    setAssetTypes(normalized)
+    setCode(prev => applyAssetTypes(prev, normalized))
+  }
+
+  const handleTimeframesChange = (next: StrategyTimeframe[]) => {
+    const normalized = normalizeStrategyTimeframes(next)
+    setTimeframes(normalized)
+    setCode(prev => applyStrategyTimeframes(prev, normalized))
+  }
+
   const selectExecutionBackend = (backend: 'polars_expr' | 'matrix_native') => {
     setExecutionBackend(backend)
     if (tab === 'custom' && (!code || code === CUSTOM_TEMPLATE || code === MATRIX_TEMPLATE)) {
-      setCode(backend === 'matrix_native' ? MATRIX_TEMPLATE : CUSTOM_TEMPLATE)
+      setCode(applyStrategyTimeframes(
+        applyAssetTypes(backend === 'matrix_native' ? MATRIX_TEMPLATE : CUSTOM_TEMPLATE, assetTypes),
+        timeframes,
+      ))
     }
   }
 
@@ -316,10 +353,12 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
         // AI 迭代: 生成 → 回测 → 诊断 → 修改 闭环, 草稿已由后端落盘
         const result = await api.strategyAiIterate({
           name: name.trim(), description: description.trim(), direction,
-          execution_backend: executionBackend, rules: rules.trim(), max_rounds: 4,
+          execution_backend: executionBackend, rules: rules.trim(), asset_types: assetTypes,
+          timeframes, max_rounds: 4,
         })
-        setCode(result.final_code)
-        iterateSavedCodeRef.current = result.final_code
+        const finalCode = applyStrategyTimeframes(applyAssetTypes(result.final_code, assetTypes), timeframes)
+        setCode(finalCode)
+        iterateSavedCodeRef.current = finalCode
         setStrategyId(result.draft_strategy_id); setSource('ai')
         setIterateDraftId(result.draft_strategy_id); setIterateRounds(result.rounds ?? [])
         setStep(2); setValidated(true)
@@ -331,7 +370,11 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
         const id = resolveStrategyId('ai')
         setStrategyId(id); setSource('ai'); setPreviewTab('code')
         let finalResult: any = null
-        for await (const evt of api.strategyBuildStream(1, { name: name.trim(), description: description.trim(), direction, execution_backend: executionBackend, rules: rules.trim(), strategy_id: id })) {
+        for await (const evt of api.strategyBuildStream(1, {
+          name: name.trim(), description: description.trim(), direction,
+          execution_backend: executionBackend, rules: rules.trim(), asset_types: assetTypes,
+          timeframes, strategy_id: id,
+        })) {
           if (evt.type === 'delta') {
             setCode(prev => prev + evt.content)
           } else if (evt.type === 'error') {
@@ -342,7 +385,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
         }
         if (!finalResult) throw new Error('AI 未返回策略结果')
         if (!finalResult.valid) { setError(finalResult.error ?? '生成失败'); return }
-        setCode(finalResult.code); setStep(2); setValidated(true)
+        setCode(applyStrategyTimeframes(applyAssetTypes(finalResult.code, assetTypes), timeframes)); setStep(2); setValidated(true)
         const genDesc = parseMetaField(finalResult.code, 'description')
         const genRules = parseRules(finalResult.code)
         if (genDesc) setDescription(genDesc)
@@ -361,7 +404,12 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
     try {
       let draft = ''
       let finalResult: any = null
-      for await (const evt of api.strategyBuildStream(2, { current_code: code, instruction: instruction.trim(), strategy_id: strategyId })) {
+      for await (const evt of api.strategyBuildStream(2, {
+        current_code: code,
+        instruction: instruction.trim(),
+        strategy_id: strategyId,
+        timeframes,
+      })) {
         if (evt.type === 'delta') {
           draft += evt.content
           setCode(draft)
@@ -373,7 +421,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
       }
       if (!finalResult) throw new Error('AI 未返回策略结果')
       if (!finalResult.valid) { setError(finalResult.error ?? '修改失败'); return }
-      setCode(finalResult.code); setInstruction(''); setValidated(true)
+      setCode(applyStrategyTimeframes(applyAssetTypes(finalResult.code, assetTypes), timeframes)); setInstruction(''); setValidated(true)
       const genDesc = parseMetaField(finalResult.code, 'description')
       const updatedRules = parseRules(finalResult.code)
       if (genDesc) setDescription(genDesc)
@@ -389,7 +437,14 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
     try {
       const id = strategyId || resolveStrategyId(tab === 'custom' ? 'custom' : 'ai')
       setStrategyId(id)
-      const res = await api.strategyValidateCode({ code: draftCode, strategy_id: id, name: name.trim(), description: description.trim() })
+      const res = await api.strategyValidateCode({
+        code: draftCode,
+        strategy_id: id,
+        name: name.trim(),
+        description: description.trim(),
+        asset_types: assetTypes,
+        timeframes,
+      })
       if (!res.valid) { setValidated(false); setError(res.error ?? '代码校验失败'); return }
       setCode(res.code); setValidated(true)
       const genDesc = parseMetaField(res.code, 'description')
@@ -418,6 +473,8 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
             mode: 'update',
             name: name.trim(),
             description: description.trim(),
+            asset_types: assetTypes,
+            timeframes,
           })
           researchOnly = savedResult.research_only ?? true
         }
@@ -441,6 +498,8 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
         mode: mode === 'modify' ? 'update' : 'create',
         name: name.trim(),
         description: description.trim(),
+        asset_types: assetTypes,
+        timeframes,
       })
       suppressPersistRef.current = true
       clearDraft()
@@ -480,7 +539,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
               <button onClick={() => { setTab('ai'); if (mode === 'create') setSource('ai') }} className={cn('px-3 py-1 rounded-md text-xs font-medium transition-all cursor-pointer', tab === 'ai' ? 'bg-amber-400/15 text-amber-400' : 'text-muted hover:text-foreground')}>
                 <Sparkles className="h-3 w-3 inline mr-1" />AI 生成
               </button>
-              <button onClick={() => { setTab('custom'); if (mode === 'create') { setSource('custom'); if (!code) setCode(executionBackend === 'matrix_native' ? MATRIX_TEMPLATE : CUSTOM_TEMPLATE) } }} className={cn('px-3 py-1 rounded-md text-xs font-medium transition-all cursor-pointer', tab === 'custom' ? 'bg-accent/15 text-accent' : 'text-muted hover:text-foreground')}>
+              <button onClick={() => { setTab('custom'); if (mode === 'create') { setSource('custom'); if (!code) setCode(applyStrategyTimeframes(applyAssetTypes(executionBackend === 'matrix_native' ? MATRIX_TEMPLATE : CUSTOM_TEMPLATE, assetTypes), timeframes)) } }} className={cn('px-3 py-1 rounded-md text-xs font-medium transition-all cursor-pointer', tab === 'custom' ? 'bg-accent/15 text-accent' : 'text-muted hover:text-foreground')}>
                 <FileText className="h-3 w-3 inline mr-1" />自定义编写
               </button>
             </div>
@@ -556,6 +615,8 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
                     ))}
                   </div>
                 </div>
+                <AssetTypePicker assetTypes={assetTypes} onChange={handleAssetTypesChange} />
+                <StrategyTimeframePicker timeframes={timeframes} onChange={handleTimeframesChange} />
                 <div>
                   <span className="text-[10px] text-muted/50 uppercase tracking-wider mb-1.5 block">执行后端</span>
                   <div className="flex gap-1">
@@ -731,6 +792,8 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
                   <input type="text" value={description} onChange={e => setDescription(e.target.value)} placeholder="一句话描述策略逻辑"
                     className="h-9 px-3 rounded-lg bg-base border-0 ring-1 ring-border/30 text-sm text-foreground placeholder:text-muted/30 focus:outline-none focus:ring-2 focus:ring-accent/30" />
                 </div>
+                <AssetTypePicker assetTypes={assetTypes} onChange={handleAssetTypesChange} />
+                <StrategyTimeframePicker timeframes={timeframes} onChange={handleTimeframesChange} />
                 <div className="flex items-center gap-1">
                   <span className="mr-2 text-[10px] text-muted/50 uppercase tracking-wider">执行后端</span>
                   <button onClick={() => selectExecutionBackend('polars_expr')} className={'px-2.5 py-1 rounded text-[11px] font-medium border transition-colors ' + (executionBackend === 'polars_expr' ? 'border-accent/40 bg-accent/10 text-accent' : 'border-border bg-base text-muted')}>Polars 表达式</button>
@@ -743,7 +806,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
                       <span className="text-sm font-medium text-foreground">自定义策略代码</span>
                       {validated && <span className="text-[10px] text-emerald-400">已校验</span>}
                     </div>
-                    <button onClick={() => { navigator.clipboard.writeText(code || (executionBackend === 'matrix_native' ? MATRIX_TEMPLATE : CUSTOM_TEMPLATE)); setCustomCopied(true); setTimeout(() => setCustomCopied(false), 2000) }}
+                    <button onClick={() => { navigator.clipboard.writeText(code || applyStrategyTimeframes(applyAssetTypes(executionBackend === 'matrix_native' ? MATRIX_TEMPLATE : CUSTOM_TEMPLATE, assetTypes), timeframes)); setCustomCopied(true); setTimeout(() => setCustomCopied(false), 2000) }}
                       className={cn('inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium transition-all cursor-pointer', customCopied ? 'bg-emerald-400/10 text-emerald-400' : 'bg-elevated text-muted hover:text-foreground hover:bg-accent/10')}>
                       {customCopied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
                       {customCopied ? '已复制' : '复制代码'}
@@ -751,7 +814,15 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
                   </div>
                   <textarea
                     value={code}
-                    onChange={e => { setCode(e.target.value); setValidated(false) }}
+                    onChange={e => {
+                      const nextCode = e.target.value
+                      setCode(nextCode)
+                      setValidated(false)
+                      const parsed = parseAssetTypes(nextCode)
+                      if (parsed) setAssetTypes(parsed)
+                      const parsedTimeframes = parseStrategyTimeframes(nextCode)
+                      if (parsedTimeframes) setTimeframes(parsedTimeframes)
+                    }}
                     spellCheck={false}
                     className="w-full h-[420px] rounded-xl border border-border/40 bg-base p-4 text-[11px] leading-relaxed font-mono text-foreground/80 resize-none focus:outline-none focus:ring-2 focus:ring-accent/30"
                   />
@@ -760,7 +831,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
                   </div>
                   {error && <div className="text-[11px] text-danger bg-danger/10 border border-danger/20 rounded-lg px-3 py-2">{error}</div>}
                   <div className="flex items-center justify-end gap-2">
-                    <button onClick={() => { setCode(executionBackend === 'matrix_native' ? MATRIX_TEMPLATE : CUSTOM_TEMPLATE); setStrategyId(''); setSource('custom'); setValidated(false) }}
+                    <button onClick={() => { setCode(applyStrategyTimeframes(applyAssetTypes(executionBackend === 'matrix_native' ? MATRIX_TEMPLATE : CUSTOM_TEMPLATE, assetTypes), timeframes)); setStrategyId(''); setSource('custom'); setValidated(false) }}
                       className="h-8 px-3 rounded-lg border border-border text-xs text-secondary hover:text-foreground">
                       使用模板
                     </button>

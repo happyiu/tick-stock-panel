@@ -6,7 +6,12 @@ runtime: python
 install_no_deps: true
 entry: app.plugins.astockdata.provider:AStockDataProvider
 check: app.plugins.astockdata.provider:availability
-datasets: [daily, adj_factor, minute, realtime]
-description: "通达信 mootdx 日K/分钟K（7709 不可达时降级腾讯最近分钟K）+ 新浪复权因子 + 腾讯实时行情；仅覆盖系统标准行情数据集。"
+datasets: [daily, adj_factor, minute, realtime, depth5]
+description: "通达信 mootdx 日K/分钟K/五档盘口（7709 不可达或盘口缺失时降级腾讯）+ 新浪复权因子 + 腾讯实时行情；仅覆盖系统标准行情数据集。"
 install_hint: "基础环境默认安装 mootdx、requests；若当前环境未同步可点击安装。通达信 TCP 7709 在部分网络环境可能不可达。"
 homepage: "https://github.com/simonlin1212/a-stock-data"
+upstream:
+  repository: "https://github.com/simonlin1212/a-stock-data"
+  version: "v3.8.0"
+  commit: "2012ce7cd0e75d379c5e6cbd3115514f300f3bc8"
+  release_date: "2026-09-05"

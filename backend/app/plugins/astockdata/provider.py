@@ -2,13 +2,17 @@
 
 """将 a-stock-data 的行情层接入 tick-stock-panel 标准 Provider 契约。
 
+适配基线为 a-stock-data v3.8.0 (`2012ce7cd0e75d379c5e6cbd3115514f300f3bc8`)。
+上游该版本新增的官方指数/交易基础数据不属于当前 Provider 的标准数据集，仍由
+本插件明确限制在系统已实现的行情契约内。
+
 来源与口径对齐 a-stock-data:
 
-* mootdx: 通达信 TCP 行情，返回不复权日K/分钟K；
+* mootdx: 通达信 TCP 行情，返回不复权日K/分钟K和沪深五档盘口；
 * 新浪: qfq/hfq 阶梯因子，转换为项目需要的单事件 ex_factor；
 * 腾讯: GBK 编码的批量实时行情。
 
-这里只接入系统已有的四类标准数据集。研报、资金流、新闻、公告等端点仍需要
+这里只接入系统已有的五类标准数据集。研报、资金流、新闻、公告等端点仍需要
 各自的 service/API 契约，不在插件里偷偷扩展成未注册的字段。
 """
 
@@ -33,13 +37,17 @@ from zoneinfo import ZoneInfo
 import polars as pl
 
 from app.config import settings
-from app.data_providers.base import AssetType
+from app.data_providers.base import AssetType, ProviderCapabilities
 from app.data_providers.normalizer import normalize_adj_factors, normalize_daily
 from app.tickflow.rate_limits import chunked
 
 logger = logging.getLogger(__name__)
 
-_DATASETS = ("daily", "adj_factor", "minute", "realtime")
+UPSTREAM_REPOSITORY = "https://github.com/simonlin1212/a-stock-data"
+UPSTREAM_VERSION = "v3.8.0"
+UPSTREAM_COMMIT = "2012ce7cd0e75d379c5e6cbd3115514f300f3bc8"
+
+_DATASETS = ("daily", "adj_factor", "minute", "realtime", "depth5")
 _BATCH = 40
 _REALTIME_BATCH = 200
 _TDX_PAGE_SIZE = 800  # mootdx StdQuotes.bars() 对 offset 的硬上限
@@ -108,8 +116,19 @@ def _http_get(url: str, **kwargs):
     return _HTTP_SESSION.get(url, **kwargs)
 
 
+def _response_text(response: Any) -> str:
+    """按腾讯接口的 GBK 编码读取响应正文。"""
+    content = getattr(response, "content", b"")
+    if content:
+        try:
+            return content.decode("gbk")
+        except (AttributeError, UnicodeDecodeError):
+            pass
+    return str(getattr(response, "text", ""))
+
+
 def _natural_market(code: str) -> str:
-    if code.startswith("92") or code.startswith(("4", "8")):
+    if code.startswith(("4", "8", "92")):
         return "bj"
     if code.startswith(("5", "6", "9")):
         return "sh"
@@ -390,6 +409,95 @@ def _number(values: list[str], index: int) -> float | None:
         return None
 
 
+def _finite_number(value: Any) -> float | None:
+    """把 mootdx 标量转成有限浮点数；空盘口保持 None。"""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _depth_volume(value: Any) -> int | None:
+    number = _finite_number(value)
+    return round(number) if number is not None else None
+
+
+def _market_name(value: Any) -> str | None:
+    """归一化 mootdx 返回的市场 ID/名称。"""
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in {"1", "sh", "sse"}:
+        return "sh"
+    if text in {"0", "sz", "szse"}:
+        return "sz"
+    if text in {"2", "bj", "bse"}:
+        return "bj"
+    return None
+
+
+def _timestamp_ms(value: Any, fallback_ms: int) -> int:
+    """将 mootdx 的 servertime 转成毫秒时间戳。"""
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        number = _finite_number(value)
+        if number is not None and number > 0:
+            # 兼容秒/毫秒两种可能的数值时间戳。
+            return int(number if number >= 10**11 else number * 1000)
+        text = str(value or "").strip()
+        if not text or text == "0":
+            return fallback_ms
+        try:
+            parsed = datetime.fromisoformat(text.replace("/", "-"))
+        except ValueError:
+            return fallback_ms
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=_BEIJING)
+    return int(parsed.timestamp() * 1000)
+
+
+def _normalise_depth_quotes(
+    data: Any,
+    requested: list[tuple[str, str]],
+    fetched_ms: int,
+) -> dict[str, dict]:
+    """将 mootdx quotes DataFrame 映射到项目的五档盘口契约。"""
+    frame = _to_polars_frame(data)
+    if frame.is_empty():
+        return {}
+
+    by_code: dict[str, list[str]] = {}
+    for query_key, symbol in requested:
+        by_code.setdefault(query_key[2:], []).append(symbol)
+
+    result: dict[str, dict] = {}
+    for row in frame.to_dicts():
+        raw_code = str(row.get("code") or "").strip()
+        if not raw_code:
+            continue
+        code = raw_code.zfill(6)
+        market = _market_name(row.get("market"))
+        symbol = f"{code}.{market.upper()}" if market else None
+        if symbol not in {item[1] for item in requested}:
+            candidates = by_code.get(code, [])
+            symbol = candidates[0] if len(candidates) == 1 else None
+        if symbol is None:
+            continue
+
+        result[symbol] = {
+            "bid_prices": [_finite_number(row.get(f"bid{level}")) for level in range(1, 6)],
+            "bid_volumes": [_depth_volume(row.get(f"bid_vol{level}")) for level in range(1, 6)],
+            "ask_prices": [_finite_number(row.get(f"ask{level}")) for level in range(1, 6)],
+            "ask_volumes": [_depth_volume(row.get(f"ask_vol{level}")) for level in range(1, 6)],
+            "timestamp": _timestamp_ms(row.get("servertime"), fetched_ms),
+        }
+    return result
+
+
 def _parse_tencent(text: str, fetched_ms: int) -> list[dict]:
     rows: list[dict] = []
     for line in str(text).split(";"):
@@ -431,6 +539,66 @@ def _parse_tencent(text: str, fetched_ms: int) -> list[dict]:
         # code/market 已由 _symbol_parts 校验；局部变量保留让字段索引解析更易审查。
         del code, market
     return rows
+
+
+def _parse_tencent_depth(
+    text: str,
+    requested: list[tuple[str, str]],
+    fetched_ms: int,
+) -> dict[str, dict]:
+    """解析腾讯行情 9~28 号字段中的五档盘口。"""
+    requested_by_key = {query_key: symbol for query_key, symbol in requested}
+    result: dict[str, dict] = {}
+    for line in str(text).split(";"):
+        if "=" not in line or '"' not in line:
+            continue
+        key = line.split("=", 1)[0].strip().rsplit("_", 1)[-1].lower()
+        symbol = requested_by_key.get(key)
+        if symbol is None:
+            continue
+        payload = line.split('"', 2)[1].split("~")
+        if len(payload) < 29:
+            continue
+
+        bid_prices = [_number(payload, 9 + (level - 1) * 2) for level in range(1, 6)]
+        bid_volumes = [
+            _depth_volume(_number(payload, 10 + (level - 1) * 2)) for level in range(1, 6)
+        ]
+        ask_prices = [_number(payload, 19 + (level - 1) * 2) for level in range(1, 6)]
+        ask_volumes = [
+            _depth_volume(_number(payload, 20 + (level - 1) * 2)) for level in range(1, 6)
+        ]
+        if not any(value not in (None, 0) for value in (*bid_prices, *ask_prices, *bid_volumes, *ask_volumes)):
+            # 未开盘、指数或失效旧代码可能返回全 0 深度；不能把它解释为“真封单”。
+            continue
+        result[symbol] = {
+            "bid_prices": bid_prices,
+            "bid_volumes": bid_volumes,
+            "ask_prices": ask_prices,
+            "ask_volumes": ask_volumes,
+            "timestamp": fetched_ms,
+        }
+    return result
+
+
+def _fetch_tencent_depth(requested: list[tuple[str, str]]) -> dict[str, dict]:
+    """批量读取腾讯五档字段；失败批次隔离，供 mootdx 降级使用。"""
+    result: dict[str, dict] = {}
+    for index in range(0, len(requested), _REALTIME_BATCH):
+        if index:
+            time.sleep(0.05)
+        batch = requested[index : index + _REALTIME_BATCH]
+        try:
+            response = _http_get(
+                "https://qt.gtimg.cn/q=" + ",".join(query_key for query_key, _ in batch),
+                headers={"User-Agent": _UA, "Referer": "https://gu.qq.com/"},
+                timeout=10,
+            )
+            response.raise_for_status()
+            result.update(_parse_tencent_depth(_response_text(response), batch, int(time.time() * 1000)))
+        except Exception as exc:
+            logger.warning("a-stock-data 腾讯 depth5 批次拉取失败: %s", exc)
+    return result
 
 
 def _factor_events(series: list[dict]) -> list[dict]:
@@ -502,6 +670,15 @@ class AStockDataProvider:
     """a-stock-data 行情层的标准 Provider。"""
 
     name = "astockdata"
+    upstream_version = UPSTREAM_VERSION
+    upstream_commit = UPSTREAM_COMMIT
+    capabilities = ProviderCapabilities(
+        daily=True,
+        adj_factor=True,
+        minute=True,
+        realtime=True,
+        depth5=True,
+    )
     minute_frequencies = tuple(_FREQUENCIES)
     minute_adjustment = "none"
     builtin = True
@@ -748,18 +925,46 @@ class AStockDataProvider:
                     timeout=10,
                 )
                 response.raise_for_status()
-                content = getattr(response, "content", b"")
-                if content:
-                    try:
-                        payload = content.decode("gbk")
-                    except (AttributeError, UnicodeDecodeError):
-                        payload = str(getattr(response, "text", ""))
-                else:
-                    payload = str(getattr(response, "text", ""))
-                rows.extend(_parse_tencent(payload, int(time.time() * 1000)))
+                rows.extend(_parse_tencent(_response_text(response), int(time.time() * 1000)))
             except Exception as exc:
                 logger.warning("a-stock-data realtime 批次拉取失败: %s", exc)
         return rows
+
+    def get_depth_batch(self, symbols: list[str]) -> dict[str, dict]:
+        """通过 mootdx 获取五档盘口，缺失标的降级到腾讯实时行情。"""
+        if not symbols:
+            return {}
+
+        requested: list[tuple[str, str]] = []
+        for raw_symbol in symbols:
+            try:
+                code, market, symbol = _symbol_parts(raw_symbol)
+            except ValueError:
+                logger.warning("a-stock-data depth5 忽略无效标的: %s", raw_symbol)
+                continue
+            requested.append((f"{market}{code}", symbol))
+
+        requested = list(dict.fromkeys(requested))
+        if not requested:
+            return {}
+
+        # tdxpy 的 get_security_quotes 会拒绝包含北交所代码的整批请求，先把
+        # BJ 分离；其余标的仍保持一次批量请求。
+        tdx_requested = [item for item in requested if not item[1].endswith(".BJ")]
+        result: dict[str, dict] = {}
+        if tdx_requested:
+            try:
+                client = self._get_tdx()
+                with self._tdx_lock:
+                    data = client.quotes(symbol=[query_key for query_key, _ in tdx_requested])
+                result = _normalise_depth_quotes(data, tdx_requested, int(time.time() * 1000))
+            except Exception as exc:
+                logger.warning("a-stock-data depth5 mootdx 不可用，降级腾讯: %s", exc)
+
+        missing = [item for item in requested if item[1] not in result]
+        if missing:
+            result.update(_fetch_tencent_depth(missing))
+        return result
 
     def test_dataset(self, dataset: str, symbols: list[str] | None = None) -> dict:
         sample = symbols or ["600519.SH"]
@@ -777,6 +982,15 @@ class AStockDataProvider:
                 "rows": len(rows),
                 "columns": list(rows[0].keys()) if rows else [],
                 "preview": rows[:5],
+            }
+        if dataset == "depth5":
+            rows = self.get_depth_batch(sample)
+            return {
+                "provider": self.name,
+                "dataset": dataset,
+                "rows": len(rows),
+                "columns": list(next(iter(rows.values())).keys()) if rows else [],
+                "preview": [dict(symbol=symbol, **row) for symbol, row in list(rows.items())[:5]],
             }
         raise ValueError(f"a-stock-data 不支持数据集: {dataset}")
 
