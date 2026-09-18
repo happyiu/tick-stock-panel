@@ -992,7 +992,7 @@ async def _run_scheduled_review(repo) -> None:
                 qs.push_review_event(_json.dumps(
                     {"type": "error", "message": "复盘生成异常,请稍后手动重试"},
                     ensure_ascii=False))
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
 
@@ -1151,6 +1151,28 @@ def _register_review_job(scheduler, repo, hour: int, minute: int) -> None:
     )
 
 
+EXCHANGE_RATE_JOB_ID = "exchange_rate_daily"
+
+
+def _register_exchange_rate_job(scheduler, repo, interval_hours: int) -> None:
+    """Register the current exchange-rate snapshot job at a fixed interval."""
+    def _exchange_rate_latest():
+        from app.services.exchange_rate_sync import sync_exchange_rates
+
+        try:
+            sync_exchange_rates(repo)
+        except Exception:
+            logger.exception("scheduled exchange rate sync failed")
+
+    scheduler.add_job(
+        _exchange_rate_latest,
+        trigger=IntervalTrigger(hours=max(1, int(interval_hours)), timezone="Asia/Shanghai"),
+        id=EXCHANGE_RATE_JOB_ID,
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
+
+
 def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOScheduler:
     """启动调度器。
 
@@ -1233,24 +1255,10 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
         replace_existing=True,
     )
 
-    # 外部汇率: Frankfurter/CFETS 日频中间价，不并入证券日K管道。
-    # 历史回补走 /api/exchange-rate/sync；定时任务只拉取当天最新值。
-    def _exchange_rate_daily():
-        from app.services.exchange_rate_sync import sync_exchange_rates
-
-        try:
-            sync_exchange_rates(repo)
-        except Exception:  # noqa: BLE001
-            logger.exception("scheduled exchange rate sync failed")
-
-    scheduler.add_job(
-        _exchange_rate_daily,
-        trigger=CronTrigger(day_of_week="mon-fri", hour=18, minute=0,
-                            timezone="Asia/Shanghai"),
-        id="exchange_rate_daily",
-        misfire_grace_time=3600,
-        replace_existing=True,
-    )
+    # 外部汇率不并入证券日K管道。当前参考快照按偏好定时拉取;
+    # 历史回补走 /api/exchange-rate/sync 的 Frankfurter/CFETS 路径。
+    exchange_rate_interval = preferences.get_exchange_rate_interval_hours()
+    _register_exchange_rate_job(scheduler, repo, exchange_rate_interval)
 
     # 周期性能力重探: 付费 Key 中途过期/续费无需重启即可被发现。
     # 只热更新 app.state.capabilities(API 端点、盘后管道 _pipeline_then_refresh 均读它);
@@ -1293,9 +1301,9 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
                     review_sched["hour"], review_sched["minute"])
 
     scheduler.start()
-    logger.info("scheduler started; instruments@%02d:%02d, pipeline@%02d:%02d, depth@%02d:%02d, exchange_rate@18:00 mon-fri",
+    logger.info("scheduler started; instruments@%02d:%02d, pipeline@%02d:%02d, depth@%02d:%02d, exchange_rate@every %dh",
                 inst_sched["hour"], inst_sched["minute"], sched["hour"], sched["minute"],
-                depth_sched["hour"], depth_sched["minute"])
+                depth_sched["hour"], depth_sched["minute"], exchange_rate_interval)
     return scheduler
 
 

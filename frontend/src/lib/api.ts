@@ -2272,6 +2272,7 @@ export interface Preferences {
   realtime_data_provider?: string
   financial_data_provider?: string
   exchange_rate_data_provider?: string
+  exchange_rate_interval_hours: number
   data_source_job_timeout_s: number
   data_source_long_job_timeout_s: number
   minute_batch_compress: boolean
@@ -3005,6 +3006,11 @@ export const api = {
     request<{ hour: number; minute: number }>('/api/settings/preferences/pipeline-schedule', {
       method: 'PUT',
       body: JSON.stringify({ hour, minute }),
+    }),
+  updateExchangeRateSchedule: (intervalHours: number) =>
+    request<{ interval_hours: number }>('/api/settings/preferences/exchange-rate-schedule', {
+      method: 'PUT',
+      body: JSON.stringify({ interval_hours: intervalHours }),
     }),
   updateReviewSchedule: (enabled: boolean, hour: number, minute: number) =>
     request<{ enabled: boolean; hour: number; minute: number }>('/api/settings/preferences/review-schedule', {

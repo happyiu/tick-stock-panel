@@ -691,6 +691,7 @@ def get_preferences() -> dict:
         "realtime_data_provider": preferences.get_realtime_data_provider(),
         "financial_data_provider": preferences.get_financial_provider(),
         "exchange_rate_data_provider": preferences.get_exchange_rate_data_provider(),
+        "exchange_rate_interval_hours": preferences.get_exchange_rate_interval_hours(),
         "data_source_job_timeout_s": preferences.get_data_source_job_timeout_s(),
         "data_source_long_job_timeout_s": preferences.get_data_source_long_job_timeout_s(),
         "minute_batch_compress": preferences.get_minute_batch_compress(),
@@ -1894,6 +1895,31 @@ async def test_endpoint(req: TestEndpointIn) -> dict:
 class PipelineScheduleIn(BaseModel):
     hour: int
     minute: int
+
+
+class ExchangeRateScheduleIn(BaseModel):
+    interval_hours: int = Field(ge=1)
+
+
+@router.put("/preferences/exchange-rate-schedule")
+def update_exchange_rate_schedule(req: ExchangeRateScheduleIn, request: Request) -> dict:
+    """保存汇率参考快照间隔并立即 reschedule。"""
+    from app.services import preferences
+
+    interval_hours = preferences.set_exchange_rate_interval_hours(req.interval_hours)
+    from apscheduler.triggers.interval import IntervalTrigger
+
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler:
+        try:
+            scheduler.reschedule_job(
+                "exchange_rate_daily",
+                trigger=IntervalTrigger(hours=interval_hours, timezone="Asia/Shanghai"),
+            )
+            logger.info("exchange rate rescheduled to every %dh", interval_hours)
+        except Exception as exc:
+            logger.warning("exchange rate job reschedule skipped: %s", exc)
+    return {"interval_hours": interval_hours}
 
 
 @router.put("/preferences/pipeline-schedule")

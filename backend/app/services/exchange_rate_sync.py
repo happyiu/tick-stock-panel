@@ -36,15 +36,16 @@ class ExchangeRateSyncBusyError(RuntimeError):
     """Raised when a manual and scheduled sync overlap."""
 
 
-def _get_provider(provider: Any | None = None) -> tuple[str, Any]:
+def _get_provider(
+    provider: Any | None = None,
+    provider_name: str | None = None,
+) -> tuple[str, Any]:
     if provider is not None:
-        return PROVIDER_NAME, provider
+        return provider_name or PROVIDER_NAME, provider
     from app.data_providers import custom as custom_sources
     from app.services import preferences
 
-    name = preferences.get_exchange_rate_data_provider()
-    if name != PROVIDER_NAME:
-        raise ValueError(f"当前汇率数据源暂不支持: {name}")
+    name = (provider_name or preferences.get_exchange_rate_data_provider()).strip().lower()
     return name, custom_sources.get_provider(name)
 
 
@@ -78,8 +79,9 @@ def sync_exchange_rates(
     start: date | None = None,
     end: date | None = None,
     provider: Any | None = None,
+    provider_name: str | None = None,
 ) -> dict[str, Any]:
-    """Fetch Frankfurter data and idempotently write exchange_rate partitions.
+    """Fetch the selected source and idempotently write exchange_rate partitions.
 
     No dates means the provider's latest-value endpoint. Supplying either date
     fills the other side with the same date (or today for an open-ended start).
@@ -94,7 +96,7 @@ def sync_exchange_rates(
     if not _SYNC_LOCK.acquire(blocking=False):
         raise ExchangeRateSyncBusyError("汇率同步正在进行中")
     try:
-        provider_name, source = _get_provider(provider)
+        provider_name, source = _get_provider(provider, provider_name)
         rows = source.get_exchange_rates(start=start, end=end)
         result: dict[str, Any] = {
             "provider": provider_name,

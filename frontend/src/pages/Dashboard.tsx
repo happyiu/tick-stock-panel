@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Activity, ArrowDownRight, ArrowUpRight, BarChart3, BellRing, Database, Gauge, Info, LineChart, Loader2, Play, RefreshCw, Sparkles, Target, Timer } from 'lucide-react'
 import { DatePicker } from '@/components/DatePicker'
-import { api, type OverviewMarket, type AlertEvent } from '@/lib/api'
+import { api, type DataStatus, type OverviewMarket, type AlertEvent } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { fmtAssetPrice, fmtBigNum, fmtPct } from '@/lib/format'
 import { useDataStatus, useCapabilities, useSettings, usePreferences } from '@/lib/useSharedQueries'
@@ -379,6 +379,74 @@ function MiniMetric({ label, value, cls = 'text-foreground' }: { label: string; 
   )
 }
 
+const EXCHANGE_RATE_TILES = [
+  { symbol: 'USD/CNY', digits: 4 },
+  { symbol: 'USD/CNH', digits: 4 },
+  { symbol: 'JPY/CNY', digits: 4 },
+  { symbol: 'HKD/CNY', digits: 4 },
+  { symbol: 'EUR/CNY', digits: 4 },
+  { symbol: 'DXY', digits: 2 },
+] as const
+
+function exchangeSourceLabel(source?: string | null) {
+  if (source === 'OPEN_EXCHANGE_RATES') return 'OXR'
+  if (source === 'OPEN_EXCHANGE_RATES_DERIVED') return 'OXR 派生'
+  if (source === 'FRANKFURTER_DERIVED') return 'Frankfurter 派生'
+  return source || '—'
+}
+
+function ExchangeRateWidget({
+  stats,
+  providerName,
+  intervalHours,
+}: {
+  stats: DataStatus['exchange_rate']
+  providerName?: string
+  intervalHours?: number
+}) {
+  const rates = stats?.latest_rates ?? {}
+  const hasRates = Object.keys(rates).length > 0
+  const providerLabel = providerName === 'openexchangerates' || stats?.source === 'OPEN_EXCHANGE_RATES'
+    ? 'OXR 当前参考'
+    : 'Frankfurter/CFETS'
+  const headerHint = stats?.latest_date
+    ? `${providerLabel} · ${stats.latest_date}`
+    : providerLabel
+
+  return (
+    <section className="mb-1.5 rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
+      <SectionTitle icon={Activity} title="汇率看板" hint={headerHint} />
+      {hasRates ? (
+        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-6">
+          {EXCHANGE_RATE_TILES.map(tile => (
+            <div key={tile.symbol} className="min-w-0 rounded-md border border-border/50 bg-elevated/45 px-2 py-1.5">
+              <div className="flex items-center justify-between gap-1">
+                <span className="truncate text-[10px] text-muted">{tile.symbol}</span>
+                <span className="shrink-0 text-[9px] text-muted/70">{exchangeSourceLabel(stats?.sources?.[tile.symbol])}</span>
+              </div>
+              <div className="mt-0.5 truncate font-mono text-sm font-semibold tabular-nums text-foreground">
+                {fmtPrice(rates[tile.symbol], tile.digits)}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-md border border-border/50 bg-elevated/30 px-2 py-2 text-[11px] text-muted">
+          暂无汇率数据，请先在数据页同步。
+        </div>
+      )}
+      <div className="mt-1.5 flex items-center justify-between gap-2 border-t border-border/50 pt-1.5 text-[10px] text-muted">
+        <span className="truncate">
+          数据日期 {stats?.latest_date ?? '—'} · {intervalHours ? `每 ${intervalHours} 小时检查` : '按当前调度'}
+        </span>
+        <Link to="/exchange-rate" className="inline-flex shrink-0 items-center gap-0.5 text-accent hover:text-accent/80">
+          详情 <ArrowUpRight className="h-3 w-3" />
+        </Link>
+      </div>
+    </section>
+  )
+}
+
 export function Dashboard() {
   const qc = useQueryClient()
   const [selectedDate, setSelectedDate] = useState<string | undefined>()
@@ -394,7 +462,7 @@ export function Dashboard() {
   } | null>(null)
   // 首次使用(无数据 + 未完成引导)自动弹窗: 同一会话只弹一次
   const [showWelcomeModal, setShowWelcomeModal] = useState(false)
-  const dataStatus = useDataStatus({ staleTime: 60_000 })
+  const dataStatus = useDataStatus({ staleTime: 60_000, refetchInterval: 60_000 })
   const overview = useQuery({
     queryKey: QK.overviewMarket(selectedDate),
     queryFn: () => api.overviewMarket(selectedDate),
@@ -627,6 +695,12 @@ export function Dashboard() {
         <KpiCell label="成交额" value={fmtBigNum(data.amount.total)} sub={`均额 ${fmtBigNum(data.amount.avg)}`} />
         <KpiCell label="换手 / 量比" value={`${fmtPrice(data.activity.avg_turnover, 1)}% / ${fmtPrice(data.activity.vol_ratio, 2)}`} sub={`高换手 ${data.activity.high_turnover} · 放量占比 ${fmtPrice(data.activity.high_vol_ratio, 1)}%`} tone="accent" />
       </div>
+
+      <ExchangeRateWidget
+        stats={dataStatus.data?.exchange_rate ?? null}
+        providerName={prefs.data?.exchange_rate_data_provider}
+        intervalHours={prefs.data?.exchange_rate_interval_hours}
+      />
 
       <div className="grid grid-cols-1 gap-1.5 xl:grid-cols-[minmax(0,1fr)_20rem]">
         <main className="min-w-0 space-y-1.5">

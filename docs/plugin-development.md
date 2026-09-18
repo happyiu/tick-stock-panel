@@ -52,6 +52,11 @@ TickFlow 的「先探后存」语义:
 4. 插件取 Key 用 `secrets_store.get_env_backed_secret("{name}_api_key", api_key_env)`,
    保证 secrets.json 与 .env 两条配置路径一致
 
+汇率 provider 还需明确当前快照与历史范围的边界：当前参考值可接入带 App ID
+的 latest 接口，返回值必须保留供应商时间戳和来源；历史日期范围继续走日频
+Frankfurter/CFETS，不能把当前快照伪装成历史日线。普通 latest 计划按供应商发布
+频率更新，不等同于交易级实时行情。
+
 ### runtime 字段说明
 
 | runtime | 含义 | 典型场景 |

@@ -22,6 +22,7 @@ const Backtest = lazy(() => import('./pages/Backtest').then(m => ({ default: m.B
 const Factors = lazy(() => import('./pages/Factors').then(m => ({ default: m.Factors })))
 const Financials = lazy(() => import('./pages/Financials').then(m => ({ default: m.Financials })))
 const Data = lazy(() => import('./pages/Data').then(m => ({ default: m.Data })))
+const ExchangeRates = lazy(() => import('./pages/ExchangeRates').then(m => ({ default: m.ExchangeRates })))
 const Monitor = lazy(() => import('./pages/Monitor').then(m => ({ default: m.Monitor })))
 const Lots = lazy(() => import('./pages/Lots').then(m => ({ default: m.Lots })))
 const Dashboard = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })))
@@ -59,6 +60,7 @@ const CORE_ROUTE_PATHS = new Set([
   '/mining',
   '/financials',
   '/data',
+  '/exchange-rate',
   '/monitor',
   '/limit-ladder',
   '/indices',
@@ -142,6 +144,7 @@ export const router = createBrowserRouter([
       { path: 'mining', element: <MiningRedirect /> },
       { path: 'financials', element: <Financials /> },
       { path: 'data', element: <Data /> },
+      { path: 'exchange-rate', element: <ExchangeRates /> },
       { path: 'monitor', element: <Monitor /> },
       { path: 'lots', element: <Lots /> },
       { path: 'signals', element: <Signals /> },

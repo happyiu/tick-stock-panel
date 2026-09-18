@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 from datetime import date
+from types import SimpleNamespace
 
 import polars as pl
 import pytest
 
+from app.api import exchange_rate as exchange_rate_api
+from app.data_providers import custom as custom_sources
 from app.plugins.frankfurter.provider import (
     DERIVED_SOURCE,
     FRANKFURTER_API_URL,
@@ -150,3 +153,47 @@ def test_exchange_rate_sync_writes_partition_and_is_idempotent(tmp_path):
         ("USD/CNY", date(2026, 9, 16), 7.12),
     ]
     assert len(pl.read_parquet(tmp_path / "exchange_rate" / "date=2026-09-16" / "part.parquet")) == 1
+
+
+def test_exchange_rate_sync_routes_selected_current_provider(monkeypatch, tmp_path):
+    repo = KlineRepository(DataStore(tmp_path))
+    source = _Source([{
+        "symbol": "USD/CNY", "date": date(2026, 9, 18),
+        "base": "USD", "quote": "CNY", "rate": 7.13,
+        "source": "OPEN_EXCHANGE_RATES", "frequency": "latest",
+        "retrieved_at": "2026-09-18T00:00:00+00:00",
+    }])
+    monkeypatch.setattr(
+        "app.services.preferences.get_exchange_rate_data_provider",
+        lambda: "openexchangerates",
+    )
+    monkeypatch.setattr(custom_sources, "get_provider", lambda name: source)
+
+    result = sync_exchange_rates(repo)
+
+    assert result["provider"] == "openexchangerates"
+
+
+def test_exchange_rate_api_forces_frankfurter_for_bounded_history(monkeypatch):
+    calls = []
+
+    def fake_sync(repo, **kwargs):
+        calls.append(kwargs)
+        return {"provider": kwargs.get("provider_name")}
+
+    monkeypatch.setattr(exchange_rate_api, "sync_exchange_rates", fake_sync)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(repo=object())))
+
+    exchange_rate_api.sync_exchange_rate_data(
+        exchange_rate_api.ExchangeRateSyncIn(
+            start_date=date(2026, 9, 17),
+            end_date=date(2026, 9, 18),
+        ),
+        request,
+    )
+
+    assert calls == [{
+        "start": date(2026, 9, 17),
+        "end": date(2026, 9, 18),
+        "provider_name": "frankfurter",
+    }]

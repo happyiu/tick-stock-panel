@@ -321,6 +321,21 @@ def get_exchange_rate_data_provider() -> str:
     return provider if provider in _allowed_data_providers() else "frankfurter"
 
 
+def get_exchange_rate_interval_hours() -> int:
+    """返回当前汇率参考快照调度间隔, 最低 1 小时。"""
+    try:
+        return max(1, int(load().get("exchange_rate_interval_hours", 3)))
+    except (TypeError, ValueError):
+        return 3
+
+
+def set_exchange_rate_interval_hours(hours: int) -> int:
+    """保存汇率参考快照调度间隔, 最低 1 小时。"""
+    value = max(1, int(hours))
+    save({"exchange_rate_interval_hours": value})
+    return value
+
+
 # ===== 盘后管道拉取内容开关 (A股 / ETF / 指数 独立控制) =====
 
 def get_pipeline_pull_a_share() -> bool:

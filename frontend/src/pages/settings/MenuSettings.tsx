@@ -52,6 +52,7 @@ const BUILTIN_PAGES: NavEntry[] = [
   { id: '/review', label: '复盘', type: 'builtin', visible: true },
   { id: '/indices', label: '指数', type: 'builtin', visible: true },
   { id: '/data', label: '数据', type: 'builtin', visible: true },
+  { id: '/exchange-rate', label: '汇率', type: 'builtin', visible: true },
 ]
 
 // ── Sortable row ──

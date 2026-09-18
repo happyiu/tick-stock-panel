@@ -156,6 +156,8 @@ export function Data() {
   const [openSettings, setOpenSettings] = useState<string | null>(null)
   const [showScheduleEdit, setShowScheduleEdit] = useState(false)
   const [showInstScheduleEdit, setShowInstScheduleEdit] = useState(false)
+  const [showExchangeRateScheduleEdit, setShowExchangeRateScheduleEdit] = useState(false)
+  const [exchangeRateIntervalInput, setExchangeRateIntervalInput] = useState('3')
   const [indexExtendValue, setIndexExtendValue] = useState(6)
   const [indexExtendUnit, setIndexExtendUnit] = useState<'month' | 'year'>('month')
   const [schemaTable, setSchemaTable] = useState<string | null>(null)
@@ -202,6 +204,22 @@ export function Data() {
   })
 
   const prefs = usePreferences()
+  const exchangeRateIntervalHours = prefs.data?.exchange_rate_interval_hours ?? 3
+  const exchangeRateProvider = prefs.data?.exchange_rate_data_provider ?? 'frankfurter'
+
+  useEffect(() => {
+    setExchangeRateIntervalInput(String(exchangeRateIntervalHours))
+  }, [exchangeRateIntervalHours])
+
+  const updateExchangeRateSchedule = useMutation({
+    mutationFn: (intervalHours: number) => api.updateExchangeRateSchedule(intervalHours),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: QK.preferences })
+      qc.invalidateQueries({ queryKey: QK.dataStatus })
+      setShowExchangeRateScheduleEdit(false)
+    },
+    onError: (error: Error) => toast(`汇率调度更新失败: ${error.message}`, 'error'),
+  })
 
   // 数据源列表 + 当前数据源 (顶部"切换数据源"按钮展示)
   const dataSources = useQuery({
@@ -594,7 +612,9 @@ export function Data() {
         return (
           <StatCard
             title="汇率"
-            hint="Frankfurter · 5 组货币对 + DXY"
+            hint={exchangeRateProvider === 'openexchangerates'
+              ? 'OXR 当前参考 · Frankfurter 历史'
+              : 'Frankfurter · 5 组货币对 + DXY'}
             stats={s?.exchange_rate}
             loading={isLoading}
             tierKey="exchange_rate"
@@ -898,16 +918,59 @@ export function Data() {
                   )}
                 </AnimatePresence>
                 <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-muted">外部 · 汇率</span>
+                  <div className="flex items-center gap-1">
+                    <span className="text-muted">外部 · 汇率</span>
+                    <span className="text-muted/50">·</span>
+                    <span className="font-mono text-secondary">每 {exchangeRateIntervalHours} 小时</span>
+                    <button
+                      onClick={() => setShowExchangeRateScheduleEdit(v => !v)}
+                      className={`p-0.5 rounded hover:bg-elevated transition-colors ${showExchangeRateScheduleEdit ? 'text-accent' : 'text-secondary'}`}
+                      title="调整汇率更新间隔"
+                    >
+                      <Clock className="h-3 w-3" />
+                    </button>
+                  </div>
                   {s?.next_exchange_rate_run ? (
                     <span className="inline-flex flex-col items-center leading-tight font-mono text-foreground">
                       <span>→ {formatScheduleDatePart(s.next_exchange_rate_run)}</span>
                       <span>{formatScheduleTimePart(s.next_exchange_rate_run)}</span>
                     </span>
                   ) : (
-                    <span className="font-mono text-secondary">工作日 18:00</span>
+                    <span className="font-mono text-secondary">等待调度器</span>
                   )}
                 </div>
+                <AnimatePresence>
+                  {showExchangeRateScheduleEdit && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+                      className="overflow-hidden"
+                    >
+                      <div className="flex items-center gap-2 pt-1 text-[11px]">
+                        <span className="text-muted">每</span>
+                        <input
+                          type="number"
+                          min={1}
+                          step={1}
+                          value={exchangeRateIntervalInput}
+                          onChange={e => setExchangeRateIntervalInput(e.target.value)}
+                          className="w-16 px-2 py-1 rounded-btn bg-elevated border border-border text-xs font-mono text-foreground outline-none focus:border-accent"
+                        />
+                        <span className="text-muted">小时</span>
+                        <button
+                          onClick={() => updateExchangeRateSchedule.mutate(Math.max(1, Math.floor(Number(exchangeRateIntervalInput) || 1)))}
+                          disabled={updateExchangeRateSchedule.isPending}
+                          className="px-2 py-1 rounded-btn bg-accent/90 text-base text-[10px] font-medium hover:bg-accent disabled:opacity-40 transition-colors"
+                        >
+                          {updateExchangeRateSchedule.isPending ? '保存中…' : '保存'}
+                        </button>
+                        <span className="text-muted/70">最低 1 小时</span>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
             )}
           </div>
@@ -1126,9 +1189,11 @@ export function Data() {
           <SettingsModal title="汇率 · 同步设置" onClose={() => setOpenSettings(null)}>
             <div className="space-y-4">
               <div className="rounded-card border border-border bg-base/30 p-4 space-y-2">
-                <div className="text-sm font-medium text-foreground">5 组货币对 + DXY · 日频</div>
+                <div className="text-sm font-medium text-foreground">5 组货币对 + DXY · 当前参考 / 历史日频</div>
                 <div className="text-[11px] text-muted leading-relaxed">
-                  USD/CNY、JPY/CNY、HKD/CNY、EUR/CNY 使用 CFETS 中间价；USD/CNH 使用 Frankfurter 默认混合源；DXY 由六个组成货币按标准篮子公式派生，不代表 ICE 直采指数。自动任务在工作日 18:00 获取最新值；历史范围可手动回补。
+                  {exchangeRateProvider === 'openexchangerates'
+                    ? `Open Exchange Rates 用于当前参考快照，自动任务每 ${exchangeRateIntervalHours} 小时拉取一次；历史日期范围仍由 Frankfurter/CFETS 日频数据回补。普通 OXR 计划按供应商发布频率更新，并非交易级实时行情。`
+                    : `USD/CNY、JPY/CNY、HKD/CNY、EUR/CNY 使用 CFETS 中间价；USD/CNH 使用 Frankfurter 默认混合源；DXY 由六个组成货币按标准篮子公式派生，不代表 ICE 直采指数。自动任务每 ${exchangeRateIntervalHours} 小时检查最新值；历史范围可手动回补。`}
                 </div>
                 {s?.exchange_rate?.source && (
                   <div className="text-[10px] text-secondary">USD/CNY 来源: <span className="font-mono">{s.exchange_rate.source}</span></div>

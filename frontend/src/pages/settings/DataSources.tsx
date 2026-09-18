@@ -256,6 +256,31 @@ function CapabilityCard({ cap, pendingKey, onSelect }: {
   )
 }
 
+/** 历史汇率不参与快照路由: 当前实现固定由 Frankfurter / CFETS 提供。 */
+function ExchangeRateHistoryCard() {
+  return (
+    <div className="rounded-lg border border-border/50 bg-elevated/20 px-3 py-2.5 flex flex-col transition-colors hover:border-border">
+      <div className="flex items-center gap-1.5">
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-accent/10">
+          <DollarSign className="h-3 w-3 text-accent" />
+        </span>
+        <div className="text-xs font-medium text-foreground truncate">汇率历史</div>
+      </div>
+      <div className="mt-1 text-[10px] text-muted/70 truncate">
+        日频历史数据与走势图，固定使用 Frankfurter
+      </div>
+      <div className="mt-2 flex items-center gap-1.5 min-w-0">
+        <span className="text-[9px] font-medium uppercase tracking-wider text-muted/50 shrink-0">当前</span>
+        <span className="h-1.5 w-1.5 rounded-full bg-accent shrink-0" />
+        <span className="text-[11px] font-medium text-foreground truncate">Frankfurter</span>
+      </div>
+      <div className="flex flex-wrap gap-1 mt-2 pt-2 border-t border-border/50 min-h-[26px] items-center">
+        <span className={tagCls(true, false, false)}>Frankfurter</span>
+      </div>
+    </div>
+  )
+}
+
 /** 能力路由区 (页面主视图): 每个能力一张卡, 点候选标签即刻切换 (乐观更新) */
 function CapabilityRoutingSection() {
   const qc = useQueryClient()
@@ -327,6 +352,8 @@ function CapabilityRoutingSection() {
   })
 
   const list = matrix.data?.capabilities ?? []
+  const exchangeRate = list.find(cap => cap.id === 'exchange_rate')
+  const otherCapabilities = list.filter(cap => cap.id !== 'exchange_rate')
   const anyCustom = list.some(c => c.current !== c.default)
 
   return (
@@ -335,7 +362,7 @@ function CapabilityRoutingSection() {
         <div className="flex items-center gap-2.5 min-w-0">
           <Route className="h-4 w-4 text-secondary shrink-0" />
           <h2 className="text-sm font-medium text-foreground">能力路由</h2>
-          <span className="text-[10px] text-muted/60 shrink-0">{list.length} 个能力</span>
+          <span className="text-[10px] text-muted/60 shrink-0">{list.length + (exchangeRate ? 1 : 0)} 个能力</span>
         </div>
         {anyCustom && (
           <button
@@ -374,7 +401,7 @@ function CapabilityRoutingSection() {
         </div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
-          {list.map(cap => (
+          {otherCapabilities.map(cap => (
             <CapabilityCard
               key={cap.id}
               cap={cap}
@@ -382,6 +409,19 @@ function CapabilityRoutingSection() {
               onSelect={(field, provider) => routeMut.mutate({ field, provider })}
             />
           ))}
+          {exchangeRate && (
+            <CapabilityCard
+              key="exchange_rate_snapshot"
+              cap={{
+                ...exchangeRate,
+                label: '汇率快照',
+                desc: '当前参考快照；支持按小时定时更新',
+              }}
+              pendingKey={pendingKey}
+              onSelect={(field, provider) => routeMut.mutate({ field, provider })}
+            />
+          )}
+          {exchangeRate && <ExchangeRateHistoryCard key="exchange_rate_history" />}
         </div>
       )}
     </section>

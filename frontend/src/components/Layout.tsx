@@ -54,6 +54,7 @@ import {
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
+  CircleDollarSign,
 } from 'lucide-react'
 import { Logo } from './Logo'
 import { api, type CapabilityMatrix, type IndexQuote } from '@/lib/api'
@@ -103,6 +104,7 @@ const nav = [
   { to: '/review',      label: '复盘',   icon: BookOpenCheck },
   { to: '/indices', label: '指数', icon: BarChart3 },
   { to: '/data',       label: '数据',   icon: Database },
+  { to: '/exchange-rate', label: '汇率', icon: CircleDollarSign },
 ] as const
 
 /** 亮/暗主题切换 — 状态存 localStorage, 生效见 lib/theme.ts */

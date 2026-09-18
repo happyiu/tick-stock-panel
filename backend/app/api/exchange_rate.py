@@ -1,4 +1,4 @@
-"""Exchange-rate API: read local data and trigger Frankfurter sync."""
+"""Exchange-rate API: read local data and trigger current or historical sync."""
 from __future__ import annotations
 
 import logging
@@ -77,6 +77,13 @@ def sync_exchange_rate_data(req: ExchangeRateSyncIn, request: Request) -> dict:
             request.app.state.repo,
             start=req.start_date,
             end=req.end_date,
+            # Open Exchange Rates owns the current snapshot; bounded history
+            # remains reproducible on the Frankfurter/CFETS daily source.
+            provider_name=(
+                "frankfurter"
+                if req.start_date is not None or req.end_date is not None
+                else None
+            ),
         )
     except ExchangeRateSyncBusyError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
