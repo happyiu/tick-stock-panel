@@ -1152,6 +1152,7 @@ def _register_review_job(scheduler, repo, hour: int, minute: int) -> None:
 
 
 EXCHANGE_RATE_JOB_ID = "exchange_rate_daily"
+COMMODITY_JOB_ID = "commodity_daily"
 
 
 def _register_exchange_rate_job(scheduler, repo, interval_hours: int) -> None:
@@ -1168,6 +1169,27 @@ def _register_exchange_rate_job(scheduler, repo, interval_hours: int) -> None:
         _exchange_rate_latest,
         trigger=IntervalTrigger(hours=max(1, int(interval_hours)), timezone="Asia/Shanghai"),
         id=EXCHANGE_RATE_JOB_ID,
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
+
+
+def _register_commodity_job(scheduler, repo) -> None:
+    """Register the daily multi-source commodity history refresh."""
+    def _commodity_latest():
+        from app.services.commodity_sync import sync_commodities
+
+        try:
+            result = sync_commodities(repo)
+            if not result.get("ok"):
+                logger.warning("scheduled commodity sync had no successful provider")
+        except Exception:
+            logger.exception("scheduled commodity sync failed")
+
+    scheduler.add_job(
+        _commodity_latest,
+        trigger=IntervalTrigger(days=1, timezone="Asia/Shanghai"),
+        id=COMMODITY_JOB_ID,
         misfire_grace_time=3600,
         replace_existing=True,
     )
@@ -1259,6 +1281,7 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
     # 历史回补走 /api/exchange-rate/sync 的 Frankfurter/CFETS 路径。
     exchange_rate_interval = preferences.get_exchange_rate_interval_hours()
     _register_exchange_rate_job(scheduler, repo, exchange_rate_interval)
+    _register_commodity_job(scheduler, repo)
 
     # 周期性能力重探: 付费 Key 中途过期/续费无需重启即可被发现。
     # 只热更新 app.state.capabilities(API 端点、盘后管道 _pipeline_then_refresh 均读它);
@@ -1301,7 +1324,7 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
                     review_sched["hour"], review_sched["minute"])
 
     scheduler.start()
-    logger.info("scheduler started; instruments@%02d:%02d, pipeline@%02d:%02d, depth@%02d:%02d, exchange_rate@every %dh",
+    logger.info("scheduler started; instruments@%02d:%02d, pipeline@%02d:%02d, depth@%02d:%02d, exchange_rate@every %dh, commodity@daily",
                 inst_sched["hour"], inst_sched["minute"], sched["hour"], sched["minute"],
                 depth_sched["hour"], depth_sched["minute"], exchange_rate_interval)
     return scheduler

@@ -627,6 +627,19 @@ export function Data() {
             settingsOpen={openSettings === 'exchange_rate'}
           />
         )
+      case 'commodity': {
+        const commoditySources = new Set(Object.values(s?.commodity?.sources ?? {})).size
+        return (
+          <StatCard
+            title="商品"
+            hint="Gold API · FRED · EIA"
+            stats={s?.commodity}
+            loading={isLoading}
+            subLabel={`原始频率 · ${s?.commodity?.symbols_covered ?? 0} 个品种 · ${commoditySources} 个来源`}
+            onShowFields={() => setSchemaTable('commodity')}
+          />
+        )
+      }
       case 'regime':
         return (
           <StatCard
@@ -1007,6 +1020,7 @@ export function Data() {
                 { label: '分钟 K',   files: s?.storage.minute_files,      size: s?.storage.minute_size_mb },
                 { label: '财务数据', files: s?.storage.financials_files,   size: s?.storage.financials_size_mb },
                 { label: '汇率',     files: s?.storage.exchange_rate_files, size: s?.storage.exchange_rate_size_mb },
+                { label: '商品',     files: s?.storage.commodity_files,     size: s?.storage.commodity_size_mb },
               ].map((item) => (
                 <div key={item.label} className="flex items-center justify-between text-[11px]">
                   <span className="text-muted">{item.label}</span>

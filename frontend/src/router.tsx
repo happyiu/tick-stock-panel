@@ -20,6 +20,7 @@ const ETFSimulation = lazy(() => import('./pages/ETFSimulation').then(m => ({ de
 const Screener = lazy(() => import('./pages/Screener').then(m => ({ default: m.Screener })))
 const Backtest = lazy(() => import('./pages/Backtest').then(m => ({ default: m.Backtest })))
 const Factors = lazy(() => import('./pages/Factors').then(m => ({ default: m.Factors })))
+const Commodity = lazy(() => import('./pages/Commodity').then(m => ({ default: m.Commodity })))
 const Financials = lazy(() => import('./pages/Financials').then(m => ({ default: m.Financials })))
 const Data = lazy(() => import('./pages/Data').then(m => ({ default: m.Data })))
 const ExchangeRates = lazy(() => import('./pages/ExchangeRates').then(m => ({ default: m.ExchangeRates })))
@@ -57,6 +58,7 @@ const CORE_ROUTE_PATHS = new Set([
   '/screener',
   '/backtest',
   '/factors',
+  '/commodity',
   '/mining',
   '/financials',
   '/data',
@@ -141,6 +143,7 @@ export const router = createBrowserRouter([
       { path: 'screener', element: <Screener /> },
       { path: 'backtest', element: <Backtest /> },
       { path: 'factors', element: <Factors /> },
+      { path: 'commodity', element: <Commodity /> },
       { path: 'mining', element: <MiningRedirect /> },
       { path: 'financials', element: <Financials /> },
       { path: 'data', element: <Data /> },

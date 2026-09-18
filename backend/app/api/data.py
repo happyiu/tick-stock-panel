@@ -47,6 +47,7 @@ _table_cache: dict[str, dict | None] = {
     "instruments": None,
     "financials": None,
     "exchange_rate": None,
+    "commodity": None,
 }
 _table_cache_ts: dict[str, float] = {k: 0.0 for k in _table_cache}
 _table_cache_lock = threading.Lock()
@@ -161,6 +162,48 @@ def _safe_aggregate_exchange_rate(repo) -> dict | None:
         "source": sources.get("USD/CNY"),
         "latest_rates": latest_rates,
         "sources": sources,
+    }
+
+
+def _safe_aggregate_commodity(repo) -> dict | None:
+    """商品统计; 补充各品种最新值、单位和来源。"""
+    stats = _safe_aggregate(repo, "commodity")
+    if not stats:
+        return None
+    try:
+        latest = repo.execute_all(
+            """SELECT symbol, value, unit, source
+               FROM (
+                   SELECT symbol, value, unit, source,
+                          row_number() OVER (
+                              PARTITION BY symbol
+                              ORDER BY date DESC, retrieved_at DESC
+                          ) AS rn
+                   FROM commodity
+               )
+               WHERE rn = 1
+               ORDER BY symbol"""
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug("aggregate commodity latest failed: %s", e)
+        latest = []
+    return {
+        **stats,
+        "latest_values": {
+            str(row[0]): float(row[1])
+            for row in latest
+            if row[1] is not None
+        },
+        "units": {
+            str(row[0]): str(row[2])
+            for row in latest
+            if row[2] is not None
+        },
+        "sources": {
+            str(row[0]): str(row[3])
+            for row in latest
+            if row[3] is not None
+        },
     }
 
 
@@ -539,6 +582,7 @@ def _compute_storage(data_dir: Path) -> dict:
         "instruments": data_dir / "instruments",
         "ext_data": data_dir / "ext_data",
         "exchange_rate": data_dir / "exchange_rate",
+        "commodity": data_dir / "commodity",
     }
     stats = {}
     total_size = 0
@@ -645,6 +689,9 @@ def status(request: Request) -> dict:
         "exchange_rate": _get_table_stats(
             "exchange_rate", lambda: _safe_aggregate_exchange_rate(repo),
         ),
+        "commodity": _get_table_stats(
+            "commodity", lambda: _safe_aggregate_commodity(repo),
+        ),
 
         # 文件层面信息(缓存)
         "storage": _get_storage(data_dir),
@@ -653,6 +700,7 @@ def status(request: Request) -> dict:
         "next_instruments_run": _next_cron_run(scheduler, "pre_market_instruments"),
         "next_pipeline_run":    _next_cron_run(scheduler, "daily_pipeline"),
         "next_exchange_rate_run": _next_cron_run(scheduler, "exchange_rate_daily"),
+        "next_commodity_run": _next_cron_run(scheduler, "commodity_daily"),
         "last_instruments_run": _last_finished("instruments"),
         "last_pipeline_run":    _last_finished("pipeline"),
         "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
@@ -682,6 +730,7 @@ def clear_data(request: Request):
         "kline_etf_daily", "kline_etf_enriched", "kline_etf_minute", "kline_minute",
         "adj_factor", "adj_factor_etf", "instruments", "instruments_index", "instruments_etf", "pools", "financials",
         "exchange_rate",
+        "commodity",
         "backtest_results", "screener_results", "ai_cache",
     ):
         d = data_dir / sub
@@ -813,6 +862,19 @@ _TABLE_FIELD_DESC: dict[str, dict[str, str]] = {
         "frequency": "频率",
         "retrieved_at": "抓取时间",
     },
+    "commodity": {
+        "symbol": "商品标识",
+        "name": "商品名称",
+        "category": "商品分类",
+        "kind": "序列类型",
+        "date": "观测日期",
+        "value": "观测值",
+        "unit": "单位",
+        "frequency": "原始频率",
+        "source": "数据源",
+        "source_series_id": "源序列标识",
+        "retrieved_at": "抓取时间",
+    },
     "instruments": {
         "symbol": "股票代码",
         "name": "股票名称",
@@ -857,6 +919,7 @@ _SCHEMA_VIEWS: dict[str, str] = {
     "adj_factor": "adj_factor",
     "instruments": "instruments",
     "exchange_rate": "exchange_rate",
+    "commodity": "commodity",
 }
 
 

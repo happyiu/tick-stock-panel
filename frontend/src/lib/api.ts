@@ -3743,6 +3743,37 @@ export const api = {
         ...(endDate ? { end_date: endDate } : {}),
       }),
     }),
+  commodityCatalog: () => request<CommodityCatalog>('/api/commodity/catalog'),
+  commodity: (params?: {
+    startDate?: string
+    endDate?: string
+    symbol?: string
+    category?: string
+    limit?: number
+  }) => {
+    const query = new URLSearchParams()
+    if (params?.startDate) query.set('start_date', params.startDate)
+    if (params?.endDate) query.set('end_date', params.endDate)
+    if (params?.symbol) query.set('symbol', params.symbol)
+    if (params?.category) query.set('category', params.category)
+    if (params?.limit != null) query.set('limit', String(params.limit))
+    const suffix = query.toString() ? '?' + query.toString() : ''
+    return request<{ items: CommodityRow[]; count: number }>('/api/commodity' + suffix)
+  },
+  commoditySync: (payload?: {
+    startDate?: string
+    endDate?: string
+    symbols?: string[]
+  }) =>
+    request<CommoditySyncResult>('/api/commodity/sync', {
+      method: 'POST',
+      timeoutMs: 300_000,
+      body: JSON.stringify({
+        ...(payload?.startDate ? { start_date: payload.startDate } : {}),
+        ...(payload?.endDate ? { end_date: payload.endDate } : {}),
+        ...(payload?.symbols?.length ? { symbols: payload.symbols } : {}),
+      }),
+    }),
   dataClear: () => request<{ deleted_files: number }>('/api/data/clear', { method: 'POST' }),
   refreshCache: () => request<{ ok: boolean }>('/api/data/refresh-cache', { method: 'POST' }),
   enrichedSchema: (table: string) => request<EnrichedField[]>(`/api/data/schema/${table}`),
@@ -4704,6 +4735,56 @@ export interface ExchangeRateSyncResult {
   latest_rates: Record<string, number>
 }
 
+export interface CommodityDefinition {
+  symbol: string
+  name: string
+  category: 'precious_metal' | 'energy' | 'energy_fundamental'
+  kind: 'price' | 'inventory' | 'production' | 'utilization'
+  unit: string
+  frequency: string
+  source: 'goldapi' | 'fred' | 'eia'
+  source_series_id: string
+}
+
+export interface CommoditySourceStatus {
+  name: string
+  display_name: string
+  configured: boolean
+  available: boolean
+  status: string
+  api_key_env: string
+}
+
+export interface CommodityCatalog {
+  items: CommodityDefinition[]
+  sources: Record<string, CommoditySourceStatus>
+}
+
+export interface CommodityRow extends CommodityDefinition {
+  date: string
+  value: number
+  retrieved_at: string
+}
+
+export interface CommoditySyncProviderResult {
+  provider: string
+  ok: boolean
+  rows_fetched: number
+  rows_written: number
+  symbols: string[]
+  error: string | null
+}
+
+export interface CommoditySyncResult {
+  ok: boolean
+  start_date: string
+  end_date: string
+  providers: CommoditySyncProviderResult[]
+  rows_fetched: number
+  rows_written: number
+  symbols: string[]
+}
+
 interface ExchangeRateStats extends TableStats {
   latest_rate: number | null
   source: string | null
@@ -4732,6 +4813,11 @@ export interface DataStatus {
   instruments: InstrumentsStats | null
   financials: { rows: number; tables: Record<string, { rows: number; symbols: number }> } | null
   exchange_rate: ExchangeRateStats | null
+  commodity: (TableStats & {
+    latest_values: Record<string, number>
+    units: Record<string, string>
+    sources: Record<string, string>
+  }) | null
   storage: {
     daily_files: number
     daily_size_mb: number
@@ -4763,11 +4849,14 @@ export interface DataStatus {
     ext_data_size_mb?: number
     exchange_rate_files?: number
     exchange_rate_size_mb?: number
+    commodity_files?: number
+    commodity_size_mb?: number
     total_size_mb: number
   }
   next_pipeline_run: string | null
   next_instruments_run: string | null
   next_exchange_rate_run: string | null
+  next_commodity_run: string | null
   last_pipeline_run: string | null
   last_instruments_run: string | null
   checked_at: string

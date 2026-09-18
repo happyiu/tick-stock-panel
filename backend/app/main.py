@@ -17,6 +17,7 @@ from app.api import (
     alerts,
     analysis,
     backtest,
+    commodity,
     data,
     ext_data,
     exchange_rate,
@@ -511,6 +512,7 @@ app.include_router(regime.router)
 app.include_router(analysis.router)
 app.include_router(pipeline.router)
 app.include_router(data.router)
+app.include_router(commodity.router)
 app.include_router(ext_data.router)
 app.include_router(exchange_rate.router)
 app.include_router(external_factors.router)

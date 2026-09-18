@@ -54,6 +54,7 @@ import {
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
+  Package,
   CircleDollarSign,
 } from 'lucide-react'
 import { Logo } from './Logo'
@@ -90,6 +91,7 @@ const nav = [
   { to: '/etf-simulation', label: 'ETF模拟交易', icon: TrendingUp },
   { to: '/screener',   label: '策略',   icon: ScanSearch },
   { to: '/factors',    label: '因子', icon: Sigma },
+  { to: '/commodity', label: '商品', icon: Package },
   { to: '/backtest',   label: '回测', icon: History },
   { to: '/stock-analysis',    label: '个股分析', icon: TrendingUp },
   { to: '/limit-ladder', label: '连板梯队', icon: Flame },

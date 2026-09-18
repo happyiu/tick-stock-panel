@@ -28,7 +28,7 @@ display_name: "我的数据源"                 # 设置页显示名
 runtime: none                            # 运行时类型: node | python | none
 entry: app.plugins.my_source.provider:MyProvider   # provider 类的导入路径
 check: app.plugins.my_source.bridge:availability   # 可用性检测函数(可选)
-datasets: [realtime]                     # 支持: daily/adj_factor/minute/realtime/depth5/financial
+datasets: [realtime]                     # 支持: daily/adj_factor/minute/realtime/depth5/financial/commodity
 api_key_env: MY_SOURCE_API_KEY           # (可选)声明后设置页提供 Key 输入框
 hidden: false                            # (可选)true = 已加载但对设置页隐藏,不注册不展示
 description: "数据源描述"
@@ -56,6 +56,12 @@ TickFlow 的「先探后存」语义:
 的 latest 接口，返回值必须保留供应商时间戳和来源；历史日期范围继续走日频
 Frankfurter/CFETS，不能把当前快照伪装成历史日线。普通 latest 计划按供应商发布
 频率更新，不等同于交易级实时行情。
+
+商品历史 provider 采用独立的 'commodity' 数据集，不进入单一能力路由矩阵。
+provider 实现 'get_commodity_series(start, end, symbols)'，返回包含
+'symbol'、'name'、'category'、'kind'、'date'、'value'、'unit'、'frequency'、
+'source'、'source_series_id'、'retrieved_at' 的记录。provider 必须在边界完成
+供应商字段、单位和日期标准化；缺失值返回空记录，不补频率、不前向填充。
 
 ### runtime 字段说明
 

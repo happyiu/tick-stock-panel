@@ -55,6 +55,7 @@ const DATASET_LABEL: Record<string, string> = {
   financial: '财务',
   full_minute: '全量分钟',
   exchange_rate: '汇率',
+  commodity: '商品',
 }
 
 /** 能力图标 (纯展示; 能力清单本身由后端注册表驱动) */
@@ -1057,6 +1058,8 @@ function PluginDetail({ plugin, isActive, matrixCaps, servingSet }: {
   servingSet: Set<string>
 }) {
   const declared = new Set(plugin.datasets)
+  const declaredCapabilities = matrixCaps.filter(cap => declared.has(cap.id))
+  const extraDatasets = [...declared].filter(dataset => !matrixCaps.some(cap => cap.id === dataset))
   return (
     <section className="rounded-card border border-border bg-surface p-6">
       {/* 介绍 */}
@@ -1076,12 +1079,18 @@ function PluginDetail({ plugin, isActive, matrixCaps, servingSet }: {
             )}
           </div>
           {plugin.description && <p className="text-xs text-secondary leading-relaxed">{plugin.description}</p>}
-          <div className="mt-2">
-            <CapabilityChips
-              caps={matrixCaps.filter(c => declared.has(c.id))}
-              servingSet={servingSet}
-              isTickFlow={false}
-            />
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {declaredCapabilities.length > 0 && (
+              <CapabilityChips caps={declaredCapabilities} servingSet={servingSet} isTickFlow={false} />
+            )}
+            {extraDatasets.map(dataset => (
+              <span key={dataset} className="rounded bg-accent/10 px-1.5 py-0.5 text-[10px] text-accent">
+                {DATASET_LABEL[dataset] || dataset}
+              </span>
+            ))}
+            {declaredCapabilities.length === 0 && extraDatasets.length === 0 && (
+              <span className="text-[10px] text-muted/40">未声明能力</span>
+            )}
           </div>
         </div>
       </div>

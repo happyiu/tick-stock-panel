@@ -38,6 +38,7 @@ const BUILTIN_PAGES: NavEntry[] = [
   { id: '/etf-simulation', label: 'ETF模拟交易', type: 'builtin', visible: true },
   { id: '/screener', label: '策略', type: 'builtin', visible: true },
   { id: '/factors', label: '因子', type: 'builtin', visible: true },
+  { id: '/commodity', label: '商品', type: 'builtin', visible: true },
   { id: '/backtest', label: '回测', type: 'builtin', visible: true },
   { id: '/stock-analysis', label: '个股分析', type: 'builtin', visible: true },
   { id: '/limit-ladder', label: '连板梯队', type: 'builtin', visible: true },

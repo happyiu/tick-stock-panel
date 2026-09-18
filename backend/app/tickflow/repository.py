@@ -118,6 +118,7 @@ class DataStore:
             "user_data",
             "depth5",
             "exchange_rate",
+            "commodity",
         ):
             (self.data_dir / sub).mkdir(parents=True, exist_ok=True)
 
@@ -237,6 +238,8 @@ class DataStore:
                 SELECT * FROM read_parquet('{d}/depth5/**/*.parquet', union_by_name=true)""",
             f"""CREATE OR REPLACE VIEW exchange_rate AS
                 SELECT * FROM read_parquet('{d}/exchange_rate/**/*.parquet', union_by_name=true)""",
+            f"""CREATE OR REPLACE VIEW commodity AS
+                SELECT * FROM read_parquet('{d}/commodity/**/*.parquet', union_by_name=true)""",
         ]
         for sql in statements:
             try:
@@ -2131,6 +2134,7 @@ class KlineRepository:
             "instruments_index": f"{d}/instruments_index/**/*.parquet",
             "instruments_etf": f"{d}/instruments_etf/**/*.parquet",
             "exchange_rate": f"{d}/exchange_rate/**/*.parquet",
+            "commodity": f"{d}/commodity/**/*.parquet",
         }
         for name, path in views.items():
             try:
