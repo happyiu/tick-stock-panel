@@ -19,6 +19,8 @@ from app.api import (
     backtest,
     data,
     ext_data,
+    exchange_rate,
+    external_factors,
     factors,
     financials,
     indices,
@@ -510,6 +512,8 @@ app.include_router(analysis.router)
 app.include_router(pipeline.router)
 app.include_router(data.router)
 app.include_router(ext_data.router)
+app.include_router(exchange_rate.router)
+app.include_router(external_factors.router)
 app.include_router(financials.router)
 app.include_router(stock_analysis.router)
 app.include_router(market_recap.router)

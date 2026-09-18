@@ -46,6 +46,7 @@ _table_cache: dict[str, dict | None] = {
     "adj_factor": None,
     "instruments": None,
     "financials": None,
+    "exchange_rate": None,
 }
 _table_cache_ts: dict[str, float] = {k: 0.0 for k in _table_cache}
 _table_cache_lock = threading.Lock()
@@ -119,6 +120,47 @@ def _safe_aggregate(repo, view: str) -> dict | None:
         "latest_date": str(row[2]) if row[2] else None,
         "symbols_covered": int(row[3] or 0),
         "trading_days": int(row[4] or 0),
+    }
+
+
+def _safe_aggregate_exchange_rate(repo) -> dict | None:
+    """汇率统计，除通用覆盖范围外补充各标的最新值与来源。"""
+    stats = _safe_aggregate(repo, "exchange_rate")
+    if not stats:
+        return None
+    try:
+        latest = repo.execute_all(
+            """SELECT symbol, rate, source
+               FROM (
+                   SELECT symbol, rate, source,
+                          row_number() OVER (
+                              PARTITION BY symbol
+                              ORDER BY date DESC, retrieved_at DESC
+                          ) AS rn
+                   FROM exchange_rate
+               )
+               WHERE rn = 1
+               ORDER BY symbol"""
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug("aggregate exchange_rate latest failed: %s", e)
+        latest = []
+    latest_rates = {
+        str(row[0]): float(row[1])
+        for row in latest
+        if row[1] is not None
+    }
+    sources = {
+        str(row[0]): str(row[2])
+        for row in latest
+        if row[2] is not None
+    }
+    return {
+        **stats,
+        "latest_rate": latest_rates.get("USD/CNY"),
+        "source": sources.get("USD/CNY"),
+        "latest_rates": latest_rates,
+        "sources": sources,
     }
 
 
@@ -496,6 +538,7 @@ def _compute_storage(data_dir: Path) -> dict:
         "adj_factor": data_dir / "adj_factor",
         "instruments": data_dir / "instruments",
         "ext_data": data_dir / "ext_data",
+        "exchange_rate": data_dir / "exchange_rate",
     }
     stats = {}
     total_size = 0
@@ -599,6 +642,9 @@ def status(request: Request) -> dict:
         "adj_factor":  _get_table_stats("adj_factor",  lambda: _safe_aggregate_adj_factor(repo)),
         "instruments": _get_table_stats("instruments", lambda: _safe_aggregate_instruments(repo)),
         "financials":  _get_table_stats("financials",  lambda: _safe_aggregate_financials(repo)),
+        "exchange_rate": _get_table_stats(
+            "exchange_rate", lambda: _safe_aggregate_exchange_rate(repo),
+        ),
 
         # 文件层面信息(缓存)
         "storage": _get_storage(data_dir),
@@ -606,6 +652,7 @@ def status(request: Request) -> dict:
         # 调度
         "next_instruments_run": _next_cron_run(scheduler, "pre_market_instruments"),
         "next_pipeline_run":    _next_cron_run(scheduler, "daily_pipeline"),
+        "next_exchange_rate_run": _next_cron_run(scheduler, "exchange_rate_daily"),
         "last_instruments_run": _last_finished("instruments"),
         "last_pipeline_run":    _last_finished("pipeline"),
         "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
@@ -634,6 +681,7 @@ def clear_data(request: Request):
         "kline_daily", "kline_daily_enriched", "kline_index_daily", "kline_index_enriched",
         "kline_etf_daily", "kline_etf_enriched", "kline_etf_minute", "kline_minute",
         "adj_factor", "adj_factor_etf", "instruments", "instruments_index", "instruments_etf", "pools", "financials",
+        "exchange_rate",
         "backtest_results", "screener_results", "ai_cache",
     ):
         d = data_dir / sub
@@ -755,6 +803,16 @@ _TABLE_FIELD_DESC: dict[str, dict[str, str]] = {
         "trade_date": "除权除息日",
         "ex_factor": "复权因子",
     },
+    "exchange_rate": {
+        "symbol": "货币对/指数",
+        "date": "汇率日期",
+        "base": "基准货币",
+        "quote": "报价货币/指数标记",
+        "rate": "汇率/指数值",
+        "source": "数据源/计算方式",
+        "frequency": "频率",
+        "retrieved_at": "抓取时间",
+    },
     "instruments": {
         "symbol": "股票代码",
         "name": "股票名称",
@@ -798,6 +856,7 @@ _SCHEMA_VIEWS: dict[str, str] = {
     "minute": "kline_minute",
     "adj_factor": "adj_factor",
     "instruments": "instruments",
+    "exchange_rate": "exchange_rate",
 }
 
 

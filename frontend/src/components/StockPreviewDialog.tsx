@@ -5,7 +5,7 @@ import { X, RefreshCw, Clock, Gamepad2, LineChart, Star, RadioTower, Maximize2, 
 import { api, type KlinePeriod, type KlineRow, type StrategyDetail } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { cn } from '@/lib/cn'
-import { cnSignal } from '@/lib/signals'
+import { cnSignal, type ChartSignalSelection } from '@/lib/signals'
 import { useCustomSignalNames } from '@/lib/useCustomSignalNames'
 import { fmtAssetPrice, fmtPct } from '@/lib/format'
 import { StockPanel } from '@/components/StockPanel'
@@ -30,6 +30,7 @@ import {
 } from '@/lib/kline'
 import { ExtensionSlot } from '@/extensions/ExtensionSlot'
 import { StrategyPickerDialog } from '@/components/screener/StrategyPickerDialog'
+import { ChartSignalPickerDialog } from '@/components/screener/ChartSignalPickerDialog'
 
 interface Props {
   symbol: string | null
@@ -158,6 +159,8 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
     period: KlinePeriod
   } | null>(null)
   const [selectedStrategy, setSelectedStrategy] = useState<StrategyDetail | null>(null)
+  const [signalPicker, setSignalPicker] = useState<{ period: KlinePeriod } | null>(null)
+  const [selectedSignals, setSelectedSignals] = useState<ChartSignalSelection[]>([])
   const customNames = useCustomSignalNames()
   const [priceAlertDraft, setPriceAlertDraft] = useState<PriceAlertDraft | null>(null)
   const [maximized, setMaximized] = useState(false)
@@ -361,6 +364,8 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
       setFindFeelPhase('setup')
       setStrategyPicker(null)
       setSelectedStrategy(null)
+      setSignalPicker(null)
+      setSelectedSignals([])
     }
     prevSymbolRef.current = symbol
     setAssetType(triggerInfo?.asset_type)
@@ -441,6 +446,8 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
     setDateRange(previewKlineRange(next, assetType, periodDays))
     setStrategyPicker(null)
     setSelectedStrategy(null)
+    setSignalPicker(null)
+    setSelectedSignals([])
   }
 
   const handleOpenStrategyPicker = useCallback((nextAssetType: 'stock' | 'etf', nextPeriod: KlinePeriod) => {
@@ -451,6 +458,16 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
   const handleStrategySelected = useCallback((strategy: StrategyDetail) => {
     setSelectedStrategy(strategy)
     setStrategyPicker(null)
+  }, [])
+
+  const handleOpenSignalPicker = useCallback((_nextAssetType: 'stock' | 'etf', nextPeriod: KlinePeriod) => {
+    if (findFeelLocked) return
+    setSignalPicker({ period: nextPeriod })
+  }, [findFeelLocked])
+
+  const handleSignalsApplied = useCallback((signals: ChartSignalSelection[]) => {
+    setSelectedSignals(signals)
+    setSignalPicker(null)
   }, [])
 
   const openPriceAlert = (targetPrice: number, currentPrice: number) => {
@@ -950,6 +967,9 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                       onAddStrategy={findFeelLocked ? undefined : handleOpenStrategyPicker}
                       selectedStrategy={selectedStrategy}
                       onClearStrategy={() => setSelectedStrategy(null)}
+                      onAddSignal={findFeelLocked ? undefined : handleOpenSignalPicker}
+                      selectedSignals={selectedSignals}
+                      onClearSignals={() => setSelectedSignals([])}
                       visibleThrough={findFeelLocked ? findFeelDate : null}
                       lockedSelectedDate={findFeelLocked ? findFeelDate : null}
                       hideCurrentDate={findFeelLocked && findFeelLock ? findFeelLock.hideCurrentDate : false}
@@ -1052,6 +1072,15 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
           period={strategyPicker.period}
           onClose={() => setStrategyPicker(null)}
           onSelect={handleStrategySelected}
+        />
+      )}
+      {signalPicker && (
+        <ChartSignalPickerDialog
+          open
+          period={signalPicker.period}
+          selected={selectedSignals}
+          onClose={() => setSignalPicker(null)}
+          onApply={handleSignalsApplied}
         />
       )}
     </AnimatePresence>

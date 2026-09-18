@@ -22,6 +22,7 @@ import {
   actionStateLabel,
   getDefaultRange,
   toOHLC,
+  type ChartSignalSelection,
   type ChartStrategySelection,
   type StockActionState,
 } from '@/components/StockDailyKChart'
@@ -179,12 +180,18 @@ interface Props {
   visibleThrough?: string | null
   /** 调试设置开启时，不显示当前推进 K 线的日期。 */
   hideCurrentDate?: boolean
-  /** 在日K图工具栏打开策略选择器。 */
+  /** 在标的详情顶部信息条打开策略选择器。 */
   onAddStrategy?: (assetType: 'stock' | 'etf', period: KlinePeriod) => void
   /** 当前日K图已选中的策略。 */
   selectedStrategy?: ChartStrategySelection | null
   /** 清除当前日K图的策略选择。 */
   onClearStrategy?: () => void
+  /** 在标的详情顶部信息条打开信号库选择器。 */
+  onAddSignal?: (assetType: 'stock' | 'etf', period: KlinePeriod) => void
+  /** 当前日K图已选中的信号库信号。 */
+  selectedSignals?: ChartSignalSelection[]
+  /** 清除当前日K图的信号选择。 */
+  onClearSignals?: () => void
   /** 外部锁定的当前 K 线；用于逐根推进时保持详情页各区域同步。 */
   lockedSelectedDate?: string | null
   /** 初始可见蜡烛根数 (默认 60); 'all' = 初始适配显示全部数据 (用于全区间回放) */
@@ -236,6 +243,9 @@ export function StockPanel({
   onAddStrategy,
   selectedStrategy,
   onClearStrategy,
+  onAddSignal,
+  selectedSignals,
+  onClearSignals,
   lockedSelectedDate,
   visibleBars,
 }: Props) {
@@ -937,6 +947,9 @@ export function StockPanel({
       stockInfo={stockInfo}
       rows={infoRows}
       assetType={assetType}
+      period={period}
+      onAddStrategy={onAddStrategy}
+      onAddSignal={onAddSignal}
       fields={fields}
       onFieldsChange={handleFieldsChange}
       financialMetrics={financialMetrics}
@@ -994,9 +1007,11 @@ export function StockPanel({
               elliottAnalysis={resolvedRightPaneMode === 'technical' ? elliottAnalysis : undefined}
               visibleThrough={visibleThrough}
               hideCurrentDate={hideCurrentDate}
-              onAddStrategy={onAddStrategy}
               selectedStrategy={selectedStrategy}
               onClearStrategy={onClearStrategy}
+              onAddSignal={onAddSignal}
+              selectedSignals={selectedSignals}
+              onClearSignals={onClearSignals}
             />
           </div>
         </div>

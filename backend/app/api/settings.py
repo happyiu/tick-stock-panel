@@ -592,6 +592,7 @@ class DataProvidersIn(BaseModel):
     depth5_data_provider: str | None = None
     realtime_data_provider: str | None = None
     financial_data_provider: str | None = None
+    exchange_rate_data_provider: str | None = None
 
 
 class PluginKeyIn(BaseModel):
@@ -689,6 +690,7 @@ def get_preferences() -> dict:
         "depth5_data_provider": preferences.get_depth5_data_provider(),
         "realtime_data_provider": preferences.get_realtime_data_provider(),
         "financial_data_provider": preferences.get_financial_provider(),
+        "exchange_rate_data_provider": preferences.get_exchange_rate_data_provider(),
         "data_source_job_timeout_s": preferences.get_data_source_job_timeout_s(),
         "data_source_long_job_timeout_s": preferences.get_data_source_long_job_timeout_s(),
         "minute_batch_compress": preferences.get_minute_batch_compress(),
@@ -774,6 +776,7 @@ def get_capability_matrix() -> dict:
             "depth5_data_provider": preferences.get_depth5_data_provider(),
             "adj_factor_provider": preferences.get_adj_factor_provider(),
             "financial_data_provider": preferences.get_financial_provider(),
+            "exchange_rate_data_provider": preferences.get_exchange_rate_data_provider(),
         },
         tickflow_tier=policy.base_tier_name(),
     )
@@ -978,6 +981,7 @@ def update_data_providers(req: DataProvidersIn, request: Request) -> dict:
         "depth5_data_provider": preferences.get_depth5_data_provider(),
         "realtime_data_provider": preferences.get_realtime_data_provider(),
         "financial_data_provider": preferences.get_financial_provider(),
+        "exchange_rate_data_provider": preferences.get_exchange_rate_data_provider(),
     }
 
 

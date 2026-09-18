@@ -54,6 +54,7 @@ export const QK = {
   backtestStatus:       ['backtest-status'] as const,
   factorColumns:        ['backtest-factor-columns'] as const,
   factorLibrary:        (assetType: string) => ['factors-library', assetType] as const,
+  externalFactors:      ['external-factors'] as const,
   miningRuns:           ['backtest-mining-runs'] as const,
   miningAvailability:   (assetType: string, profile: string, start: string, end: string) =>
                           ['backtest-mining-availability', assetType, profile, start, end] as const,
@@ -67,6 +68,8 @@ export const QK = {
   strategyDetail:       (id: string) => ['strategy-detail', id] as const,
   strategySignals:      (strategyId: string, symbol: string, assetType: string, timeframe: string, start: string, end: string, days: number) =>
                           ['strategy-signals', strategyId, symbol, assetType, timeframe, start, end, days] as const,
+  signalChartMarkers:   (symbol: string, assetType: string, timeframe: string, start: string, end: string, days: number, signalIds: string) =>
+                          ['signal-chart-markers', symbol, assetType, timeframe, start, end, days, signalIds] as const,
 
   // ETF 模拟交易（独立 SSE 只失效当前账户）
   paperSnapshot:        (accountId: string) => ['paper-trading', 'snapshot', accountId] as const,
@@ -78,6 +81,7 @@ export const QK = {
 
   // Data / Pipeline
   dataStatus:           ['data-status'] as const,
+  exchangeRate:         ['exchange-rate'] as const,
   pipelineJobs:         ['pipeline-jobs'] as const,
   pipelineJob:          (id: string) => ['pipeline-job', id] as const,
   extData:              ['ext-data'] as const,

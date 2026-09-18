@@ -1,0 +1,7 @@
+name: frankfurter
+display_name: "Frankfurter"
+runtime: none
+entry: app.plugins.frankfurter.provider:FrankfurterProvider
+datasets: [exchange_rate]
+description: "Frankfurter 日频汇率；CNY 货币对使用 CFETS，USD/CNH 使用默认混合源，DXY 由组成货币派生。"
+homepage: "https://frankfurter.dev/"

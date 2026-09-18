@@ -1233,6 +1233,25 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
         replace_existing=True,
     )
 
+    # 外部汇率: Frankfurter/CFETS 日频中间价，不并入证券日K管道。
+    # 历史回补走 /api/exchange-rate/sync；定时任务只拉取当天最新值。
+    def _exchange_rate_daily():
+        from app.services.exchange_rate_sync import sync_exchange_rates
+
+        try:
+            sync_exchange_rates(repo)
+        except Exception:  # noqa: BLE001
+            logger.exception("scheduled exchange rate sync failed")
+
+    scheduler.add_job(
+        _exchange_rate_daily,
+        trigger=CronTrigger(day_of_week="mon-fri", hour=18, minute=0,
+                            timezone="Asia/Shanghai"),
+        id="exchange_rate_daily",
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
+
     # 周期性能力重探: 付费 Key 中途过期/续费无需重启即可被发现。
     # 只热更新 app.state.capabilities(API 端点、盘后管道 _pipeline_then_refresh 均读它);
     # 档位变化记 WARNING, 让「Key 失效」在日志/前端可见, 不再静默按旧档位打 403 端点。
@@ -1274,7 +1293,7 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
                     review_sched["hour"], review_sched["minute"])
 
     scheduler.start()
-    logger.info("scheduler started; instruments@%02d:%02d, pipeline@%02d:%02d, depth@%02d:%02d mon-fri",
+    logger.info("scheduler started; instruments@%02d:%02d, pipeline@%02d:%02d, depth@%02d:%02d, exchange_rate@18:00 mon-fri",
                 inst_sched["hour"], inst_sched["minute"], sched["hour"], sched["minute"],
                 depth_sched["hour"], depth_sched["minute"])
     return scheduler

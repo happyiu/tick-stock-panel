@@ -22,6 +22,7 @@ DEFAULT_CURRENT = {
     "depth5_data_provider": "tickflow",
     "realtime_data_provider": "tickflow",
     "financial_data_provider": "tickflow",
+    "exchange_rate_data_provider": "frankfurter",
 }
 
 
@@ -52,12 +53,17 @@ def test_registry_covers_all_routing_fields():
     assert len(set(routable)) == len(routable)
     assert {c["id"] for c in CAPABILITY_REGISTRY} == {
         "chart", "realtime", "daily", "minute", "full_minute", "depth5", "adj_factor", "financial",
+        "exchange_rate",
     }
     full_minute = next(c for c in CAPABILITY_REGISTRY if c["id"] == "full_minute")
     assert full_minute["field"] == "full_minute_data_provider"
     assert full_minute["tf_tier"] == "expert"
     for cap in CAPABILITY_REGISTRY:
-        assert cap["default"] == "tickflow"
+        if cap["id"] == "exchange_rate":
+            assert cap["default"] == "frankfurter"
+            assert cap["tickflow_supported"] is False
+        else:
+            assert cap["default"] == "tickflow"
         assert cap["tf_tier"] in ("none", "starter", "pro", "expert")
         assert "follow" not in cap
 
@@ -67,8 +73,15 @@ def test_matrix_without_third_party_sources(monkeypatch):
     _fake_sources(monkeypatch, [])
     matrix = build_capability_matrix(dict(DEFAULT_CURRENT), tickflow_tier="expert")
     assert matrix["tickflow_tier"] == "expert"
-    assert len(matrix["capabilities"]) == 8
+    assert len(matrix["capabilities"]) == 9
     for cap in matrix["capabilities"]:
+        if cap["id"] == "exchange_rate":
+            assert cap["candidates"] == []
+            assert cap["tf_available"] is False
+            assert cap["usable"] is False
+            assert cap["pending"] == []
+            assert cap["current"] == cap["effective"] == "frankfurter"
+            continue
         names = [c["name"] for c in cap["candidates"]]
         assert names == ["tickflow"]
         assert cap["candidates"][0]["kind"] == "builtin"
@@ -293,6 +306,7 @@ def test_api_endpoint_injects_all_routing_preferences(monkeypatch):
     from app.tickflow import policy
 
     getter_values = {
+        "chart_data_provider": "chart-src",
         "realtime_data_provider": "rt-src",
         "daily_data_provider": "daily-src",
         "minute_data_provider": "min-src",
@@ -300,8 +314,10 @@ def test_api_endpoint_injects_all_routing_preferences(monkeypatch):
         "depth5_data_provider": "d5-src",
         "adj_factor_provider": "adj-src",
         "financial_data_provider": "fin-src",
+        "exchange_rate_data_provider": "frankfurter",
     }
     getter_names = {
+        "chart_data_provider": "get_chart_data_provider",
         "realtime_data_provider": "get_realtime_data_provider",
         "daily_data_provider": "get_daily_data_provider",
         "minute_data_provider": "get_minute_data_provider",
@@ -309,6 +325,7 @@ def test_api_endpoint_injects_all_routing_preferences(monkeypatch):
         "depth5_data_provider": "get_depth5_data_provider",
         "adj_factor_provider": "get_adj_factor_provider",
         "financial_data_provider": "get_financial_provider",
+        "exchange_rate_data_provider": "get_exchange_rate_data_provider",
     }
     for field, getter in getter_names.items():
         monkeypatch.setattr(preferences, getter, lambda f=field: getter_values[f])

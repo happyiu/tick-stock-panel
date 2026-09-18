@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
-import { Settings2, RadioTower, Star, ExternalLink } from 'lucide-react'
-import type { KlineRow, FinancialMetricRecord } from '@/lib/api'
+import { Plus, Settings2, RadioTower, Star, ExternalLink } from 'lucide-react'
+import type { FinancialMetricRecord, KlinePeriod, KlineRow } from '@/lib/api'
 import { fmtAssetPrice, fmtPrice, fmtBigNum, fmtVolume } from '@/lib/format'
 import { ListColumnCustomizer } from '@/components/ListColumnCustomizer'
 import { WatchlistAddMenu } from '@/components/WatchlistAddMenu'
@@ -16,6 +16,9 @@ interface Props {
   stockInfo?: { name?: string; total_shares?: number; float_shares?: number; ext?: Record<string, unknown> }
   rows: KlineRow[]
   assetType?: string
+  period?: KlinePeriod
+  onAddStrategy?: (assetType: 'stock' | 'etf', period: KlinePeriod) => void
+  onAddSignal?: (assetType: 'stock' | 'etf', period: KlinePeriod) => void
   /** 信息条字段配置（由 StockPanel 提升，受控） */
   fields: ColumnConfig[]
   onFieldsChange: (fields: ColumnConfig[]) => void
@@ -104,6 +107,9 @@ export function StockInfoBar({
   stockInfo,
   rows,
   assetType,
+  period,
+  onAddStrategy,
+  onAddSignal,
   fields,
   onFieldsChange,
   financialMetrics,
@@ -242,6 +248,9 @@ export function StockInfoBar({
   }
 
   const extUrl = buildStockExternalUrl(loadStockExternalTemplate(), symbol)
+  const chartAssetType = assetType === 'stock' || assetType === 'etf' ? assetType : undefined
+  const canAddStrategy = Boolean(chartAssetType && period && onAddStrategy)
+  const canAddSignal = Boolean(chartAssetType && period && onAddSignal)
 
   return (
     <div className="px-2 pb-3 font-mono text-[12px] select-none space-y-1">
@@ -259,8 +268,32 @@ export function StockInfoBar({
           {isUp ? '+' : ''}{fmtPrice(chgPct)}%
         </span>
         {actionStatus}
-        {/* 右侧操作按钮：外链 + 加自选 + 加监控 + 信息条配置 */}
-        <div className="ml-auto self-center flex items-center gap-1">
+        {/* 右侧操作按钮：策略/信号 + 外链 + 加自选 + 加监控 + 信息条配置 */}
+        <div className="ml-auto self-center flex shrink-0 items-center gap-1">
+          {canAddStrategy && (
+            <button
+              type="button"
+              onClick={() => onAddStrategy?.(chartAssetType!, period!)}
+              title={`添加${chartAssetType === 'etf' ? ' ETF' : '股票'}策略`}
+              aria-label={`添加${chartAssetType === 'etf' ? ' ETF' : '股票'}策略`}
+              className="inline-flex shrink-0 items-center gap-1 rounded border border-accent/30 bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent transition-colors hover:border-accent/50 hover:bg-accent/15"
+            >
+              <Plus className="h-3 w-3" />
+              <span>添加策略</span>
+            </button>
+          )}
+          {canAddSignal && (
+            <button
+              type="button"
+              onClick={() => onAddSignal?.(chartAssetType!, period!)}
+              title="添加信号到当前 K 线"
+              aria-label="添加信号到当前 K 线"
+              className="inline-flex shrink-0 items-center gap-1 rounded border border-cyan-400/30 bg-cyan-400/10 px-2 py-0.5 text-[10px] font-medium text-cyan-300 transition-colors hover:border-cyan-400/50 hover:bg-cyan-400/15"
+            >
+              <Plus className="h-3 w-3" />
+              <span>添加信号</span>
+            </button>
+          )}
           {extUrl && (
             <a
               href={extUrl}

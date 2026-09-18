@@ -1,4 +1,4 @@
-"""在单只标的 K 线历史上计算策略信号。
+"""在单只标的 K 线历史上计算策略和信号库命中。
 
 图表只需要信号发生的 K 线, 不需要把完整的选股结果搬到前端。这里复用
 StrategyEngine 已加载的策略定义、参数覆盖和矩阵/表达式执行契约, 只负责把
@@ -13,10 +13,25 @@ from typing import Any
 import polars as pl
 
 from app.backtest.strategy import _basic_filter_for_asset
-from app.services.kline_periods import aggregate_daily_period, prepare_native_30m
+from app.services import preferences
+from app.services.kline_periods import (
+    aggregate_daily_period,
+    aggregate_minute_30m,
+    prepare_native_30m,
+)
 
-SUPPORTED_TIMEFRAMES = ("1d", "1w", "30m")
+SUPPORTED_TIMEFRAMES = ("1d", "1w", "30m", "1mo")
 _THIRTY_MINUTE_BARS_PER_SESSION = 8
+_CHART_LIMIT_SIGNAL_IDS = frozenset({
+    "signal_limit_up",
+    "signal_limit_down",
+    "signal_limit_down_recovery",
+    "signal_broken_limit_up",
+})
+_DAILY_ONLY_SIGNAL_IDS = _CHART_LIMIT_SIGNAL_IDS | {
+    "signal_n_day_high",
+    "signal_n_day_low",
+}
 
 
 def _resolve_signal_column(signal: str) -> str:
@@ -118,6 +133,29 @@ def _markers_from_rows(
                 "signals": active,
             }
         )
+    return result
+
+
+def _signal_markers_from_rows(
+    rows: pl.DataFrame,
+    *,
+    timestamp_col: str,
+    timeframe: str,
+    signals: list[str],
+    start: date,
+    end: date,
+) -> list[dict[str, Any]]:
+    """把已计算的原子信号投影成按 K 线合并的图表标记。"""
+    if rows.is_empty():
+        return []
+    result: list[dict[str, Any]] = []
+    for row in rows.iter_rows(named=True):
+        if not _row_in_range(row, timestamp_col, start, end):
+            continue
+        active = _active_signals(row, signals)
+        if not active:
+            continue
+        result.append({"date": _row_label(row, timestamp_col, timeframe), "signals": active})
     return result
 
 
@@ -414,9 +452,10 @@ def _evaluate_strategy(
 class StrategyChartService:
     """加载与当前图表相同资产/周期的策略历史。"""
 
-    def __init__(self, repo: Any, engine: Any) -> None:
+    def __init__(self, repo: Any, engine: Any, chart_data_service: Any | None = None) -> None:
         self.repo = repo
         self.engine = engine
+        self.chart_data_service = chart_data_service
 
     def load_frame(
         self,
@@ -430,15 +469,15 @@ class StrategyChartService:
         days: int,
     ) -> pl.DataFrame:
         if timeframe not in SUPPORTED_TIMEFRAMES:
-            raise ValueError(f"当前 K 线不支持 {timeframe} 策略")
+            raise ValueError(f"当前 K 线不支持 {timeframe} 图表标记")
 
         if timeframe == "1d":
             warmup_start = start - timedelta(days=max(180, required_bars * 4))
             frame = self.repo.get_daily_asset(asset_type, symbol, warmup_start, end)
-        elif timeframe == "1w":
+        elif timeframe in ("1w", "1mo"):
             warmup_start = start - timedelta(days=max(730, required_bars * 10))
             daily = self.repo.get_daily_asset(asset_type, symbol, warmup_start, end)
-            frame = aggregate_daily_period(daily, "1w")
+            frame = aggregate_daily_period(daily, timeframe)
         else:
             sessions = max(
                 20,
@@ -447,15 +486,24 @@ class StrategyChartService:
                 + 5,
             )
             warmup_start = start - timedelta(days=sessions * 2 + 10)
-            try:
-                minute = self.repo.get_minute_range(
-                    [symbol], warmup_start, end, asset_type=asset_type
+            frame = pl.DataFrame()
+            if self.chart_data_service is not None:
+                provider = preferences.get_chart_data_provider()
+                snapshot = self.chart_data_service.get(
+                    provider, provider, symbol, asset_type, "30m", warmup_start, end,
                 )
-            except TypeError:
-                minute = self.repo.get_minute_range([symbol], warmup_start, end)
-            if minute.is_empty():
+                if not snapshot.frame.is_empty():
+                    frame = prepare_native_30m(snapshot.frame)
+            if frame.is_empty():
+                try:
+                    minute = self.repo.get_minute_range(
+                        [symbol], warmup_start, end, asset_type=asset_type
+                    )
+                except TypeError:
+                    minute = self.repo.get_minute_range([symbol], warmup_start, end)
+                frame = aggregate_minute_30m(minute)
+            if frame.is_empty():
                 raise ValueError("无 30F 分钟K数据 — 请先在 数据→分钟K 完成对应资产的历史同步")
-            frame = prepare_native_30m(minute)
 
         if frame.is_empty():
             return frame
@@ -522,6 +570,107 @@ class StrategyChartService:
         visible_set = {value.isoformat() for value in visible_dates[-max(1, days) :]}
         return [marker for marker in markers if marker["date"][:10] in visible_set]
 
+    def signal_markers(
+        self,
+        *,
+        symbol: str,
+        asset_type: str,
+        timeframe: str,
+        signal_ids: list[str],
+        start: date,
+        end: date,
+        days: int = 20,
+    ) -> list[dict[str, Any]]:
+        """计算信号库中所选原子信号在单只标的上的历史命中。"""
+        from app.config import settings
+        from app.indicators.pipeline import (
+            compute_indicators,
+            compute_limit_signals,
+            compute_signals,
+            get_signal_dependencies,
+        )
+        from app.strategy import custom_signals
+
+        if timeframe not in SUPPORTED_TIMEFRAMES:
+            raise ValueError(f"当前 K 线不支持 {timeframe} 信号")
+
+        dependencies = get_signal_dependencies()
+        daily_custom_ids = {
+            custom_signals.column_name(signal["id"])
+            for signal in custom_signals.load_all(settings.data_dir)
+            if isinstance(signal.get("id"), str)
+            and signal.get("timeframe", custom_signals.TIMEFRAME_DAILY) == custom_signals.TIMEFRAME_DAILY
+        }
+        allowed = (
+            {signal_id for signal_id in dependencies if not signal_id.startswith("csg_")}
+            | (daily_custom_ids & set(dependencies))
+            | set(_CHART_LIMIT_SIGNAL_IDS)
+        )
+        normalized: list[str] = []
+        for raw_id in signal_ids:
+            signal_id = raw_id.strip()
+            if not signal_id:
+                continue
+            if not signal_id.startswith(("signal_", "csg_")):
+                signal_id = f"signal_{signal_id}"
+            if signal_id not in allowed:
+                raise ValueError(f"未知或未启用的信号: {raw_id}")
+            if timeframe != "1d" and signal_id in _DAILY_ONLY_SIGNAL_IDS:
+                raise ValueError(f"信号 {signal_id} 仅支持日线 K 线")
+            if signal_id not in normalized:
+                normalized.append(signal_id)
+        if not normalized:
+            return []
+
+        frame = self.load_frame(
+            symbol=symbol,
+            asset_type=asset_type,
+            timeframe=timeframe,
+            start=start,
+            end=end,
+            # 内置信号最长只需要 60 根; 多留历史用于均线/自定义因子预热。
+            required_bars=250,
+            days=days,
+        )
+        if frame.is_empty():
+            return []
+
+        indicator_dependencies: set[str] = set()
+        for signal_id in normalized:
+            indicator_dependencies.update(dependencies.get(signal_id, ()))
+        if set(normalized) & set(_CHART_LIMIT_SIGNAL_IDS):
+            indicator_dependencies.update({"change_pct", "vol_ratio_5d"})
+        frame = compute_indicators(frame, needed=indicator_dependencies)
+        frame = compute_signals(frame, needed=set(normalized))
+        limit_ids = set(normalized) & set(_CHART_LIMIT_SIGNAL_IDS)
+        if limit_ids:
+            frame = compute_limit_signals(
+                frame,
+                self.repo.get_instruments(),
+                needed=limit_ids,
+                historical_shares=self.repo.get_historical_shares(),
+            )
+
+        timestamp_col = "datetime" if "datetime" in frame.columns else "date"
+        markers = _signal_markers_from_rows(
+            frame,
+            timestamp_col=timestamp_col,
+            timeframe=timeframe,
+            signals=normalized,
+            start=start,
+            end=end,
+        )
+        if timeframe != "30m":
+            return markers
+
+        visible_dates = sorted(
+            value
+            for value in (_as_date(item) for item in frame[timestamp_col].unique().to_list())
+            if value is not None
+        )
+        visible_set = {value.isoformat() for value in visible_dates[-max(1, days) :]}
+        return [marker for marker in markers if marker["date"][:10] in visible_set]
+
 
 def evaluate_strategy_frame(
     engine: Any,
@@ -552,6 +701,26 @@ def evaluate_strategy_frame(
         timeframe=timeframe,
         overrides=effective_overrides,
         params=resolved_params,
+        start=start,
+        end=end,
+    )
+
+
+def evaluate_signal_frame(
+    frame: pl.DataFrame,
+    *,
+    signal_ids: list[str],
+    timeframe: str,
+    start: date,
+    end: date,
+) -> list[dict[str, Any]]:
+    """测试与离线调用使用的已计算信号帧入口。"""
+    timestamp_col = "datetime" if "datetime" in frame.columns else "date"
+    return _signal_markers_from_rows(
+        frame,
+        timestamp_col=timestamp_col,
+        timeframe=timeframe,
+        signals=signal_ids,
         start=start,
         end=end,
     )

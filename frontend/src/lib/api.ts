@@ -1149,6 +1149,20 @@ export interface StrategySignalResponse {
   count: number
 }
 
+export interface SignalChartMarker {
+  date: string
+  signals: string[]
+}
+
+export interface SignalChartResponse {
+  symbol: string
+  asset_type: 'stock' | 'etf'
+  timeframe: KlinePeriod
+  signal_ids: string[]
+  markers: SignalChartMarker[]
+  count: number
+}
+
 export type ScoringDirection = 'high' | 'low'
 
 export interface StrategyBuildResult {
@@ -1203,6 +1217,8 @@ export interface CustomSignal {
   kind: 'entry' | 'exit' | 'both'
   conditions: CustomSignalCondition[]
   enabled: boolean
+  timeframe?: 'daily' | 'intraday'
+  min_bars?: number
 }
 
 export interface CustomSignalFieldGroup {
@@ -1527,6 +1543,38 @@ export interface FactorLibraryItem {
   stability: FactorStability
   scale_free: boolean
   dependencies: string[]
+  tags?: string[]
+}
+
+export type ExternalFactorCategory =
+  | 'market' | 'industry' | 'constituents' | 'relative' | 'cross_market'
+  | 'flow' | 'liquidity' | 'sentiment' | 'valuation' | 'fundamental'
+  | 'commodity' | 'event'
+
+export interface ExternalFactorDefinition {
+  id: string
+  label: string
+  category: ExternalFactorCategory
+  operation: 'direct' | 'difference'
+  source_type: 'index_daily' | 'ext_timeseries' | 'factor_pair'
+  source_symbol?: string | null
+  source_config_id?: string | null
+  source_field?: string | null
+  transform: 'value' | 'return'
+  window: number
+  left_factor_id?: string | null
+  right_factor_id?: string | null
+  group: string
+  description?: string
+  direction: 'high' | 'low' | 'none'
+  unit: string
+  asset_types: string[]
+  pit: boolean
+  status: 'draft' | 'active' | 'watch' | 'retired'
+  version: number
+  alignment: 'date_broadcast'
+  created_at: string
+  updated_at: string
 }
 
 export interface FactorDslError {
@@ -2098,6 +2146,7 @@ export type ProviderField =
   | 'depth5_data_provider'
   | 'realtime_data_provider'
   | 'financial_data_provider'
+  | 'exchange_rate_data_provider'
 
 /** 能力路由矩阵中的一个候选源 (candidates 只含当前确实可提供该能力的源) */
 export interface CapabilityCandidate {
@@ -2222,6 +2271,7 @@ export interface Preferences {
   depth5_data_provider?: string
   realtime_data_provider?: string
   financial_data_provider?: string
+  exchange_rate_data_provider?: string
   data_source_job_timeout_s: number
   data_source_long_job_timeout_s: number
   minute_batch_compress: boolean
@@ -3411,6 +3461,37 @@ export const api = {
       `/api/factors${assetType ? `?asset_type=${assetType}` : ''}`,
     ),
 
+  externalFactorList: () =>
+    request<{ items: ExternalFactorDefinition[] }>('/api/external-factors'),
+
+  externalFactorCreate: (body: {
+    id: string
+    label: string
+    category: ExternalFactorCategory
+    operation: 'direct' | 'difference'
+    source_type: 'index_daily' | 'ext_timeseries' | 'factor_pair'
+    source_symbol?: string
+    source_config_id?: string
+    source_field?: string
+    transform: 'value' | 'return'
+    window: number
+    left_factor_id?: string
+    right_factor_id?: string
+    description?: string
+    direction?: 'high' | 'low' | 'none'
+    unit?: string
+    asset_types?: ('stock' | 'etf')[]
+    pit?: boolean
+    status?: 'draft' | 'active' | 'watch' | 'retired'
+  }) =>
+    request<{ ok: boolean; factor: ExternalFactorDefinition }>(
+      '/api/external-factors',
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
+
+  externalFactorDelete: (id: string) =>
+    request<{ ok: boolean; id: string }>(`/api/external-factors/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
   factorValidate: (formula: string) =>
     request<FactorValidateResponse>('/api/factors/validate', {
       method: 'POST',
@@ -3640,6 +3721,22 @@ export const api = {
     ),
 
   dataStatus: () => request<DataStatus>('/api/data/status'),
+  exchangeRate: (params?: { startDate?: string; endDate?: string; limit?: number }) => {
+    const query = new URLSearchParams()
+    if (params?.startDate) query.set('start_date', params.startDate)
+    if (params?.endDate) query.set('end_date', params.endDate)
+    if (params?.limit != null) query.set('limit', String(params.limit))
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    return request<{ items: ExchangeRateRow[]; count: number }>(`/api/exchange-rate${suffix}`)
+  },
+  exchangeRateSync: (startDate?: string, endDate?: string) =>
+    request<ExchangeRateSyncResult>('/api/exchange-rate/sync', {
+      method: 'POST',
+      body: JSON.stringify({
+        ...(startDate ? { start_date: startDate } : {}),
+        ...(endDate ? { end_date: endDate } : {}),
+      }),
+    }),
   dataClear: () => request<{ deleted_files: number }>('/api/data/clear', { method: 'POST' }),
   refreshCache: () => request<{ ok: boolean }>('/api/data/refresh-cache', { method: 'POST' }),
   enrichedSchema: (table: string) => request<EnrichedField[]>(`/api/data/schema/${table}`),
@@ -4241,6 +4338,26 @@ export const api = {
     )
   },
 
+  signalChartMarkers: (
+    signalIds: string[],
+    symbol: string,
+    assetType: 'stock' | 'etf',
+    timeframe: KlinePeriod,
+    range: { start: string; end: string },
+    days = 20,
+  ) => {
+    const params = new URLSearchParams({
+      symbol,
+      asset_type: assetType,
+      timeframe,
+      start_date: range.start,
+      end_date: range.end,
+      signal_ids: signalIds.join(','),
+      days: String(days),
+    })
+    return request<SignalChartResponse>(`/api/strategy-chart/signal-markers?${params.toString()}`)
+  },
+
   /** 发布 research_only 的 AI 草稿策略(翻转为公开) */
   strategyPublish: (strategyId: string) =>
     request<{ ok: boolean; strategy_id: string }>(`/api/strategies/${encodeURIComponent(strategyId)}/publish`, { method: 'POST' }),
@@ -4547,6 +4664,36 @@ interface TableStats {
   trading_days: number
 }
 
+export interface ExchangeRateRow {
+  symbol: string
+  date: string
+  base: string
+  quote: string
+  rate: number
+  source: string
+  frequency: string
+  retrieved_at: string
+}
+
+export interface ExchangeRateSyncResult {
+  provider: string
+  symbol: string
+  symbols: string[]
+  rows_fetched: number
+  rows_written: number
+  start_date: string | null
+  end_date: string | null
+  latest_rate: number | null
+  latest_rates: Record<string, number>
+}
+
+interface ExchangeRateStats extends TableStats {
+  latest_rate: number | null
+  source: string | null
+  latest_rates: Record<string, number>
+  sources: Record<string, string>
+}
+
 interface InstrumentsStats {
   rows: number
   symbols_covered: number
@@ -4567,6 +4714,7 @@ export interface DataStatus {
   adj_factor: TableStats | null
   instruments: InstrumentsStats | null
   financials: { rows: number; tables: Record<string, { rows: number; symbols: number }> } | null
+  exchange_rate: ExchangeRateStats | null
   storage: {
     daily_files: number
     daily_size_mb: number
@@ -4596,10 +4744,13 @@ export interface DataStatus {
     financials_size_mb?: number
     ext_data_files?: number
     ext_data_size_mb?: number
+    exchange_rate_files?: number
+    exchange_rate_size_mb?: number
     total_size_mb: number
   }
   next_pipeline_run: string | null
   next_instruments_run: string | null
+  next_exchange_rate_run: string | null
   last_pipeline_run: string | null
   last_instruments_run: string | null
   checked_at: string

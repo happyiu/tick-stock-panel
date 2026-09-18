@@ -32,6 +32,7 @@ ROOT = Path(SPECPATH).parent
 FRONTEND_DIST = str(ROOT / "frontend" / "dist")
 TIERS_YAML = str(ROOT / "tiers.yaml")
 BUILTIN_STRATEGIES = str(ROOT / "backend" / "app" / "strategy" / "builtin")
+FRANKFURTER_PLUGIN = str(ROOT / "backend" / "app" / "plugins" / "frankfurter" / "plugin.yaml")
 # 图标按平台选: Windows 用 .ico, macOS 用 .icns (PyInstaller 对 .ico 在
 # mac 上静默忽略, 不换格式 Dock/Finder 会显示通用图标)。两者都由
 # packaging/generate_icon.py 一并生成。
@@ -88,6 +89,12 @@ hiddenimports += [
     "uvicorn.lifespan.on",
 ]
 
+# 内置汇率插件由 YAML 动态发现、由 entry 字符串动态导入。
+hiddenimports += [
+    "app.plugins.frankfurter",
+    "app.plugins.frankfurter.provider",
+]
+
 # ── fastapi / pydantic 元数据 (版本检测用) ───────────────────────────
 # 注意: 任何用 importlib.metadata.version() 读版本的包, 都必须 copy_metadata,
 # 否则 frozen 后报 PackageNotFoundError。tickflow 包内部就是这么读的。
@@ -115,6 +122,9 @@ datas += [(FRONTEND_DIST, "static")]
 datas += [(TIERS_YAML, ".")]
 # 内置策略 → app/strategy/builtin/ (importlib 动态加载, 不能进 PYZ)
 datas += [(BUILTIN_STRATEGIES, "app/strategy/builtin")]
+# 插件清单由 loader 在运行时扫描；只带当前已接入的 Frankfurter 清单，避免把
+# 其他插件的运行时依赖和 node_modules 一起塞进桌面包。
+datas += [(FRANKFURTER_PLUGIN, "app/plugins/frankfurter")]
 
 # ── 排除不需要的重型依赖 (主包不含 vectorbt 回测链) ──────────────────
 excludes = [

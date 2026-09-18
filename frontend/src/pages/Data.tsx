@@ -57,6 +57,7 @@ import { Skeleton } from '@/components/data/Skeleton'
 import { ExtDataStatCard } from '@/components/ext-data/ExtDataStatCard'
 import { CreateExtDialog } from '@/components/ext-data/CreateExtDialog'
 import { EditExtDialog } from '@/components/ext-data/EditExtDialog'
+import { toast } from '@/components/Toast'
 
 export function Data() {
   const qc = useQueryClient()
@@ -163,6 +164,12 @@ export function Data() {
   const [showRepair, setShowRepair] = useState(false)
   const [editingExt, setEditingExt] = useState<ExtDataConfig | null>(null)
   const [indexBatchInput, setIndexBatchInput] = useState('100')
+  const [exchangeRateStart, setExchangeRateStart] = useState(() => {
+    const d = new Date()
+    d.setFullYear(d.getFullYear() - 1)
+    return d.toISOString().slice(0, 10)
+  })
+  const [exchangeRateEnd, setExchangeRateEnd] = useState(() => new Date().toISOString().slice(0, 10))
 
   const extConfigs = useQuery({
     queryKey: QK.extData,
@@ -181,6 +188,17 @@ export function Data() {
       qc.invalidateQueries({ queryKey: QK.indexQuotes })
       qc.invalidateQueries({ queryKey: ['index-daily'] })
     },
+  })
+
+  const exchangeRateSync = useMutation({
+    mutationFn: ({ startDate, endDate }: { startDate?: string; endDate?: string }) =>
+      api.exchangeRateSync(startDate, endDate),
+    onSuccess: (result) => {
+      qc.invalidateQueries({ queryKey: QK.dataStatus })
+      qc.invalidateQueries({ queryKey: QK.exchangeRate })
+      toast(`汇率同步完成 · ${result.rows_fetched} 行`, 'success')
+    },
+    onError: (error: Error) => toast(`汇率同步失败: ${error.message}`, 'error'),
   })
 
   const prefs = usePreferences()
@@ -210,6 +228,7 @@ export function Data() {
     merge('kline.daily.batch', usableOr('daily', !!tfCaps?.['kline.daily.batch']))
     merge('kline.minute.batch', usableOr('minute', !!tfCaps?.['kline.minute.batch']))
     merge('financial', usableOr('financial', !!tfCaps?.['financial']))
+    merge('exchange_rate', usableOr('exchange_rate', false))
     return m
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tfCaps, matrix.data])
@@ -314,6 +333,8 @@ export function Data() {
   }, [history.data?.active_id])
 
   const s = status.data
+  const exchangeRateLatest = s?.exchange_rate?.latest_rates ?? {}
+  const exchangeRateSources = s?.exchange_rate?.sources ?? {}
   const isLoading = status.isLoading
   const isRunning = job.data?.status === 'running' || job.data?.status === 'pending'
   const isStarting = startSync.isPending
@@ -569,6 +590,23 @@ export function Data() {
           />
         )
       }
+      case 'exchange_rate':
+        return (
+          <StatCard
+            title="汇率"
+            hint="Frankfurter · 5 组货币对 + DXY"
+            stats={s?.exchange_rate}
+            loading={isLoading}
+            tierKey="exchange_rate"
+            capLimits={mergedCaps}
+            customProvider={routeProviderDisplay(matrix.data, 'exchange_rate')}
+            primaryValue={s?.exchange_rate?.latest_rate != null ? s.exchange_rate.latest_rate.toFixed(4) : null}
+            primaryLabel={`USD/CNY · 最新中间价 · ${s?.exchange_rate?.symbols_covered ?? 0} 组`}
+            onShowFields={() => setSchemaTable('exchange_rate')}
+            onSettings={() => setOpenSettings(v => v === 'exchange_rate' ? null : 'exchange_rate')}
+            settingsOpen={openSettings === 'exchange_rate'}
+          />
+        )
       case 'regime':
         return (
           <StatCard
@@ -859,6 +897,17 @@ export function Data() {
                     </motion.div>
                   )}
                 </AnimatePresence>
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-muted">外部 · 汇率</span>
+                  {s?.next_exchange_rate_run ? (
+                    <span className="inline-flex flex-col items-center leading-tight font-mono text-foreground">
+                      <span>→ {formatScheduleDatePart(s.next_exchange_rate_run)}</span>
+                      <span>{formatScheduleTimePart(s.next_exchange_rate_run)}</span>
+                    </span>
+                  ) : (
+                    <span className="font-mono text-secondary">工作日 18:00</span>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -894,6 +943,7 @@ export function Data() {
                 { label: 'Enriched', files: s?.storage.enriched_files,    size: s?.storage.enriched_size_mb },
                 { label: '分钟 K',   files: s?.storage.minute_files,      size: s?.storage.minute_size_mb },
                 { label: '财务数据', files: s?.storage.financials_files,   size: s?.storage.financials_size_mb },
+                { label: '汇率',     files: s?.storage.exchange_rate_files, size: s?.storage.exchange_rate_size_mb },
               ].map((item) => (
                 <div key={item.label} className="flex items-center justify-between text-[11px]">
                   <span className="text-muted">{item.label}</span>
@@ -1067,6 +1117,78 @@ export function Data() {
         {openSettings === 'regime' && (
           <SettingsModal title="市场环境 · 计算设置" onClose={() => setOpenSettings(null)}>
             <RegimeConfigCard />
+          </SettingsModal>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {openSettings === 'exchange_rate' && (
+          <SettingsModal title="汇率 · 同步设置" onClose={() => setOpenSettings(null)}>
+            <div className="space-y-4">
+              <div className="rounded-card border border-border bg-base/30 p-4 space-y-2">
+                <div className="text-sm font-medium text-foreground">5 组货币对 + DXY · 日频</div>
+                <div className="text-[11px] text-muted leading-relaxed">
+                  USD/CNY、JPY/CNY、HKD/CNY、EUR/CNY 使用 CFETS 中间价；USD/CNH 使用 Frankfurter 默认混合源；DXY 由六个组成货币按标准篮子公式派生，不代表 ICE 直采指数。自动任务在工作日 18:00 获取最新值；历史范围可手动回补。
+                </div>
+                {s?.exchange_rate?.source && (
+                  <div className="text-[10px] text-secondary">USD/CNY 来源: <span className="font-mono">{s.exchange_rate.source}</span></div>
+                )}
+              </div>
+              {Object.keys(exchangeRateLatest).length > 0 && (
+                <div className="rounded-card border border-border bg-base/30 p-4 space-y-2">
+                  <div className="text-[11px] text-muted">最新值</div>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]">
+                    {Object.entries(exchangeRateLatest)
+                      .sort(([a], [b]) => a.localeCompare(b))
+                      .map(([symbol, rate]) => (
+                        <div key={symbol} className="flex items-center justify-between gap-2">
+                          <span className="font-mono text-secondary">{symbol}</span>
+                          <span className="font-mono text-foreground">{rate.toFixed(4)}</span>
+                          <span className="text-[9px] text-muted truncate">{exchangeRateSources[symbol] ?? ''}</span>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-3">
+                <label className="space-y-1">
+                  <span className="text-[11px] text-muted">开始日期</span>
+                  <input
+                    type="date"
+                    value={exchangeRateStart}
+                    onChange={e => setExchangeRateStart(e.target.value)}
+                    className="w-full px-2 py-1.5 rounded-btn bg-elevated border border-border text-xs font-mono text-foreground outline-none focus:border-accent"
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-[11px] text-muted">结束日期</span>
+                  <input
+                    type="date"
+                    value={exchangeRateEnd}
+                    onChange={e => setExchangeRateEnd(e.target.value)}
+                    className="w-full px-2 py-1.5 rounded-btn bg-elevated border border-border text-xs font-mono text-foreground outline-none focus:border-accent"
+                  />
+                </label>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => exchangeRateSync.mutate({ startDate: exchangeRateStart, endDate: exchangeRateEnd })}
+                  disabled={!usableOr('exchange_rate', false) || exchangeRateSync.isPending}
+                  className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-btn bg-accent/90 text-base text-xs font-medium hover:bg-accent disabled:opacity-40 disabled:pointer-events-none transition-colors"
+                >
+                  {exchangeRateSync.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                  {exchangeRateSync.isPending ? '同步中…' : '同步日期范围'}
+                </button>
+                <button
+                  onClick={() => exchangeRateSync.mutate({})}
+                  disabled={!usableOr('exchange_rate', false) || exchangeRateSync.isPending}
+                  className="px-3 py-1.5 rounded-btn bg-elevated border border-border text-xs text-secondary hover:text-foreground disabled:opacity-40 disabled:pointer-events-none transition-colors"
+                >
+                  同步最新
+                </button>
+              </div>
+              {!usableOr('exchange_rate', false) && <MissingCapChip capKey="exchange_rate" />}
+            </div>
           </SettingsModal>
         )}
       </AnimatePresence>
@@ -1286,7 +1408,7 @@ export function Data() {
                   <ul className="mt-2 text-[11px] text-muted leading-relaxed space-y-0.5">
                     <li>· 个股维表、日 K、除权因子</li>
                     <li>· Enriched 指标数据、分钟 K</li>
-                    <li>· 财务数据、指数、ETF</li>
+                    <li>· 财务数据、指数、ETF、汇率</li>
                   </ul>
                   <p className="mt-2 text-[11px] text-danger/90">
                     操作不可恢复，需重新执行同步才能恢复数据。

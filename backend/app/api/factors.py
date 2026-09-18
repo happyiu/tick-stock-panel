@@ -35,6 +35,7 @@ def list_factors(asset_type: str | None = Query(default=None, pattern="^(stock|e
                 "stability": spec.stability,
                 "scale_free": spec.scale_free,
                 "dependencies": sorted(spec.dependencies),
+                "tags": list(spec.tags),
             }
             for spec in specs
         ]

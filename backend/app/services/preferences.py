@@ -311,6 +311,16 @@ def get_financial_provider() -> str:
     return provider if provider in _allowed_data_providers() else "tickflow"
 
 
+def get_exchange_rate_data_provider() -> str:
+    """汇率数据源默认使用内置 Frankfurter, 不回退到证券 TickFlow。"""
+    provider = str(load().get("exchange_rate_data_provider", "frankfurter") or "frankfurter").lower()
+    if provider == "frankfurter":
+        return provider
+    if provider == "tickflow":
+        return "frankfurter"
+    return provider if provider in _allowed_data_providers() else "frankfurter"
+
+
 # ===== 盘后管道拉取内容开关 (A股 / ETF / 指数 独立控制) =====
 
 def get_pipeline_pull_a_share() -> bool:

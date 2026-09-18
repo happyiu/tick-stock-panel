@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   AlertCircle,
   AlertTriangle,
+  DollarSign,
   CandlestickChart as CandlestickIcon,
   Check,
   CheckCircle2,
@@ -53,6 +54,7 @@ const DATASET_LABEL: Record<string, string> = {
   depth5: '五档',
   financial: '财务',
   full_minute: '全量分钟',
+  exchange_rate: '汇率',
 }
 
 /** 能力图标 (纯展示; 能力清单本身由后端注册表驱动) */
@@ -63,6 +65,7 @@ const CAP_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
   full_minute: Zap,
   adj_factor: Scale,
   financial: Landmark,
+  exchange_rate: DollarSign,
 }
 
 /** TickFlow 档位要求文本: none → 全档位, 其余 → starter+ 形式 */
@@ -155,6 +158,7 @@ const DEFAULT_ROUTING: Record<ProviderField, string> = {
   depth5_data_provider: 'tickflow',
   realtime_data_provider: 'tickflow',
   financial_data_provider: 'tickflow',
+  exchange_rate_data_provider: 'frankfurter',
 }
 
 /** 单个能力卡: 当前生效提供方 + 候选切换标签。
@@ -622,6 +626,7 @@ export function SettingsDataSourcesPanel({ highlight }: { highlight?: string } =
     realtime: prefs.data?.realtime_data_provider || 'tickflow',
     depth5: prefs.data?.depth5_data_provider || 'tickflow',
     financial: prefs.data?.financial_data_provider || 'tickflow',
+    exchange_rate: prefs.data?.exchange_rate_data_provider || 'frankfurter',
   }
   const servingDatasets = (name: string) =>
     Object.entries(effProvider).filter(([, v]) => v === name).map(([k]) => k)
@@ -673,6 +678,7 @@ export function SettingsDataSourcesPanel({ highlight }: { highlight?: string } =
         realtime_data_provider: pick('realtime'),
         minute_data_provider: pick('minute'),
         financial_data_provider: pick('financial'),
+        exchange_rate_data_provider: pick('exchange_rate'),
       })
     },
     onSuccess: (_d, name) => {

@@ -24,6 +24,7 @@ from app.backtest.fundamentals import (
     attach_fundamental_factors,
     load_fundamental_snapshot,
 )
+from app.factors.registry import _CATALOG
 from app.factors.registry import factor_columns_view as _factor_columns_view
 from app.strategy.scoring import (
     VIRTUAL_SCORING_DEPENDENCIES as DERIVED_FACTOR_DEPENDENCIES,
@@ -36,7 +37,9 @@ logger = logging.getLogger(__name__)
 
 # 可研究因子目录。保留历史 ID 兼容已有候选方案; 价格尺度相关指标优先提供归一化版本。
 # P1 起目录元数据单一权威来源为 app/factors/registry.py, 本常量为兼容别名 (顺序与键不变)。
-FACTOR_COLUMNS: list[dict] = _factor_columns_view()
+# 历史兼容常量固定为内置目录; 运行期动态因子统一从 factor_columns_view() 读取,
+# 避免外部因子在本模块首次导入时污染旧的 77 项调度基线。
+FACTOR_COLUMNS: list[dict] = [spec.column_view() for spec in _CATALOG]
 
 FACTOR_WARMUP_DAYS = 120
 FACTOR_METHODOLOGY_VERSION = "factor_v2"
@@ -268,7 +271,8 @@ class FactorBacktestService:
             trading_dates=trading_dates,
         )
 
-        metadata = {item["id"]: item for item in FACTOR_COLUMNS}
+        # 动态外部因子不在模块导入时的兼容快照中, 读取当前注册表元数据。
+        metadata = {item["id"]: item for item in _factor_columns_view()}
         fundamentals_missing = (
             any(name in FUNDAMENTAL_FACTOR_NAMES for name in factor_names)
             and self._fundamentals_missing()
@@ -676,12 +680,29 @@ class FactorBacktestService:
             return panel
 
         # 扩展表因子 (ext_ base 条目) = 外部物化列, 指标补算管线不认识;
-        # 请求的因子集合命中时在此按 (symbol, date) 时序对齐注入 (与
-        # compute_signals 同一原语, 历史帧不含快照 → 无未来函数)。
+        # 请求的因子集合命中时按 (symbol, date) 时序对齐注入。
         from app.factors import ext_factors
 
         if factor_cols & ext_factors.ext_factor_ids():
             panel = ext_factors.attach_ext_columns(panel, include_snapshot=False)
+
+        # 独立外部因子按日期广播到所有面板标的。先补算相对强弱的内部依赖,
+        # 再附着外部列; 这样不改变原有 compute_indicators / DSL 路径。
+        from app.external_factors import engine as external_factors
+
+        external_ids = external_factors.external_factor_ids()
+        requested_external = factor_cols & external_ids
+        if requested_external:
+            dependencies = external_factors.external_factor_dependencies(requested_external)
+            internal_dependencies = dependencies - external_ids - set(panel.columns)
+            if internal_dependencies:
+                panel = FactorBacktestService._compute_missing_factors(
+                    panel, internal_dependencies, assume_sorted=assume_sorted,
+                )
+            panel = external_factors.attach_external_factors(panel, requested_external)
+            factor_cols = factor_cols - requested_external
+            if not factor_cols:
+                return panel
 
         from app.factors.registry import get_factor
         from app.indicators.pipeline import compute_indicators

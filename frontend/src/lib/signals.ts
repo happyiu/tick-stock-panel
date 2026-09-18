@@ -15,6 +15,12 @@ export interface BuiltinSignalDefinition {
   description: string
 }
 
+export interface ChartSignalSelection {
+  id: string
+  name: string
+  kind: SignalKind
+}
+
 /** 内置原子信号清单 (权威展示来源, 两页统一) */
 export const BUILTIN_SIGNAL_DEFINITIONS: BuiltinSignalDefinition[] = [
   {

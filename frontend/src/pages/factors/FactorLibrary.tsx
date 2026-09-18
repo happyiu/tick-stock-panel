@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowRight, FlaskConical, PenLine, Search, Sparkles, Trash2, X } from 'lucide-react'
+import { ArrowRight, FlaskConical, PenLine, Plus, Search, Sparkles, Trash2, X } from 'lucide-react'
 import { Modal } from '@/components/Modal'
 import { toast } from '@/components/Toast'
+import { CreateExternalFactorDialog } from '@/components/ext-data/CreateExternalFactorDialog'
 import { api, type FactorLibraryItem } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { GenerateFactorStrategyDialog } from './GenerateFactorStrategyDialog'
@@ -16,11 +17,17 @@ const KIND_META: Record<FactorLibraryItem['kind'], { label: string; cls: string 
   custom: { label: '自定义', cls: 'bg-amber-400/10 text-amber-500' },
 }
 
+function isExternalFactor(item: FactorLibraryItem): boolean {
+  return item.tags?.includes('external-factor') === true
+    || (item.kind === 'base' && (item.id.startsWith('ext_') || item.id.startsWith('ef_')))
+}
+
 export function FactorLibrary({ onInspect, onEdit }: { onInspect: (factorId: string) => void; onEdit?: (factorId: string) => void }) {
   const [query, setQuery] = useState('')
   const [kind, setKind] = useState('all')
   const [group, setGroup] = useState('all')
   const [detail, setDetail] = useState<FactorLibraryItem | null>(null)
+  const [createExternalOpen, setCreateExternalOpen] = useState(false)
 
   const lib = useQuery({
     queryKey: QK.factorLibrary('all'),
@@ -36,7 +43,8 @@ export function FactorLibrary({ onInspect, onEdit }: { onInspect: (factorId: str
   const filtered = useMemo(() => {
     const keyword = query.trim().toLowerCase()
     return factors.filter(item => {
-      if (kind !== 'all' && item.kind !== kind) return false
+      if (kind === 'external' && !isExternalFactor(item)) return false
+      if (kind !== 'all' && kind !== 'external' && item.kind !== kind) return false
       if (group !== 'all' && item.group !== group) return false
       if (keyword && !`${item.id} ${item.label} ${item.formula}`.toLowerCase().includes(keyword)) return false
       return true
@@ -58,6 +66,7 @@ export function FactorLibrary({ onInspect, onEdit }: { onInspect: (factorId: str
         </div>
         <select value={kind} onChange={event => setKind(event.target.value)} className={`${INPUT_CLS} w-24`} aria-label="因子类型">
           <option value="all">全部类型</option>
+          <option value="external">外部</option>
           <option value="base">基础</option>
           <option value="virtual">虚拟</option>
           <option value="composite">复合</option>
@@ -67,6 +76,15 @@ export function FactorLibrary({ onInspect, onEdit }: { onInspect: (factorId: str
           <option value="all">全部分组</option>
           {groups.map(name => <option key={name} value={name}>{name}</option>)}
         </select>
+        <button
+          type="button"
+          onClick={() => setCreateExternalOpen(true)}
+          className="inline-flex items-center gap-1 rounded-btn border border-accent/30 bg-accent/10 px-2.5 py-1.5 text-xs font-medium text-accent transition-colors hover:bg-accent/15"
+          title="创建按日期广播的市场、指数或相对强弱因子"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          创建外部因子
+        </button>
         <span className="ml-auto text-[10px] text-muted">{lib.isLoading ? '加载中…' : `${filtered.length} / ${factors.length} 个因子`}</span>
       </div>
 
@@ -108,8 +126,8 @@ export function FactorLibrary({ onInspect, onEdit }: { onInspect: (factorId: str
                   </td>
                   <td className="px-3 py-2.5 text-secondary">{item.group}</td>
                   <td className="px-3 py-2.5">
-                    <span className={`inline-flex rounded-btn px-1.5 py-0.5 text-[10px] font-medium ${KIND_META[item.kind].cls}`}>
-                      {KIND_META[item.kind].label}
+                    <span className={`inline-flex rounded-btn px-1.5 py-0.5 text-[10px] font-medium ${isExternalFactor(item) ? 'bg-sky-400/10 text-sky-500' : KIND_META[item.kind].cls}`}>
+                      {isExternalFactor(item) ? '外部' : KIND_META[item.kind].label}
                     </span>
                     {item.pit && <span className="ml-1 text-[10px] text-amber-500" title="点时数据: 仅使用公告日不晚于当日的财务数据">点时</span>}
                   </td>
@@ -138,6 +156,7 @@ export function FactorLibrary({ onInspect, onEdit }: { onInspect: (factorId: str
       </div>
 
       {detail && <FactorDetailModal item={detail} onClose={() => setDetail(null)} onInspect={onInspect} onEdit={onEdit} />}
+      {createExternalOpen && <CreateExternalFactorDialog onClose={() => setCreateExternalOpen(false)} />}
     </div>
   )
 }
@@ -164,6 +183,7 @@ function FactorDetailModal({
     onError: (error: Error) => toast(`状态更新失败 · ${error.message}`, 'error'),
   })
   const isDynamic = item.kind === 'custom' || item.kind === 'composite'
+  const external = isExternalFactor(item)
   const [groupDraft, setGroupDraft] = useState(item.group)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [blockedRefs, setBlockedRefs] = useState<string[] | null>(null)
@@ -206,7 +226,7 @@ function FactorDetailModal({
     ['标识', item.id],
     ['名称', item.label],
     ['分组', item.group],
-    ['类型', KIND_META[item.kind].label],
+    ['类型', external ? '外部' : KIND_META[item.kind].label],
     ['公式', item.formula],
     ['版本', `v${item.version}`],
     ['预热', item.warmup_bars > 1 ? `${item.warmup_bars} 个交易日` : '无需滚动窗口'],
@@ -227,8 +247,8 @@ function FactorDetailModal({
           <div className="flex items-center gap-2">
             <FlaskConical className="h-4 w-4 shrink-0 text-accent" />
             <span id="factor-detail-title" className="truncate text-sm font-semibold text-foreground">{item.label}</span>
-            <span className={`inline-flex shrink-0 rounded-btn px-1.5 py-0.5 text-[10px] font-medium ${KIND_META[item.kind].cls}`}>
-              {KIND_META[item.kind].label}
+            <span className={`inline-flex shrink-0 rounded-btn px-1.5 py-0.5 text-[10px] font-medium ${external ? 'bg-sky-400/10 text-sky-500' : KIND_META[item.kind].cls}`}>
+              {external ? '外部' : KIND_META[item.kind].label}
             </span>
           </div>
           <div className="mt-1 font-mono text-[11px] text-muted">{item.id}</div>
