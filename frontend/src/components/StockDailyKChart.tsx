@@ -1,13 +1,20 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { type KlineRow } from '@/lib/api'
-import { klineDailyQueryOptions } from '@/lib/kline'
-import { storage } from '@/lib/storage'
+import { Activity, Check, Layers, Loader2, Settings2, X } from 'lucide-react'
+import { api, type KlinePeriod, type KlineRow } from '@/lib/api'
+import type { ActionCurrentAction, ActionDefenseStatus, ActionObservation, ActionSignalStatus } from '@/lib/actionSignals'
+import type { ChanlunAnalysis } from '@/lib/chanlun'
+import type { ElliottAnalysis } from '@/lib/elliott'
+import { DEFAULT_30M_DAYS, defaultKlineRange, filterKlineRowsThrough, klinePeriodQueryOptions, normalizeKlineBarKey } from '@/lib/kline'
+import { QK } from '@/lib/queryKeys'
+import type { ChartSignalSelection as ChartSignalSelectionModel } from '@/lib/signals'
+import { storage, type StockPreviewChanlunOverlayConfig, type StockPreviewElliottOverlayConfig } from '@/lib/storage'
 import {
   EChartsCandlestick,
   OVERLAY_INDICATORS,
   SUB_CHARTS,
   type ChartMarker,
+  type ChartPriceBand,
   type ChartPriceLine,
   type ChartRange,
   type OHLC,
@@ -17,6 +24,20 @@ import {
 const SUB_INFO_H = 16
 const SUB_GAP = 4
 const DEFAULT_VOLUME_COMPARE: VolumeCompareConfig = { enabled: true, days: 1 }
+const DEFAULT_CHANLUN_OVERLAY: StockPreviewChanlunOverlayConfig = {
+  enabled: true,
+  fractals: false,
+  strokes: true,
+  segments: false,
+  centers: true,
+  candidates: true,
+  divergences: false,
+}
+const DEFAULT_ELLIOTT_OVERLAY: StockPreviewElliottOverlayConfig = {
+  enabled: false,
+  labels: true,
+  strokes: true,
+}
 
 function normalizeVolumeCompare(config: VolumeCompareConfig): VolumeCompareConfig {
   return {
@@ -25,13 +46,47 @@ function normalizeVolumeCompare(config: VolumeCompareConfig): VolumeCompareConfi
   }
 }
 
+function normalizeChanlunOverlay(config: StockPreviewChanlunOverlayConfig): StockPreviewChanlunOverlayConfig {
+  return {
+    enabled: config?.enabled !== false,
+    fractals: config?.fractals === true,
+    strokes: config?.strokes !== false,
+    segments: config?.segments === true,
+    centers: config?.centers !== false,
+    candidates: config?.candidates !== false,
+    divergences: config?.divergences === true,
+  }
+}
+
+function normalizeElliottOverlay(config: StockPreviewElliottOverlayConfig): StockPreviewElliottOverlayConfig {
+  return {
+    enabled: config?.enabled === true,
+    labels: config?.labels !== false,
+    strokes: config?.strokes !== false,
+  }
+}
+
+function loadActiveSubCharts(): string[] {
+  const saved = storage.stockPreviewSubCharts.get(['vol'])
+  if (!Array.isArray(saved)) return ['vol']
+  const valid = saved.filter((key, index) =>
+    typeof key === 'string'
+      && SUB_CHARTS.some(chart => chart.key === key)
+      && saved.indexOf(key) === index,
+  )
+  return saved.length > 0 && valid.length === 0 ? ['vol'] : valid
+}
+
 interface Props {
   symbol: string
   height?: number
   className?: string
   dateRange?: { start: string; end: string }
   markers?: ChartMarker[]
+  /** 行动决策层历史事件标记；仅日线和30分钟周期接入。 */
+  actionMarkers?: ChartMarker[]
   ranges?: ChartRange[]
+  priceBands?: ChartPriceBand[]
   priceLines?: ChartPriceLine[]
   showLimitMarkers?: boolean
   showIndicatorControls?: boolean
@@ -42,26 +97,97 @@ interface Props {
   visibleBars?: number | 'all'
   linkedPrice?: number | null
   onDateClick?: (date: string) => void
+  selectedDate?: string | null
   onPriceDoubleClick?: (price: number, currentPrice: number) => void
   /** 扩展数据列参数（逗号分隔 config_id.field_name），透传给 klineDaily 接口 */
   extColumns?: string
   /** 加入自选日 (北京时间 YYYY-MM-DD); 有值时日K主图绘制「自选」竖虚线 */
   addedDate?: string | null
+  /** 日K自动刷新间隔(ms)。undefined = 不轮询(默认)。个股对话框实时刷新时传入, 盘中今日蜡烛随之更新 */
+  refetchIntervalMs?: number
+  period?: KlinePeriod
+  periodDays?: number
+  /** 技术分析模式下附带后端统一评分序列。 */
+  includeTechnicalScores?: boolean
+  /** 当前周期、当前历史截面的缠论结构近似结果；未传入时不显示相关控件和覆盖层。 */
+  chanlunAnalysis?: ChanlunAnalysis
+  /** 当前周期、当前历史截面的艾略特波浪摆动代理；覆盖层默认关闭。 */
+  elliottAnalysis?: ElliottAnalysis
+  /** 调试进行中时只展示到当前推进的 K 线。 */
+  visibleThrough?: string | null
+  /** 调试设置开启时隐藏当前推进 K 线的日期。 */
+  hideCurrentDate?: boolean
+  /** 当前已选中的策略；其入场/退出信号会叠加在 K 线。 */
+  selectedStrategy?: { id: string; name: string; source?: string } | null
+  /** 清除当前图表上的策略选择。 */
+  onClearStrategy?: () => void
+  /** 编辑当前周期的已选信号。 */
+  onAddSignal?: (assetType: 'stock' | 'etf', period: KlinePeriod) => void
+  /** 当前已选中的信号库信号；其命中会叠加在 K 线上。 */
+  selectedSignals?: ChartSignalSelectionModel[]
+  /** 清除当前图表上的信号选择。 */
+  onClearSignals?: () => void
+}
+
+export type StockActionState = {
+  action: ActionCurrentAction
+  observation: ActionObservation | null
+  defenseStatus: ActionDefenseStatus
+  status: ActionSignalStatus
+  reason: string
+}
+
+export type ChartStrategySelection = NonNullable<Props['selectedStrategy']>
+export type ChartSignalSelection = ChartSignalSelectionModel
+
+const ACTION_STATE_LABELS: Record<ActionCurrentAction, string> = {
+  bottom_observe: '底部观察',
+  top_observe: '高位观察',
+  extreme_top_observe: '极端高位观察',
+  attack: '试仓',
+  add: '加仓',
+  reduce: '减仓',
+  retreat: '退出',
+  hold: '持有',
+  defensive: '防守',
+  defense_test: '防守位测试',
+  wait: '等待',
+  wait_defensive: '高位观察',
+}
+
+export function actionStateClass(action: ActionCurrentAction): string {
+  if (action === 'attack') return 'text-bull bg-bull/10'
+  if (action === 'add' || action === 'hold') return 'text-accent bg-accent/10'
+  if (action === 'reduce' || action === 'top_observe' || action === 'extreme_top_observe' || action === 'wait_defensive') return 'text-warning bg-warning/10'
+  if (action === 'defense_test' || action === 'defensive') return 'text-warning bg-warning/10'
+  if (action === 'retreat') return 'text-bear bg-bear/10'
+  return 'text-muted bg-elevated'
+}
+
+export function actionStateLabel(state: StockActionState): string {
+  const label = ACTION_STATE_LABELS[state.action]
+  return state.action === 'defensive' || state.action === 'defense_test'
+    ? `${label}${state.observation ? ` · ${ACTION_STATE_LABELS[state.observation]}` : ''}`
+    : label
 }
 
 function isValidRow(r: any): boolean {
   return r && r.date != null && r.open != null && r.close != null
 }
 
-export function toOHLC(rows: KlineRow[]): OHLC[] {
+export function toOHLC(rows: KlineRow[], period: KlinePeriod = '1d'): OHLC[] {
   return rows
     .filter(isValidRow)
     .map(r => ({
-      date: typeof r.date === 'string' ? r.date.slice(0, 10) : String(r.date),
+      date: period === '30m'
+        ? String(r.date).replace('T', ' ').slice(0, 16)
+        : typeof r.date === 'string' ? r.date.slice(0, 10) : String(r.date),
       open: Number(r.open),
       high: Number(r.high),
       low: Number(r.low),
       close: Number(r.close),
+      periodEnd: r.period_end != null ? String(r.period_end).replace('T', ' ').slice(0, 16) : null,
+      isClosed: r.is_closed === true,
       volume: Number(r.volume ?? 0),
       ma5: r.ma5 != null ? Number(r.ma5) : null,
       ma10: r.ma10 != null ? Number(r.ma10) : null,
@@ -78,6 +204,8 @@ export function toOHLC(rows: KlineRow[]): OHLC[] {
       kdj_j: r.kdj_j != null ? Number(r.kdj_j) : null,
       boll_upper: r.boll_upper != null ? Number(r.boll_upper) : null,
       boll_lower: r.boll_lower != null ? Number(r.boll_lower) : null,
+      atr_14: r.atr_14 != null ? Number(r.atr_14) : null,
+      atr14: r.atr_14 != null ? Number(r.atr_14) : null,
     }))
 }
 
@@ -96,12 +224,7 @@ function buildLimitUpMarkers(rows: KlineRow[]): ChartMarker[] {
 }
 
 export function getDefaultRange(): { start: string; end: string } {
-  const now = new Date()
-  const end = now.toISOString().slice(0, 10)
-  const s = new Date(now)
-  s.setMonth(s.getMonth() - 6)
-  const start = s.toISOString().slice(0, 10)
-  return { start, end }
+  return defaultKlineRange('1d')
 }
 
 /** 工具栏小胶囊开关（指标与标注开关共用一套尺寸/关闭态样式，激活色由调用方给字面量）。 */
@@ -134,7 +257,9 @@ export function StockDailyKChart({
   className,
   dateRange: externalDateRange,
   markers,
+  actionMarkers,
   ranges,
+  priceBands,
   priceLines,
   showLimitMarkers = true,
   showIndicatorControls = true,
@@ -144,38 +269,214 @@ export function StockDailyKChart({
   visibleBars = 60,
   linkedPrice,
   onDateClick,
+  selectedDate,
   onPriceDoubleClick,
   extColumns,
   addedDate,
+  refetchIntervalMs,
+  period = '1d',
+  periodDays = DEFAULT_30M_DAYS,
+  includeTechnicalScores = false,
+  chanlunAnalysis,
+  elliottAnalysis,
+  visibleThrough,
+  hideCurrentDate = false,
+  selectedStrategy,
+  onClearStrategy,
+  onAddSignal,
+  selectedSignals,
+  onClearSignals,
 }: Props) {
-  const [activeIndicators, setActiveIndicators] = useState<string[]>(['vol'])
+  const [activeIndicators, setActiveIndicators] = useState<string[]>(loadActiveSubCharts)
   const [showMarkers, setShowMarkers] = useState(true)
   // 加入自选日标注（与「异动」标记相互独立）
   const [showAddedMark, setShowAddedMark] = useState(true)
+  const [showActionSignals, setShowActionSignals] = useState(() => storage.stockPreviewActionSignals.get(true))
   const [volumeCompare, setVolumeCompare] = useState<VolumeCompareConfig>(() =>
     normalizeVolumeCompare(storage.stockVolumeCompare.get(DEFAULT_VOLUME_COMPARE)),
   )
-  const dateRange = externalDateRange ?? getDefaultRange()
+  const [chanlunMenuOpen, setChanlunMenuOpen] = useState(false)
+  const [elliottMenuOpen, setElliottMenuOpen] = useState(false)
+  const [chanlunOverlay, setChanlunOverlay] = useState<StockPreviewChanlunOverlayConfig>(() =>
+    normalizeChanlunOverlay(storage.stockPreviewChanlunOverlay.get(DEFAULT_CHANLUN_OVERLAY)),
+  )
+  const [elliottOverlay, setElliottOverlay] = useState<StockPreviewElliottOverlayConfig>(() =>
+    normalizeElliottOverlay(storage.stockPreviewElliottOverlay.get(DEFAULT_ELLIOTT_OVERLAY)),
+  )
+  const dateRange = externalDateRange ?? defaultKlineRange(period)
 
-  // 查询配置统一来自 klineDailyQueryOptions, 与 StockPanel 信息条/邻近预取共享同一 cache key (只发一次请求)
-  const kline = useQuery({ ...klineDailyQueryOptions(symbol, dateRange, extColumns), enabled: !!symbol })
+  // 日K仍与 StockPanel 信息条共享 cache key；其余周期走独立、含 period 的查询键。
+  const kline = useQuery({
+    ...klinePeriodQueryOptions(symbol, period, dateRange, periodDays, extColumns, includeTechnicalScores),
+    enabled: !!symbol,
+    refetchInterval: refetchIntervalMs,
+  })
 
-  const rows = useMemo(() => toOHLC(kline.data?.rows ?? []), [kline.data?.rows])
+  const displayRawRows = useMemo(
+    () => filterKlineRowsThrough(kline.data?.rows ?? [], period, visibleThrough),
+    [kline.data?.rows, period, visibleThrough],
+  )
+  const rows = useMemo(() => toOHLC(displayRawRows, period), [displayRawRows, period])
+  const chartAssetType = kline.data?.asset_type === 'stock' || kline.data?.asset_type === 'etf'
+    ? kline.data.asset_type
+    : undefined
+  const strategyTimeframe: '1d' | '1w' | '30m' | null = period === '1mo' ? null : period
+  const signalTimeframe = period
+  const strategySignalsQuery = useQuery({
+    queryKey: QK.strategySignals(
+      selectedStrategy?.id ?? '',
+      symbol,
+      chartAssetType ?? '',
+      strategyTimeframe ?? '',
+      dateRange.start,
+      dateRange.end,
+      periodDays,
+    ),
+    queryFn: () => api.strategySignals(
+      selectedStrategy!.id,
+      symbol,
+      chartAssetType!,
+      strategyTimeframe!,
+      dateRange,
+      periodDays,
+    ),
+    enabled: Boolean(
+      selectedStrategy
+      && chartAssetType
+      && strategyTimeframe
+      && kline.data
+      && rows.length > 0,
+    ),
+    retry: 1,
+  })
+  const selectedSignalIds = useMemo(
+    () => (selectedSignals ?? []).map(signal => signal.id),
+    [selectedSignals],
+  )
+  const selectedSignalKey = selectedSignalIds.join(',')
+  const signalChartQuery = useQuery({
+    queryKey: QK.signalChartMarkers(
+      symbol,
+      chartAssetType ?? '',
+      signalTimeframe,
+      dateRange.start,
+      dateRange.end,
+      periodDays,
+      selectedSignalKey,
+    ),
+    queryFn: () => api.signalChartMarkers(
+      selectedSignalIds,
+      symbol,
+      chartAssetType!,
+      signalTimeframe,
+      dateRange,
+      periodDays,
+    ),
+    enabled: Boolean(
+      selectedSignalIds.length > 0
+      && chartAssetType
+      && signalTimeframe
+      && kline.data
+      && rows.length > 0,
+    ),
+    retry: 1,
+  })
+  const handleSignalChipClick = useCallback(() => {
+    if (onAddSignal && chartAssetType) onAddSignal(chartAssetType, period)
+  }, [chartAssetType, onAddSignal, period])
+  const strategyMarkers = useMemo<ChartMarker[]>(() => {
+    const visibleThroughKey = visibleThrough
+      ? normalizeKlineBarKey(visibleThrough, period)
+      : ''
+    return (strategySignalsQuery.data?.markers ?? [])
+      .map(marker => ({
+        date: normalizeKlineBarKey(marker.date, period),
+        kind: marker.kind === 'entry' ? 'buy' as const : 'sell' as const,
+        label: marker.kind === 'entry' ? '策略入' : '策略出',
+        color: marker.kind === 'entry' ? '#60A5FA' : '#F59E0B',
+      }))
+      .filter(marker => !visibleThroughKey || marker.date <= visibleThroughKey)
+  }, [period, strategySignalsQuery.data?.markers, visibleThrough])
+  const signalMarkers = useMemo<ChartMarker[]>(() => {
+    const selectedById = new Map((selectedSignals ?? []).map(signal => [signal.id, signal]))
+    const visibleThroughKey = visibleThrough
+      ? normalizeKlineBarKey(visibleThrough, period)
+      : ''
+    const groups = [
+      { kind: 'entry' as const, chartKind: 'buy' as const, label: '信号入', color: '#22D3EE' },
+      { kind: 'exit' as const, chartKind: 'sell' as const, label: '信号出', color: '#FB7185' },
+      { kind: 'both' as const, chartKind: 'neutral' as const, label: '信号', color: '#A78BFA' },
+    ]
+    const result: ChartMarker[] = []
+    for (const marker of signalChartQuery.data?.markers ?? []) {
+      const activeIds = marker.signals.filter(signalId => selectedById.has(signalId))
+      for (const group of groups) {
+        const ids = activeIds.filter(signalId => selectedById.get(signalId)?.kind === group.kind)
+        if (ids.length === 0) continue
+        const names = ids.map(signalId => selectedById.get(signalId)?.name ?? signalId)
+        const name = names.length > 2
+          ? `${names.slice(0, 2).join('、')}等${names.length}项`
+          : names.join('、')
+        result.push({
+          date: normalizeKlineBarKey(marker.date, period),
+          kind: group.chartKind,
+          above: group.kind === 'both',
+          label: `${group.label}·${name}`,
+          color: group.color,
+        })
+      }
+    }
+    return result.filter(marker => !visibleThroughKey || marker.date <= visibleThroughKey)
+  }, [period, selectedSignals, signalChartQuery.data?.markers, visibleThrough])
   const stockInfo = kline.data?.stock_info
-  const limitMarkers = useMemo(() => buildLimitUpMarkers(kline.data?.rows ?? []), [kline.data?.rows])
+  const limitMarkers = useMemo(() => buildLimitUpMarkers(displayRawRows), [displayRawRows])
+  const effectiveShowLimitMarkers = showLimitMarkers && period === '1d' && kline.data?.asset_type !== 'etf'
   const allMarkers = useMemo(() => [
     ...(markers ?? []),
-    ...(showLimitMarkers ? limitMarkers : []),
-  ], [limitMarkers, markers, showLimitMarkers])
+    ...(showActionSignals && (period === '1d' || period === '30m') ? (actionMarkers ?? []) : []),
+    ...(effectiveShowLimitMarkers ? limitMarkers : []),
+    ...strategyMarkers,
+    ...signalMarkers,
+  ], [actionMarkers, effectiveShowLimitMarkers, limitMarkers, markers, period, showActionSignals, signalMarkers, strategyMarkers])
+
+  const toggleActionSignals = useCallback(() => {
+    setShowActionSignals(value => {
+      const next = !value
+      storage.stockPreviewActionSignals.set(next)
+      return next
+    })
+  }, [])
 
   const toggleIndicator = useCallback((key: string) => {
-    setActiveIndicators(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key])
+    setActiveIndicators(prev => {
+      const next = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+      if (SUB_CHARTS.some(chart => chart.key === key)) {
+        storage.stockPreviewSubCharts.set(next.filter(item => SUB_CHARTS.some(chart => chart.key === item)))
+      }
+      return next
+    })
   }, [])
 
   const updateVolumeCompare = useCallback((patch: Partial<VolumeCompareConfig>) => {
     setVolumeCompare(prev => {
       const next = normalizeVolumeCompare({ ...prev, ...patch })
       storage.stockVolumeCompare.set(next)
+      return next
+    })
+  }, [])
+
+  const updateChanlunOverlay = useCallback((patch: Partial<StockPreviewChanlunOverlayConfig>) => {
+    setChanlunOverlay(previous => {
+      const next = normalizeChanlunOverlay({ ...previous, ...patch })
+      storage.stockPreviewChanlunOverlay.set(next)
+      return next
+    })
+  }, [])
+
+  const updateElliottOverlay = useCallback((patch: Partial<StockPreviewElliottOverlayConfig>) => {
+    setElliottOverlay(previous => {
+      const next = normalizeElliottOverlay({ ...previous, ...patch })
+      storage.stockPreviewElliottOverlay.set(next)
       return next
     })
   }, [])
@@ -192,26 +493,161 @@ export function StockDailyKChart({
 
   return (
     <div className={className} style={{ minHeight: chartHeight }}>
-      {showIndicatorControls && rows.length > 0 && (
-        <div className="flex items-center gap-1.5 px-1 pb-0.5">
-          {SUB_CHARTS.map(ind => (
-            <ChartPill
-              key={ind.key}
-              active={activeIndicators.includes(ind.key)}
-              label={ind.label}
-              activeClass="bg-accent/20 text-accent"
-              onClick={() => toggleIndicator(ind.key)}
-            />
-          ))}
-          {OVERLAY_INDICATORS.map(ind => (
-            <ChartPill
-              key={ind.key}
-              active={activeIndicators.includes(ind.key)}
-              label={ind.label}
-              activeClass="bg-accent/20 text-accent"
-              onClick={() => toggleIndicator(ind.key)}
-            />
-          ))}
+      {(showIndicatorControls || selectedStrategy || (selectedSignals?.length ?? 0) > 0) && rows.length > 0 && (
+        <div className="px-1 pb-0.5">
+          <div className="flex min-w-0 items-center gap-1.5">
+          {showIndicatorControls && (<>
+            {SUB_CHARTS.map(ind => (
+              <button
+                key={ind.key}
+                onClick={() => toggleIndicator(ind.key)}
+                className={`px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors ${
+                  activeIndicators.includes(ind.key)
+                    ? 'bg-accent/20 text-accent'
+                    : 'bg-elevated text-muted hover:text-secondary'
+                }`}
+              >
+                {ind.label}
+              </button>
+            ))}
+            {OVERLAY_INDICATORS.map(ind => (
+              <button
+                key={ind.key}
+                onClick={() => toggleIndicator(ind.key)}
+                className={`px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors ${
+                  activeIndicators.includes(ind.key)
+                    ? 'bg-accent/20 text-accent'
+                    : 'bg-elevated text-muted hover:text-secondary'
+                }`}
+              >
+                {ind.label}
+              </button>
+            ))}
+          {chanlunAnalysis && (
+            <div
+              className="relative ml-0.5 flex items-center"
+              onBlur={event => {
+                if (!event.currentTarget.contains(event.relatedTarget)) setChanlunMenuOpen(false)
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => updateChanlunOverlay({ enabled: !chanlunOverlay.enabled })}
+                className={`rounded-l px-2 py-0.5 text-[10px] font-mono transition-colors ${
+                  chanlunOverlay.enabled
+                    ? 'bg-[#8B5CF6]/20 text-[#A78BFA]'
+                    : 'bg-elevated text-muted hover:text-secondary'
+                }`}
+                aria-pressed={chanlunOverlay.enabled}
+                title={chanlunOverlay.enabled ? '隐藏缠论覆盖层' : '显示缠论覆盖层'}
+              >
+                缠论
+              </button>
+              <button
+                type="button"
+                onClick={() => setChanlunMenuOpen(value => !value)}
+                className="rounded-r border-l border-border/60 bg-elevated px-1.5 py-0.5 text-muted transition-colors hover:text-secondary"
+                title="配置缠论覆盖层"
+                aria-label="配置缠论覆盖层"
+                aria-expanded={chanlunMenuOpen}
+              >
+                <Settings2 className="h-3 w-3" />
+              </button>
+              {chanlunMenuOpen && (
+                <div className="absolute left-0 top-full z-30 mt-1 w-36 rounded-card border border-border bg-surface p-1.5 shadow-xl">
+                  {([
+                    ['fractals', '分型'],
+                    ['strokes', '笔'],
+                    ['segments', '线段代理'],
+                    ['centers', '中枢'],
+                    ['candidates', '买卖点候选'],
+                    ['divergences', '背驰代理'],
+                  ] as const).map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      role="checkbox"
+                      aria-checked={chanlunOverlay[key]}
+                      onClick={() => updateChanlunOverlay({ [key]: !chanlunOverlay[key] })}
+                      className="flex w-full items-center gap-2 rounded-btn px-2 py-1.5 text-left text-[10px] text-secondary transition-colors hover:bg-elevated hover:text-foreground"
+                    >
+                      <span className={`flex h-3.5 w-3.5 items-center justify-center rounded border ${chanlunOverlay[key] ? 'border-[#8B5CF6] bg-[#8B5CF6]' : 'border-border bg-base'}`}>
+                        {chanlunOverlay[key] && <Check className="h-2.5 w-2.5 text-white" strokeWidth={3} />}
+                      </span>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {elliottAnalysis && (
+            <div
+              className="relative ml-0.5 flex items-center"
+              onBlur={event => {
+                if (!event.currentTarget.contains(event.relatedTarget)) setElliottMenuOpen(false)
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => updateElliottOverlay({ enabled: !elliottOverlay.enabled })}
+                className={`rounded-l px-2 py-0.5 text-[10px] font-mono transition-colors ${
+                  elliottOverlay.enabled
+                    ? 'bg-[#F59E0B]/20 text-[#FBBF24]'
+                    : 'bg-elevated text-muted hover:text-secondary'
+                }`}
+                aria-pressed={elliottOverlay.enabled}
+                title={elliottOverlay.enabled ? '隐藏波浪覆盖层' : '显示波浪覆盖层'}
+              >
+                波浪
+              </button>
+              <button
+                type="button"
+                onClick={() => setElliottMenuOpen(value => !value)}
+                className="rounded-r border-l border-border/60 bg-elevated px-1.5 py-0.5 text-muted transition-colors hover:text-secondary"
+                title="配置波浪覆盖层"
+                aria-label="配置波浪覆盖层"
+                aria-expanded={elliottMenuOpen}
+              >
+                <Settings2 className="h-3 w-3" />
+              </button>
+              {elliottMenuOpen && (
+                <div className="absolute left-0 top-full z-30 mt-1 w-32 rounded-card border border-border bg-surface p-1.5 shadow-xl">
+                  {([
+                    ['labels', '拐点标签'],
+                    ['strokes', '波段连线'],
+                  ] as const).map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      role="checkbox"
+                      aria-checked={elliottOverlay[key]}
+                      onClick={() => updateElliottOverlay({ [key]: !elliottOverlay[key] })}
+                      className="flex w-full items-center gap-2 rounded-btn px-2 py-1.5 text-left text-[10px] text-secondary transition-colors hover:bg-elevated hover:text-foreground"
+                    >
+                      <span className={`flex h-3.5 w-3.5 items-center justify-center rounded border ${elliottOverlay[key] ? 'border-[#F59E0B] bg-[#F59E0B]' : 'border-border bg-base'}`}>
+                        {elliottOverlay[key] && <Check className="h-2.5 w-2.5 text-white" strokeWidth={3} />}
+                      </span>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {(actionMarkers?.length ?? 0) > 0 && (period === '1d' || period === '30m') && (
+            <button
+              type="button"
+              onClick={toggleActionSignals}
+              className={`ml-1 px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors ${
+                showActionSignals ? 'text-accent bg-accent/10' : 'bg-elevated text-muted hover:text-secondary'
+              }`}
+              aria-pressed={showActionSignals}
+              title={showActionSignals ? '隐藏行动信号' : '显示行动信号'}
+            >
+              行动信号
+            </button>
+          )}
           {activeIndicators.includes('vol') && (
             <div className="ml-0.5 flex h-5 items-center gap-1.5 border-l border-border/70 pl-2">
               <span className="text-[10px] text-muted">量比</span>
@@ -243,32 +679,104 @@ export function StockDailyKChart({
               </select>
             </div>
           )}
-          {/* 两个标注开关统一右对齐 */}
-          <div className="ml-auto flex items-center gap-1.5">
-            {showMarkerToggle && showLimitMarkers && (
-              <ChartPill
-                active={showMarkers}
-                label="异动"
-                activeClass="text-[#FACC15] bg-[#FACC15]/10"
-                onClick={() => setShowMarkers(v => !v)}
-              />
-            )}
-            {/* 激活色与图表里的 ADDED_DATE_COLOR 一致; Tailwind 只认字面量类名, 故写死色值 */}
-            {showMarkerToggle && addedDate && (
-              <ChartPill
-                active={showAddedMark}
-                label="自选"
-                activeClass="text-[#3B82F6] bg-[#3B82F6]/10"
-                title={showAddedMark ? '隐藏K线上的加入自选日标注' : '显示K线上的加入自选日标注'}
-                onClick={() => setShowAddedMark(v => !v)}
-              />
-            )}
+          {showMarkerToggle && effectiveShowLimitMarkers && (
+            <button
+              onClick={() => setShowMarkers(v => !v)}
+              className={`ml-auto px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors ${
+                showMarkers
+                  ? 'text-[#FACC15] bg-[#FACC15]/10'
+                  : 'bg-elevated text-muted hover:text-secondary'
+              }`}
+            >
+              异动
+            </button>
+          )}
+          </>)}
+          {/* 激活色与图表里的 ADDED_DATE_COLOR 一致; Tailwind 只认字面量类名, 故写死色值 */}
+          {showMarkerToggle && addedDate && (
+            <ChartPill
+              active={showAddedMark}
+              label="自选"
+              activeClass="text-[#3B82F6] bg-[#3B82F6]/10"
+              title={showAddedMark ? '隐藏K线上的加入自选日标注' : '显示K线上的加入自选日标注'}
+              onClick={() => setShowAddedMark(v => !v)}
+            />
+          )}
+          {(selectedStrategy
+            || (selectedSignals?.length ?? 0) > 0) && (
+            <div className="ml-auto flex shrink-0 items-center gap-1.5">
+              {selectedStrategy && (
+                <button
+                  type="button"
+                  onClick={onClearStrategy}
+                  title={`移除策略：${selectedStrategy.name}`}
+                  className="inline-flex max-w-[190px] shrink-0 items-center gap-1 rounded border border-accent/30 bg-accent/10 px-2 py-0.5 text-[10px] text-accent transition-colors hover:border-accent/50 hover:bg-accent/15"
+                >
+                  <Layers className="h-3 w-3 shrink-0" />
+                  <span className="truncate">{selectedStrategy.name}</span>
+                  {strategySignalsQuery.isLoading && (
+                    <Loader2 className="h-3 w-3 shrink-0 animate-spin opacity-80" aria-label="策略信号加载中" />
+                  )}
+                  {strategySignalsQuery.isError && (
+                    <span className="shrink-0 text-danger" title="策略信号加载失败">!</span>
+                  )}
+                  {strategySignalsQuery.isSuccess && (
+                    <span className="shrink-0 text-[9px] text-muted" title={`策略命中 ${strategySignalsQuery.data.count} 处`}>
+                      {strategySignalsQuery.data.count}处
+                    </span>
+                  )}
+                  <X className="h-3 w-3 shrink-0 opacity-70" />
+                </button>
+              )}
+              {selectedSignals && selectedSignals.length > 0 && (
+                <div
+                  className="inline-flex max-w-[210px] shrink-0 items-center gap-0 rounded border border-cyan-400/30 bg-cyan-400/10 text-[10px] text-cyan-300 transition-colors hover:border-cyan-400/50"
+                >
+                  <button
+                    type="button"
+                    onClick={handleSignalChipClick}
+                    title="点击编辑已选择的信号"
+                    aria-label="编辑已选择的信号"
+                    className="inline-flex min-w-0 flex-1 items-center gap-1 px-2 py-0.5 text-left text-cyan-300 hover:bg-cyan-400/10"
+                  >
+                    <Activity className="h-3 w-3 shrink-0" />
+                    <span className="truncate">{selectedSignals.length === 1 ? selectedSignals[0].name : `信号 ${selectedSignals.length}个`}</span>
+                    {signalChartQuery.isLoading && (
+                      <Loader2 className="h-3 w-3 shrink-0 animate-spin opacity-80" aria-label="信号加载中" />
+                    )}
+                    {signalChartQuery.isError && (
+                      <span className="shrink-0 text-danger" title="信号加载失败">!</span>
+                    )}
+                    {signalChartQuery.isSuccess && (
+                      <span className="shrink-0 text-[9px] text-muted" title={`信号命中 ${signalChartQuery.data.count} 处`}>
+                        {signalChartQuery.data.count}处
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onClearSignals}
+                    aria-label="移除全部已选择信号"
+                    title="移除全部已选择信号"
+                    className="shrink-0 rounded-r px-1.5 py-0.5 opacity-70 transition-colors hover:bg-cyan-400/15 hover:opacity-100"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
           </div>
         </div>
       )}
       {kline.isLoading && <div className="text-sm text-muted py-4">加载中…</div>}
-      {kline.isError && <div className="text-sm text-danger py-2">日K加载失败</div>}
-      {!kline.isLoading && !kline.isError && (kline.data?.rows?.length ?? 0) > 0 && rows.length === 0 && (
+      {kline.isError && <div className="text-sm text-danger py-2">K线加载失败</div>}
+      {!kline.isLoading && !kline.isError && displayRawRows.length === 0 && (
+        <div className="flex items-center justify-center text-sm text-muted" style={{ height }}>
+          {period === '30m' ? '暂无30分钟K数据，请检查图表行情数据源' : '暂无该周期K线数据'}
+        </div>
+      )}
+      {!kline.isLoading && !kline.isError && displayRawRows.length > 0 && rows.length === 0 && (
         <div className="text-sm text-danger py-2">数据格式异常，请刷新页面</div>
       )}
       {rows.length > 0 && (
@@ -276,6 +784,7 @@ export function StockDailyKChart({
           data={rows}
           markers={allMarkers}
           ranges={ranges}
+          priceBands={priceBands}
           priceLines={priceLines}
           height={chartHeight - 22}
           showMA={showMA}
@@ -283,13 +792,20 @@ export function StockDailyKChart({
           showMarkers={showMarkers}
           stockInfo={stockInfo}
           symbol={symbol}
+          assetType={kline.data?.asset_type}
           linkedPrice={linkedPrice}
           onDateClick={onDateClick}
+          selectedDate={selectedDate}
           onPriceDoubleClick={onPriceDoubleClick}
           visibleBars={visibleBars}
           activeIndicators={activeIndicators}
           volumeCompare={volumeCompare}
           addedDate={showAddedMark ? addedDate : null}
+          chanlunAnalysis={chanlunAnalysis}
+          chanlunOverlay={chanlunOverlay}
+          elliottAnalysis={elliottAnalysis}
+          elliottOverlay={elliottOverlay}
+          hideCurrentDate={hideCurrentDate}
         />
       )}
     </div>

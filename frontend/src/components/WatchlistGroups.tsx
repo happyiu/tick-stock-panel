@@ -35,6 +35,8 @@ interface GroupBarProps {
   onClearGroup?: (groupId: string) => Promise<void>
   /** 手动调整分组前后顺序 (持久化到后端) */
   onReorder?: (orderedIds: string[]) => Promise<void>
+  /** 当前只展示某种资产时, 提醒清空操作仍作用于整个分组 */
+  clearScopeLabel?: string
 }
 
 export function WatchlistGroupBar({
@@ -49,6 +51,7 @@ export function WatchlistGroupBar({
   onDelete,
   onClearGroup,
   onReorder,
+  clearScopeLabel,
 }: GroupBarProps) {
   const [managerOpen, setManagerOpen] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
@@ -202,7 +205,11 @@ export function WatchlistGroupBar({
           <div className="relative w-[90vw] max-w-[380px] rounded-card border border-border bg-base shadow-2xl p-6">
             <h3 className="text-sm font-medium text-foreground mb-2">清空分组</h3>
             <p className="text-xs text-secondary mb-5">
-              确认清空「{tabs.find(t => t.id === selected)?.name}」分组? 分组内所有股票将转为未分组(不从自选中删除)。
+              确认清空「{tabs.find(t => t.id === selected)?.name}」分组？
+              {clearScopeLabel
+                ? <>当前仅显示{clearScopeLabel}，但清空操作会作用于该分组的全部标的，包括当前未显示的其他资产。</>
+                : null}
+              分组内所有标的将转为未分组（不从自选中删除）。
             </p>
             <div className="flex items-center justify-end gap-2">
               <button
@@ -371,7 +378,7 @@ function GroupManagerDialog({
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
         <div>
           <h2 id="watchlist-groups-title" className="text-sm font-semibold text-foreground">管理自选分组</h2>
-          <p className="mt-0.5 text-[11px] text-muted">删除分组不会删除其中的股票</p>
+          <p className="mt-0.5 text-[11px] text-muted">删除分组不会删除其中的标的</p>
         </div>
         <button type="button" onClick={onClose} className="h-8 w-8 inline-flex items-center justify-center text-muted hover:text-foreground" aria-label="关闭">
           <X className="h-4 w-4" />
@@ -460,7 +467,7 @@ function GroupManagerDialog({
             ) : deletingId === group.id ? (
               <>
                 <span className="min-w-0 flex-1 text-xs text-secondary">
-                  删除“{group.name}”？{(counts[group.id] ?? 0) > 0 ? ` ${counts[group.id]} 只股票将回到未分组。` : ''}
+                  删除“{group.name}”？{(counts[group.id] ?? 0) > 0 ? ` ${counts[group.id]} 个标的将回到未分组。` : ''}
                 </span>
                 <button
                   type="button"

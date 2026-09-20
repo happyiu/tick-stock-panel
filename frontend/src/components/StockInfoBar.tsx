@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
-import { Settings2, RadioTower, Star, ExternalLink } from 'lucide-react'
-import type { KlineRow, FinancialMetricRecord } from '@/lib/api'
-import { fmtPrice, fmtBigNum, fmtVolume } from '@/lib/format'
+import { Plus, Settings2, RadioTower, Star, ExternalLink } from 'lucide-react'
+import type { FinancialMetricRecord, KlinePeriod, KlineRow } from '@/lib/api'
+import { fmtAssetPrice, fmtPrice, fmtBigNum, fmtVolume } from '@/lib/format'
 import { ListColumnCustomizer } from '@/components/ListColumnCustomizer'
 import { WatchlistAddMenu } from '@/components/WatchlistAddMenu'
 import { INFO_GROUPS, type ColumnConfig } from '@/lib/stock-info-fields'
@@ -15,11 +15,17 @@ interface Props {
   name?: string
   stockInfo?: { name?: string; total_shares?: number; float_shares?: number; ext?: Record<string, unknown> }
   rows: KlineRow[]
+  assetType?: string
+  period?: KlinePeriod
+  onAddStrategy?: (assetType: 'stock' | 'etf', period: KlinePeriod) => void
+  onAddSignal?: (assetType: 'stock' | 'etf', period: KlinePeriod) => void
   /** 信息条字段配置（由 StockPanel 提升，受控） */
   fields: ColumnConfig[]
   onFieldsChange: (fields: ColumnConfig[]) => void
   /** 财务指标最新一期（来自 useFinancialMetrics，受 Cap.FINANCIAL 门控） */
   financialMetrics?: FinancialMetricRecord
+  /** 当前行动状态，与图表工具栏使用同一来源。 */
+  actionStatus?: ReactNode
   /** 加监控回调 (个股弹窗传入, 有值时渲染 RadioTower 图标) */
   onMonitor?: () => void
   /** 自选状态与操作（传入对应回调时渲染 Star 图标） */
@@ -102,9 +108,14 @@ export function StockInfoBar({
   name,
   stockInfo,
   rows,
+  assetType,
+  period,
+  onAddStrategy,
+  onAddSignal,
   fields,
   onFieldsChange,
   financialMetrics,
+  actionStatus,
   onMonitor,
   inWatchlist,
   onAddToWatchlist,
@@ -187,9 +198,9 @@ export function StockInfoBar({
         const lo = Number(latest.low)
         return `${((hi - lo) / prevClose * 100).toFixed(2)}%`
       }
-      case 'open': return fmtPrice(Number(latest.open))
-      case 'high': return fmtPrice(Number(latest.high))
-      case 'low':  return fmtPrice(Number(latest.low))
+      case 'open': return fmtAssetPrice(Number(latest.open), assetType)
+      case 'high': return fmtAssetPrice(Number(latest.high), assetType)
+      case 'low':  return fmtAssetPrice(Number(latest.low), assetType)
       // 财务指标：百分比字段存储为百分点(12.3 表示 12.3%)，直接 toFixed(2) + %
       case 'eps':         return financialMetrics?.eps_basic != null ? fmtPrice(financialMetrics.eps_basic) : null
       case 'bps':         return financialMetrics?.bps != null ? fmtPrice(financialMetrics.bps) : null
@@ -240,6 +251,9 @@ export function StockInfoBar({
   }
 
   const extUrl = buildStockExternalUrl(loadStockExternalTemplate(), symbol)
+  const chartAssetType = assetType === 'stock' || assetType === 'etf' ? assetType : undefined
+  const canAddStrategy = Boolean(chartAssetType && period && onAddStrategy)
+  const canAddSignal = Boolean(chartAssetType && period && onAddSignal)
 
   return (
     <div className="px-2 pb-3 font-mono text-[12px] select-none space-y-1">
@@ -248,16 +262,41 @@ export function StockInfoBar({
         <span className="text-foreground font-bold text-sm tracking-wide">{symbol}</span>
         <span className="text-secondary font-medium">{displayName}</span>
         <span style={{ color: clr }} className="text-lg font-bold tabular-nums">
-          {fmtPrice(close)}
+          {fmtAssetPrice(close, assetType)}
         </span>
         <span style={{ color: clr }} className="tabular-nums">
-          {isUp ? '+' : ''}{fmtPrice(chg)}
+          {isUp ? '+' : ''}{fmtAssetPrice(chg, assetType)}
         </span>
         <span style={{ color: clr }} className="tabular-nums">
           {isUp ? '+' : ''}{fmtPrice(chgPct)}%
         </span>
-        {/* 右侧操作按钮：外链 + 加自选 + 加监控 + 信息条配置 */}
-        <div className="ml-auto self-center flex items-center gap-1">
+        {actionStatus}
+        {/* 右侧操作按钮：策略/信号 + 外链 + 加自选 + 加监控 + 信息条配置 */}
+        <div className="ml-auto self-center flex shrink-0 items-center gap-1">
+          {canAddStrategy && (
+            <button
+              type="button"
+              onClick={() => onAddStrategy?.(chartAssetType!, period!)}
+              title={`添加${chartAssetType === 'etf' ? ' ETF' : '股票'}策略`}
+              aria-label={`添加${chartAssetType === 'etf' ? ' ETF' : '股票'}策略`}
+              className="inline-flex shrink-0 items-center gap-1 rounded border border-accent/30 bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent transition-colors hover:border-accent/50 hover:bg-accent/15"
+            >
+              <Plus className="h-3 w-3" />
+              <span>添加策略</span>
+            </button>
+          )}
+          {canAddSignal && (
+            <button
+              type="button"
+              onClick={() => onAddSignal?.(chartAssetType!, period!)}
+              title="添加信号到当前 K 线"
+              aria-label="添加信号到当前 K 线"
+              className="inline-flex shrink-0 items-center gap-1 rounded border border-cyan-400/30 bg-cyan-400/10 px-2 py-0.5 text-[10px] font-medium text-cyan-300 transition-colors hover:border-cyan-400/50 hover:bg-cyan-400/15"
+            >
+              <Plus className="h-3 w-3" />
+              <span>添加信号</span>
+            </button>
+          )}
           {extUrl && (
             <a
               href={extUrl}

@@ -17,6 +17,7 @@ export const CAP_LABELS: Record<string, { name: string; hint: string }> = {
   'websocket':               { name: '实时推送(WS)',    hint: '免轮询的实时行情订阅' },
   'financial':               { name: '财务数据',          hint: '利润表 / 资负表 / 现金流 / 关键指标' },
   'adj_factor':              { name: '复权因子',          hint: '让 MA/MACD 等指标在分红送转日不失真' },
+  'exchange_rate':           { name: '汇率',              hint: '货币对与美元指数日频' },
 }
 
 // ===== 数据源无关的能力提示 (所有数据源共用一套标准) =====
@@ -66,7 +67,7 @@ export function MissingCapChip({ capKey, label, to = '/settings?tab=data-sources
 // 矩阵未加载时返回 undefined, 调用方回退 TickFlow 套餐视角, 避免首屏闪烁。
 // 数据来自 useCapabilityMatrix (设置页与其他页面共享同一缓存)。
 
-export type RouteCapId = 'realtime' | 'daily' | 'minute' | 'adj_factor' | 'financial'
+export type RouteCapId = 'realtime' | 'daily' | 'minute' | 'adj_factor' | 'financial' | 'exchange_rate'
 
 export function routeCap(matrix: CapabilityMatrix | undefined, id: RouteCapId): CapabilityRoute | undefined {
   return matrix?.capabilities.find(c => c.id === id)
@@ -174,4 +175,3 @@ export function TierTag({ label, className = '' }: { label: string; className?: 
     </span>
   )
 }
-

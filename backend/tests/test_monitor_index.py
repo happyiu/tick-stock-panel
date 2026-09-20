@@ -67,6 +67,7 @@ def test_evaluate_index_round_triggers_and_isolates():
 
     events = eng.evaluate(df, asset_type="index", reset_strategy_results=False)
     assert any(e["rule_id"] == "r_idx" for e in events)
+    assert all(e["asset_type"] == "index" for e in events)
     assert all(e["rule_id"] != "r_stock" for e in events)
     assert events[0]["name"] == "上证指数"
     assert eng.latest_strategy_results() == {}  # 策略结果缓存未被触碰

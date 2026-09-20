@@ -275,6 +275,11 @@ def get_daily_data_provider() -> str:
     return provider if provider in _allowed_data_providers() else "tickflow"
 
 
+def get_chart_data_provider() -> str:
+    provider = str(load().get("chart_data_provider", "tickflow") or "tickflow").lower()
+    return provider if provider in _allowed_data_providers() else "tickflow"
+
+
 def get_adj_factor_provider() -> str:
     # 「跟随日K」(same_as_daily) 特殊值已下线: 存量配置里的旧值按非法值回退 tickflow
     provider = str(load().get("adj_factor_provider", "tickflow") or "tickflow").lower()
@@ -304,6 +309,31 @@ def get_realtime_data_provider() -> str:
 def get_financial_provider() -> str:
     provider = str(load().get("financial_data_provider", "tickflow") or "tickflow").lower()
     return provider if provider in _allowed_data_providers() else "tickflow"
+
+
+def get_exchange_rate_data_provider() -> str:
+    """汇率数据源默认使用内置 Frankfurter, 不回退到证券 TickFlow。"""
+    provider = str(load().get("exchange_rate_data_provider", "frankfurter") or "frankfurter").lower()
+    if provider == "frankfurter":
+        return provider
+    if provider == "tickflow":
+        return "frankfurter"
+    return provider if provider in _allowed_data_providers() else "frankfurter"
+
+
+def get_exchange_rate_interval_hours() -> int:
+    """返回当前汇率参考快照调度间隔, 最低 1 小时。"""
+    try:
+        return max(1, int(load().get("exchange_rate_interval_hours", 3)))
+    except (TypeError, ValueError):
+        return 3
+
+
+def set_exchange_rate_interval_hours(hours: int) -> int:
+    """保存汇率参考快照调度间隔, 最低 1 小时。"""
+    value = max(1, int(hours))
+    save({"exchange_rate_interval_hours": value})
+    return value
 
 
 # ===== 盘后管道拉取内容开关 (A股 / ETF / 指数 独立控制) =====

@@ -4,6 +4,7 @@ import { Download, Loader2, RefreshCw } from 'lucide-react'
 import { api, type MinuteKlineSession } from '@/lib/api'
 import { klineMinuteQueryOptions, klineMinuteRangeQueryOptions, minuteRefetchInterval } from '@/lib/kline'
 import { toast } from '@/components/Toast'
+import { ChartDataNotice } from '@/components/ChartDataNotice'
 import { EChartsMultiDayIntraday } from '@/components/EChartsMultiDayIntraday'
 
 interface Props {
@@ -13,6 +14,7 @@ interface Props {
   refetchIntervalMs?: number
   onPriceDoubleClick?: (price: number, currentPrice: number) => void
   priceLines?: { value: number; label?: string; color?: string }[]
+  assetType?: string
 }
 
 function errorMessage(error: unknown): string {
@@ -26,6 +28,7 @@ export function StockMultiDayIntradayChart({
   refetchIntervalMs,
   onPriceDoubleClick,
   priceLines,
+  assetType,
 }: Props) {
   const queryClient = useQueryClient()
   const history = useQuery({
@@ -105,7 +108,6 @@ export function StockMultiDayIntradayChart({
     autoSyncRef.current = key
     syncMinute.mutate()
   }, [symbol, days, localSessionCount, loading, isIndex, history.error, history.isPlaceholderData, syncMinute.isPending])
-
   const chartHeight = Math.max(260, height - (showCoverage || syncMinute.isPending ? 32 : 0))
 
   if (loading) {
@@ -143,7 +145,7 @@ export function StockMultiDayIntradayChart({
           </>
         ) : (
           <>
-            <span className="text-muted">{isIndex ? '指数暂无分钟数据' : '本地暂无可展示的分钟数据'}</span>
+            <span className="text-muted">{isIndex ? '指数暂无分钟数据' : '数据源暂无可展示的分钟数据'}</span>
             {!isIndex && (
               <button
                 type="button"
@@ -163,6 +165,7 @@ export function StockMultiDayIntradayChart({
 
   return (
     <div style={{ height }}>
+      <ChartDataNotice status={latest.data?.data_status ?? history.data?.data_status} />
       {(showCoverage || (syncMinute.isPending && !isIndex)) && (
         <div className="flex h-8 items-center justify-between gap-3 border-b border-border/60 bg-elevated/40 px-3 text-[11px]">
           {syncMinute.isPending ? (
@@ -171,7 +174,7 @@ export function StockMultiDayIntradayChart({
               正在补齐最近 {days} 日分时数据…
             </span>
           ) : syncMinute.isError ? (
-            <span className="truncate text-muted">当前 {sessions.length} 日，目标 {days} 日 — 补齐失败</span>
+            <span className="truncate text-muted">当前 {sessions.length} 日，目标 {days} 日 — 获取失败</span>
           ) : (
             <span className="truncate text-muted">当前 {sessions.length} 个交易日数据，目标 {days} 日</span>
           )}
@@ -179,13 +182,12 @@ export function StockMultiDayIntradayChart({
             <button
               type="button"
               onClick={() => {
-                autoSyncRef.current = `${symbol}:${days}`
                 syncMinute.mutate()
               }}
               className="inline-flex shrink-0 items-center gap-1 text-accent hover:text-accent/80"
             >
               <Download className="h-3 w-3" />
-              重试补齐
+              重新获取
             </button>
           )}
         </div>
@@ -195,6 +197,7 @@ export function StockMultiDayIntradayChart({
         height={chartHeight}
         onPriceDoubleClick={onPriceDoubleClick}
         priceLines={priceLines}
+        assetType={assetType ?? history.data?.asset_type ?? latest.data?.asset_type}
       />
       {syncMinute.isError && (
         <div className="px-3 pt-1 text-center text-[11px] text-danger">{errorMessage(syncMinute.error)}</div>

@@ -317,7 +317,7 @@ def sync_and_persist_etf_daily(
     batch_size = min_batch(preferences.get_index_daily_batch_size(), limit)
 
     end_time = end_date or datetime.now()
-    start_time = start_date or (end_time - timedelta(days=365))
+    start_time = start_date or (end_time - timedelta(days=730))
 
     total_rows = 0
     chunks = chunked(symbols, batch_size)

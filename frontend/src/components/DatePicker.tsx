@@ -19,6 +19,7 @@ interface DatePickerProps {
   className?: string
   buttonClassName?: string
   align?: 'left' | 'right'
+  disabled?: boolean
 }
 
 const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日']
@@ -48,6 +49,7 @@ export function DatePicker({
   className = '',
   buttonClassName = '',
   align = 'right',
+  disabled = false,
 }: DatePickerProps) {
   const [open, setOpen] = useState(false)
   const [showYearPicker, setShowYearPicker] = useState(false)
@@ -68,6 +70,10 @@ export function DatePicker({
     setViewYear(next.year)
     setViewMonth(next.month)
   }, [value, min, max])
+
+  useEffect(() => {
+    if (disabled) setOpen(false)
+  }, [disabled])
 
   // 打开弹层: 按钮的视口坐标计算 + 智能方向翻转 + 水平边界裁剪
   const handleOpen = () => {
@@ -162,9 +168,11 @@ export function DatePicker({
         ref={btnRef}
         type="button"
         onClick={handleOpen}
+        disabled={disabled}
         className={`inline-flex items-center gap-1.5 h-7 px-2.5 rounded-input border border-border
           bg-elevated hover:border-accent/50 text-xs text-foreground num
-          focus:outline-none focus:border-accent/60 transition-colors duration-150 cursor-pointer ${buttonClassName}`}
+          focus:outline-none focus:border-accent/60 transition-colors duration-150 cursor-pointer
+          disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-border ${buttonClassName}`}
       >
         <Calendar className="h-3.5 w-3.5 text-accent" />
         <span className={value ? undefined : 'text-muted'}>{displayLabel}</span>

@@ -580,8 +580,6 @@ def test_series_matrix_aligns_with_timeline_and_sectors(repo):
         values = [matrix[name][col] for name in series["sectors"] if matrix[name][col] is not None]
         assert values
         assert max(values) == pytest.approx(point["leader_pct"], abs=1e-4)
-
-
 def test_rank_reference_counts_trading_minutes_across_lunch(tmp_path):
     """对照窗口按交易时间回看 1 小时, 午休不计: 13:10 的对照桶是 10:40
     (往前 60 个交易分钟), 不是只隔 1 个交易分钟的 11:30。

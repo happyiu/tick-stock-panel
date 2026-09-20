@@ -23,7 +23,88 @@ function kv<T>(key: string) {
   }
 }
 
+export type StockTechnicalCardKey =
+  | 'ma'
+  | 'volume'
+  | 'macd'
+  | 'rsi'
+  | 'kdj'
+  | 'boll'
+  | 'momentum'
+  | 'atr'
+
+export interface StockPreviewTechnicalCardsConfig {
+  order: StockTechnicalCardKey[]
+  visible: Partial<Record<StockTechnicalCardKey, boolean>>
+}
+
+export type StockTechnicalIndicatorKey =
+  | 'ma_alignment'
+  | 'ma_slope'
+  | 'macd'
+  | 'rsi'
+  | 'kdj'
+  | 'roc'
+  | 'volume_price'
+  | 'atr'
+  | 'boll_width'
+  | 'volume_ratio'
+  | 'volume_trend'
+
+export interface StockPreviewTechnicalLayoutConfig {
+  version: 3
+  visible: Partial<Record<StockTechnicalIndicatorKey, boolean>>
+}
+
+export interface StockPreviewAnalysisSectionsState {
+  technicalCollapsed: boolean
+  chanlunCollapsed: boolean
+}
+
+export interface StockPreviewAnalysisSectionsV2 {
+  version: 2
+  technicalCollapsed: boolean
+  structureCollapsed: boolean
+}
+
+export interface StockPreviewAnalysisSectionsV3 {
+  version: 3
+  technicalCollapsed: boolean
+  chanlunCollapsed: boolean
+  elliottCollapsed: boolean
+}
+
+export interface StockPreviewDecisionSectionsV1 {
+  version: 1
+  priceZonesCollapsed: boolean
+  signalRiskCollapsed: boolean
+  showPriceZones: boolean
+  showInvalidationLine: boolean
+}
+
+export interface StockPreviewChanlunOverlayConfig {
+  enabled: boolean
+  fractals: boolean
+  strokes: boolean
+  segments: boolean
+  centers: boolean
+  candidates: boolean
+  divergences: boolean
+}
+
+export interface StockPreviewElliottOverlayConfig {
+  enabled: boolean
+  labels: boolean
+  strokes: boolean
+}
+
 export const storage = {
+  /** 页面显示大小 */
+  pageSize:             kv<'standard' | 'large'>('tf-page-size'),
+
+  /** ETF 模拟交易时间轴设置 */
+  paperTimelineSettings: kv<unknown>('tf-paper-timeline-settings-v1'),
+
   /** 查询轮询 / SSE 配置 */
   queryConfig:          kv<unknown>('tf-stocks-query-config'),
 
@@ -31,6 +112,8 @@ export const storage = {
   strategyPool:         kv<string[]>('strategy-pool'),
   /** 旧分钟隔离池 — 仅作一次性迁移读取源, 迁移完成后移除该 key */
   strategyPoolMinute:   kv<string[]>('strategy-pool-1m'),
+  /** 策略页上次选择的资产类型 */
+  screenerAssetType:    kv<'stock' | 'etf'>('screener_assetType'),
 
   /** 自选列表列配置 */
   watchlistColumns:     kv<unknown[]>('watchlist_columns'),
@@ -41,11 +124,50 @@ export const storage = {
   /** 个股日K成交量对比设置 */
   stockVolumeCompare:   kv<{ enabled: boolean; days: number }>('stock_volume_compare'),
 
+  /** 个股预览 K 线副图显隐与顺序 */
+  stockPreviewSubCharts: kv<string[]>('stock_preview_sub_charts'),
+
   /** 个股详情多日分时周期 */
   stockPreviewIntradayDays: kv<number>('stock_preview_intraday_days'),
 
   /** 个股详情外链 URL 模板 (支持 {code}/{market}/{symbol}; 留空关闭) */
   stockExternalTemplate: kv<string>('stock_external_template'),
+
+  /** 个股预览右侧技术指标卡片配置 (显隐 + 顺序) */
+  stockPreviewTechnicalCards: kv<StockPreviewTechnicalCardsConfig>('stock_preview_technical_cards'),
+
+  /** 个股预览技术指标分组配置 v2 (固定分组顺序, 仅显隐) */
+  stockPreviewTechnicalLayout: kv<StockPreviewTechnicalLayoutConfig | null>('stock_preview_technical_layout_v2'),
+
+  /** 个股预览右侧技术指标与缠论分区的折叠状态 */
+  stockPreviewAnalysisSections: kv<StockPreviewAnalysisSectionsState>('stock_preview_analysis_sections'),
+
+  /** 个股预览右侧技术指标与结构分析分区的折叠状态 v2 */
+  stockPreviewAnalysisSectionsV2: kv<StockPreviewAnalysisSectionsV2 | null>('stock_preview_analysis_sections_v2'),
+
+  /** 个股预览技术指标与结构分析子区折叠状态 v3 */
+  stockPreviewAnalysisSectionsV3: kv<StockPreviewAnalysisSectionsV3 | null>('stock_preview_analysis_sections_v3'),
+
+  /** 个股预览关键价位与缠论信号区折叠及覆盖层/失效线状态 v1 */
+  stockPreviewDecisionSectionsV1: kv<StockPreviewDecisionSectionsV1 | null>('stock_preview_decision_sections_v1'),
+
+  /** 个股预览 K 线缠论覆盖层配置 */
+  stockPreviewChanlunOverlay: kv<StockPreviewChanlunOverlayConfig>('stock_preview_chanlun_overlay'),
+
+  /** 个股预览 K 线艾略特波浪覆盖层配置 */
+  stockPreviewElliottOverlay: kv<StockPreviewElliottOverlayConfig>('stock_preview_elliott_overlay'),
+
+  /** 个股预览行动信号显示状态（默认开启） */
+  stockPreviewActionSignals: kv<boolean>('stock_preview_action_signals'),
+
+  /** 个股预览 K 线与右侧面板的分栏比例 */
+  stockPreviewSplitRatio: kv<number>('stock_preview_split_ratio'),
+
+  /** 个股预览弹窗宽度 */
+  stockPreviewWidth: kv<number>('stock_preview_width'),
+
+  /** 个股预览 30F 展示交易日数量 */
+  stockPreview30mDays: kv<number>('stock_preview_30m_days'),
 
   /** 策略结果列表列配置 */
   screenerResultColumns: kv<unknown[]>('screener_result_columns'),
@@ -102,13 +224,13 @@ export const storage = {
   limitLadderSealMode:  kv<'vol' | 'amount'>('limit-ladder-seal-mode'),
 
   /** 策略创建草稿（新建专用） */
-  strategyDraft: kv<{ name: string; description: string; direction: string; style?: string; rules: string; code: string; step: number; strategyId: string; source?: 'ai' | 'custom' } | null>('strategy-draft'),
+  strategyDraft: kv<{ name: string; description: string; direction: string; style?: string; rules: string; code: string; step: number; strategyId: string; source?: 'ai' | 'custom'; assetTypes?: ('stock' | 'etf')[]; timeframes?: ('1d' | '1w' | '30m' | '1m')[] } | null>('strategy-draft'),
 
   /** 策略修改草稿（AI修改专用，不影响创建按钮） */
-  strategyModify: kv<{ name: string; description: string; direction: string; style?: string; rules: string; code: string; step: number; strategyId: string; source?: 'ai' | 'custom' } | null>('strategy-modify'),
+  strategyModify: kv<{ name: string; description: string; direction: string; style?: string; rules: string; code: string; step: number; strategyId: string; source?: 'ai' | 'custom'; assetTypes?: ('stock' | 'etf')[]; timeframes?: ('1d' | '1w' | '30m' | '1m')[] } | null>('strategy-modify'),
 
   /** 策略构建器草稿（旧版兼容，逐渐废弃） */
-  strategyBuilderDraft: kv<{ name: string; description: string; direction: string; style?: string; rules: string; code: string; step: number; strategyId: string; source?: 'ai' | 'custom' } | null>('strategy-builder-draft'),
+  strategyBuilderDraft: kv<{ name: string; description: string; direction: string; style?: string; rules: string; code: string; step: number; strategyId: string; source?: 'ai' | 'custom'; assetTypes?: ('stock' | 'etf')[]; timeframes?: ('1d' | '1w' | '30m' | '1m')[] } | null>('strategy-builder-draft'),
 
   /** 已保存策略的原始规则（策略ID → 规则文本） */
   strategyRules: kv<Record<string, string>>('strategy-rules'),

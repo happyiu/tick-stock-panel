@@ -1,0 +1,10 @@
+name: eia
+display_name: "EIA"
+runtime: none
+entry: app.plugins.eia.provider:EiaProvider
+check: app.plugins.eia.provider:availability
+datasets: [commodity]
+api_key_env: EIA_API_KEY
+description: "Henry Hub 天然气价格与原油/汽油库存、产量、炼厂开工率。"
+install_hint: "输入 EIA API Key，或在 .env 中配置 EIA_API_KEY"
+homepage: "https://www.eia.gov/opendata/"

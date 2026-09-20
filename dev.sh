@@ -121,7 +121,8 @@ free_port backend  "$BACKEND_PORT"
 free_port frontend "$FRONTEND_PORT"
 
 # ===== 3. 依赖安装 =====
-if [ ! -d "$BACKEND_DIR/.venv" ] || [ "${#BACKEND_EXTRA_ARGS[@]}" -gt 0 ]; then
+if [ ! -d "$BACKEND_DIR/.venv" ] || [ "${#BACKEND_EXTRA_ARGS[@]}" -gt 0 ] \
+  || ! "$BACKEND_DIR/.venv/bin/python" -c 'import requests, prettytable, tdxpy, tenacity, tqdm' >/dev/null 2>&1; then
   if [ "${#BACKEND_EXTRA_ARGS[@]}" -gt 0 ]; then
     info "同步后端 Python 依赖，extras: $BACKEND_EXTRAS"
   else
@@ -137,6 +138,31 @@ if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
   info "前端首次启动 — 安装 Node 依赖..."
   ( cd "$FRONTEND_DIR" && pnpm install )
   ok "前端依赖装好了"
+fi
+
+ASTOCKDATA_DIR="$BACKEND_DIR/app/plugins/astockdata"
+if ! "$BACKEND_DIR/.venv/bin/python" -c 'import mootdx.quotes' >/dev/null 2>&1; then
+  info "首次启动 — 安装 a-stock-data Python 依赖..."
+  if uv pip install --no-deps --python "$BACKEND_DIR/.venv/bin/python" \
+    -r "$ASTOCKDATA_DIR/requirements.txt"; then
+    ok "a-stock-data 依赖装好了"
+  else
+    warn "a-stock-data 依赖安装失败，主程序继续启动；可在设置页重试"
+  fi
+fi
+
+STOCKSDK_DIR="$BACKEND_DIR/app/plugins/stocksdk"
+if [ ! -d "$STOCKSDK_DIR/node_modules/stock-sdk" ]; then
+  if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    warn "未找到 Node.js/npm，stock-sdk 暂跳过；安装 Node.js 18+ 后可在设置页重试"
+  else
+    info "首次启动 — 安装 stock-sdk 数据源依赖..."
+    if ( cd "$STOCKSDK_DIR" && npm ci --omit=dev --no-audit --no-fund ); then
+      ok "stock-sdk 依赖装好了"
+    else
+      warn "stock-sdk 依赖安装失败，主程序继续启动；可在设置页重试"
+    fi
+  fi
 fi
 
 # ===== 4. 启动 + 日志前缀 =====

@@ -3,13 +3,15 @@
  *
  * 独立于实时监控, 放置影响整体应用行为的开关项。
  */
-import { useState, useCallback, useEffect } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
-import { Settings2, Trash2, RefreshCw, Bell, Volume2, Info, ExternalLink } from 'lucide-react'
+import { useState, useCallback, useEffect, type FormEvent } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
+import { Settings2, Trash2, RefreshCw, Bell, Volume2, Info, ExternalLink, UserRound, LockKeyhole } from 'lucide-react'
 import { usePreferences, useVersion } from '@/lib/useSharedQueries'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { PageHeader } from '@/components/PageHeader'
+import { toast } from '@/components/Toast'
 import { refreshAlertToastConfig } from '@/components/AlertToast'
 import { SOUND_OPTIONS, previewSound } from '@/lib/notificationSound'
 import {
@@ -19,9 +21,15 @@ import { loadStockExternalTemplate, saveStockExternalTemplate } from '@/lib/stoc
 
 export function SettingsSystemPanel() {
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const { data: prefs } = usePreferences()
   const { data: versionData } = useVersion()
   const [saving, setSaving] = useState(false)
+  const [passwordEditing, setPasswordEditing] = useState(false)
+  const [oldPassword, setOldPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmNewPassword, setConfirmNewPassword] = useState('')
+  const [passwordError, setPasswordError] = useState('')
 
   const screenerAutoRun = prefs?.screener_auto_run ?? true
   const [extTpl, setExtTpl] = useState(() => loadStockExternalTemplate())
@@ -87,6 +95,24 @@ export function SettingsSystemPanel() {
     }
   }, [qc])
 
+  const changePassword = useMutation({
+    mutationFn: () => api.authChangePassword(oldPassword, newPassword),
+    onSuccess: () => {
+      toast('登录密码已修改，请重新登录', 'success')
+      navigate(`/login?redirect=${encodeURIComponent('/settings?tab=system')}`, { replace: true })
+    },
+    onError: (error: Error) => setPasswordError(error.message || '密码修改失败'),
+  })
+
+  const submitPasswordChange = (e: FormEvent) => {
+    e.preventDefault()
+    setPasswordError('')
+    if (!oldPassword) { setPasswordError('请输入当前密码'); return }
+    if (newPassword.length < 6) { setPasswordError('新密码至少 6 位'); return }
+    if (newPassword !== confirmNewPassword) { setPasswordError('两次新密码不一致'); return }
+    changePassword.mutate()
+  }
+
   // 刷新前端缓存: 清除 react-query 缓存 + 强制重载 (绕过浏览器缓存)
   // 不动 localStorage (用户列配置/策略池等偏好保留), 也不影响后端的本地股票数据
   const handleClearCache = useCallback(() => {
@@ -104,6 +130,97 @@ export function SettingsSystemPanel() {
         title="系统设置"
         subtitle="全局行为开关"
       />
+
+      <section className="rounded-card border border-border bg-surface p-5">
+        <div className="flex items-center gap-2 mb-4">
+          <UserRound className="h-4 w-4 text-accent" />
+          <h3 className="text-sm font-medium text-foreground">账户</h3>
+        </div>
+
+        <div className="flex items-center justify-between gap-4 py-2">
+          <div className="min-w-0">
+            <div className="text-sm text-foreground">用户名</div>
+            <div className="text-[11px] text-muted truncate">当前面板为单用户账户</div>
+          </div>
+          <span className="font-mono text-xs text-secondary shrink-0">admin</span>
+        </div>
+
+        <div className="flex items-center justify-between gap-4 py-2">
+          <div className="min-w-0 flex items-center gap-1.5">
+            <LockKeyhole className="h-3.5 w-3.5 text-muted" />
+            <div>
+              <div className="text-sm text-foreground">登录密码</div>
+              <div className="text-[11px] text-muted truncate">密码不会明文显示</div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="font-mono text-xs text-secondary">••••••••</span>
+            <button
+              type="button"
+              onClick={() => {
+                const next = !passwordEditing
+                setPasswordEditing(next)
+                setPasswordError('')
+                if (!next) {
+                  setOldPassword('')
+                  setNewPassword('')
+                  setConfirmNewPassword('')
+                }
+              }}
+              className="px-2.5 h-8 rounded-btn border border-border bg-base text-xs text-secondary hover:text-foreground hover:border-accent/30 transition-colors"
+            >
+              {passwordEditing ? '取消' : '修改密码'}
+            </button>
+          </div>
+        </div>
+
+        {passwordEditing && (
+          <form onSubmit={submitPasswordChange} className="mt-3 space-y-3 rounded-btn border border-border/70 bg-base/50 p-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <label className="space-y-1">
+                <span className="text-[11px] text-muted">当前密码</span>
+                <input
+                  type="password"
+                  value={oldPassword}
+                  onChange={e => setOldPassword(e.target.value)}
+                  autoComplete="current-password"
+                  className="h-9 w-full rounded-btn border border-border bg-base px-2.5 text-xs text-foreground outline-none focus:border-accent/50"
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="text-[11px] text-muted">新密码</span>
+                <input
+                  type="password"
+                  value={newPassword}
+                  onChange={e => setNewPassword(e.target.value)}
+                  autoComplete="new-password"
+                  className="h-9 w-full rounded-btn border border-border bg-base px-2.5 text-xs text-foreground outline-none focus:border-accent/50"
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="text-[11px] text-muted">确认新密码</span>
+                <input
+                  type="password"
+                  value={confirmNewPassword}
+                  onChange={e => setConfirmNewPassword(e.target.value)}
+                  autoComplete="new-password"
+                  className="h-9 w-full rounded-btn border border-border bg-base px-2.5 text-xs text-foreground outline-none focus:border-accent/50"
+                />
+              </label>
+            </div>
+            {passwordError && <div className="text-[11px] text-danger">{passwordError}</div>}
+            <div className="flex justify-end">
+              <button
+                type="submit"
+                disabled={changePassword.isPending}
+                className="inline-flex h-8 items-center rounded-btn bg-accent px-3 text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-50"
+              >
+                {changePassword.isPending ? '保存中…' : '保存新密码'}
+              </button>
+            </div>
+          </form>
+        )}
+      </section>
 
       <section className="rounded-card border border-border bg-surface p-5">
         <div className="flex items-center gap-2 mb-4">

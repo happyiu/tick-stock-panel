@@ -1,0 +1,17 @@
+# a-stock-data 内置可选数据源插件。
+# 数据源抓取第三方公开行情接口，使用者需自行评估服务条款与行情版权责任。
+name: astockdata
+display_name: "a-stock-data（多源行情）"
+runtime: python
+install_no_deps: true
+entry: app.plugins.astockdata.provider:AStockDataProvider
+check: app.plugins.astockdata.provider:availability
+datasets: [daily, adj_factor, minute, realtime, depth5]
+description: "通达信 mootdx 日K/分钟K/五档盘口（7709 不可达或盘口缺失时降级腾讯）+ 新浪复权因子 + 腾讯实时行情；仅覆盖系统标准行情数据集。"
+install_hint: "基础环境默认安装 mootdx、requests；若当前环境未同步可点击安装。通达信 TCP 7709 在部分网络环境可能不可达。"
+homepage: "https://github.com/simonlin1212/a-stock-data"
+upstream:
+  repository: "https://github.com/simonlin1212/a-stock-data"
+  version: "v3.8.0"
+  commit: "2012ce7cd0e75d379c5e6cbd3115514f300f3bc8"
+  release_date: "2026-09-05"

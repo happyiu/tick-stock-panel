@@ -1,0 +1,10 @@
+name: fred
+display_name: "FRED"
+runtime: none
+entry: app.plugins.fred.provider:FredProvider
+check: app.plugins.fred.provider:availability
+datasets: [commodity]
+api_key_env: FRED_API_KEY
+description: "WTI 与 Brent 日频原油现货历史数据。"
+install_hint: "输入 FRED API Key，或在 .env 中配置 FRED_API_KEY"
+homepage: "https://fred.stlouisfed.org/"

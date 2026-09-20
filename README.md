@@ -133,7 +133,7 @@
 
 **📊 行情总览**
 - **看板** Dashboard — 市场情绪评分 + 涨跌/成交额榜单 + 概念/行业领涨领跌(点击板块直达成分股,领涨股带涨跌幅) + 大盘异动事件流,一日全貌
-- **自选** Watchlist — 自选股池,多分组管理(M:N),表格/卡片双视图,换手/量比/RSI 等实时指标,按档位分流实时刷新
+- **自选股 / 自选ETF** Watchlist — 统一自选池的股票与 ETF 固定类型视图,多分组管理(M:N),表格/卡片双视图,量比/RSI 等实时指标(股票页额外支持换手率),按档位分流实时刷新
 - **指数** Indices — 沪深指数浏览与同步
 
 **🔍 选股与回测**
@@ -168,7 +168,6 @@
 - **数据** Data — 本地数据画像与同步状态(维表/日K/除权/Enriched/指数/ETF/分钟K/财务),盘后管道与历史扩展
 - **扩展分析** (动态菜单) — 把任意第三方/扩展数据字段配成一级菜单,与内置数据同台分析
 - **设置** Settings — 数据源与能力检测(能力路由矩阵、档位徽章)、AI 接口、实时监控、扩展页面、菜单与系统设置
-
 **🤖 AI 助手**
 - **AI 对话助手** — 悬浮球 / 侧栏 AI 徽标旁入口 / ⌘K 呼出; 18 个只读工具覆盖个股·大盘·板块·自选·持仓·信号·策略·因子, 逐字流式输出 + 工具调用足迹卡(参数与耗时可展开核对), 每条回答附风险与数据口径提示; 完全解耦的扩展模块, 删除目录即卸载
 
@@ -204,6 +203,22 @@
   <tr>
     <td width="50%"><img src="./screenshots/监控中心.png" alt="监控中心"></td>
     <td width="50%"><img src="./screenshots/市场环境分析.png" alt="市场环境分析"></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><b>概念分析 Concept</b></td>
+    <td width="50%" align="center"><b>自选股 Watchlist</b></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="./screenshots/概念分析.png" alt="概念分析"></td>
+    <td width="50%"><img src="./screenshots/自选.png" alt="自选页"></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><b>连板梯队 Ladder</b></td>
+    <td width="50%"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="./screenshots/连板梯队.png" alt="连板梯队页"></td>
+    <td width="50%"></td>
   </tr>
 </table>
 
@@ -388,9 +403,7 @@ docker run -d --name tsp -p 3018:3018 -v ${PWD}/data:/app/data ghcr.io/shy3130/t
 | **D · Dev 模式** | 二次开发 | Python ≥ 3.11 · Node ≥ 20 · [uv](https://docs.astral.sh/uv/) · pnpm(`npm i -g pnpm`) |
 
 ### 方式 A:GHCR 现成镜像(免本地构建,多数用户推荐)
-
 本项目每次推送都由 GitHub Actions 自动构建多架构镜像并发布到 GHCR,拿来即用:
-
 - 需要配置时:从 [.env.example](./.env.example) 复制出 `.env`,命令里加 `--env-file .env`。
 - 跑自己改过的代码:fork 后到仓库 **Actions** 页启用 workflow(fork 默认禁用),构建出的 `ghcr.io/<你的用户名>/tick-stock-panel` 用法相同。
 - 想用 compose 编排(挂载 `.env` / `tiers.yaml`):参考 [docker-compose.yml](./docker-compose.yml),把 `build:` 段换成 `image: ghcr.io/shy3130/tick-stock-panel:latest`。
@@ -453,7 +466,7 @@ cp .env.example .env       # 按需填 TICKFLOW_API_KEY(留空 = None 模式)
 
 1. **设置 → 凭据与能力** → 点 **重新检测**,确认档位标签与能力路由矩阵
 2. **设置** → **立即跑盘后管道**:拉日 K + 计算 enriched 表(None / Free 走 free-api,当日数据盘后 1-2 小时可用)
-3. **自选**页加标的 → **选股**页点策略卡片扫描 / 配自定义信号
+3. **自选股 / 自选ETF**页加标的 → **选股**页点策略卡片扫描 / 配自定义信号
 4. **回测**页选策略 + 区间 → 看净值 / 夏普 / 交易明细(SSE 实时进度),结果可导出 CSV、存候选一键复测
 5. **监控中心**配规则,盘中实时弹窗 + 持久化记录;**异动监控**覆盖竞价/盘中/偏移全时段
 6. 配好 AI Key 后,**悬浮球 / ⌘K** 呼出 **AI 对话助手**,直接问「今天市场怎么样」「我的自选表现如何」

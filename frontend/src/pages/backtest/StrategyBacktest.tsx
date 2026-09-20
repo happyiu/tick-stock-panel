@@ -15,7 +15,7 @@ import {
 } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
-import { fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
+import { fmtAssetPrice, fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
 import { boardTag } from '@/lib/board'
 import { boardTag as boardBadge } from '@/components/stock-table/primitives'
 import { BUILTIN_COLUMNS } from '@/lib/watchlist-columns'
@@ -426,7 +426,7 @@ function fmtScore(v: number | null | undefined): string {
   return Number(v).toFixed(1)
 }
 
-function DailyTradeChip({ trade, side, strategyName, onClick, signalNames, active }: { trade: StrategyBacktestTrade; side: 'buy' | 'sell'; strategyName?: string; onClick?: () => void; signalNames?: Record<string, string>; active?: boolean }) {
+function DailyTradeChip({ trade, side, strategyName, onClick, signalNames, active, assetType }: { trade: StrategyBacktestTrade; side: 'buy' | 'sell'; strategyName?: string; onClick?: () => void; signalNames?: Record<string, string>; active?: boolean; assetType?: 'stock' | 'etf' }) {
   const isBuy = side === 'buy'
   const tag = boardTag(trade.symbol)
   const price = isBuy ? trade.entry_price : trade.exit_price
@@ -457,10 +457,10 @@ function DailyTradeChip({ trade, side, strategyName, onClick, signalNames, activ
           <span className="num">{fmtLots(trade.lots)}手</span>
         </span>
         {isBuy ? (
-          <span className="num shrink-0 text-secondary">{fmtPrice(price)}</span>
+          <span className="num shrink-0 text-secondary">{fmtAssetPrice(price, trade.asset_type ?? assetType)}</span>
         ) : (
           <span className="flex shrink-0 items-center gap-1.5">
-            <span className="num text-secondary">{fmtPrice(price)}</span>
+            <span className="num text-secondary">{fmtAssetPrice(price, trade.asset_type ?? assetType)}</span>
             <ExitReasonBadge reason={trade.exit_reason} signalId={trade.exit_signal_id} signalNames={signalNames} />
           </span>
         )}
@@ -498,7 +498,7 @@ function DailyTradeChip({ trade, side, strategyName, onClick, signalNames, activ
   )
 }
 
-function TradeLegCell({ trade, side, signalNames }: { trade: StrategyBacktestTrade; side: 'buy' | 'sell'; signalNames?: Record<string, string> }) {
+function TradeLegCell({ trade, side, signalNames, assetType }: { trade: StrategyBacktestTrade; side: 'buy' | 'sell'; signalNames?: Record<string, string>; assetType?: 'stock' | 'etf' }) {
   const isBuy = side === 'buy'
   // 分钟策略入场携带 "YYYY-MM-DD HH:MM" (盘中触发分钟); 日线口径为纯日期
   const raw = String(isBuy ? trade.entry_date : trade.exit_date)
@@ -527,7 +527,7 @@ function TradeLegCell({ trade, side, signalNames }: { trade: StrategyBacktestTra
         </span>
       </div>
       <div className="mt-0.5 flex items-center justify-between gap-2">
-        <span className="num text-foreground">{fmtPrice(price)}</span>
+        <span className="num text-foreground">{fmtAssetPrice(price, trade.asset_type ?? assetType)}</span>
         <span className="num font-medium text-foreground">{fmtMoney(amount)}</span>
       </div>
       {signalLabel && (
@@ -2470,7 +2470,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
                               ) : (
                                 <div className="flex flex-wrap gap-1.5">
                                   {row.buys.map((t, i) => (
-                                    <DailyTradeChip key={`buy-${t.symbol}-${t.entry_date}-${t.exit_date}-${i}`} trade={t} side="buy" strategyName={result?.strategy_info?.name ?? selectedStrategyName} onClick={() => setChartOverlay({ kind: 'trade', trade: t, source: 'daily' })} signalNames={signalNames} active={t === selectedTrade} />
+                                    <DailyTradeChip key={`buy-${t.symbol}-${t.entry_date}-${t.exit_date}-${i}`} trade={t} side="buy" strategyName={result?.strategy_info?.name ?? selectedStrategyName} onClick={() => setChartOverlay({ kind: 'trade', trade: t, source: 'daily' })} signalNames={signalNames} active={t === selectedTrade} assetType={assetType} />
                                   ))}
                                 </div>
                               )}
@@ -2481,7 +2481,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
                               ) : (
                                 <div className="flex flex-wrap gap-1.5">
                                   {row.sells.map((t, i) => (
-                                    <DailyTradeChip key={`sell-${t.symbol}-${t.entry_date}-${t.exit_date}-${i}`} trade={t} side="sell" onClick={() => setChartOverlay({ kind: 'trade', trade: t, source: 'daily' })} signalNames={signalNames} active={t === selectedTrade} />
+                                    <DailyTradeChip key={`sell-${t.symbol}-${t.entry_date}-${t.exit_date}-${i}`} trade={t} side="sell" onClick={() => setChartOverlay({ kind: 'trade', trade: t, source: 'daily' })} signalNames={signalNames} active={t === selectedTrade} assetType={assetType} />
                                   ))}
                                 </div>
                               )}
@@ -2567,10 +2567,10 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
                               <div className="mt-0.5 font-mono text-[11px] text-muted">{t.symbol}</div>
                             </td>
                             <td className="px-4 py-2.5">
-                              <TradeLegCell trade={t} side="buy" signalNames={signalNames} />
+                              <TradeLegCell trade={t} side="buy" signalNames={signalNames} assetType={assetType} />
                             </td>
                             <td className="px-4 py-2.5">
-                              <TradeLegCell trade={t} side="sell" signalNames={signalNames} />
+                              <TradeLegCell trade={t} side="sell" signalNames={signalNames} assetType={assetType} />
                             </td>
                             <td className="px-4 py-2.5 text-right">
                               <div className="num text-foreground">{fmtPct(t.position_pct, 2)}</div>
@@ -3102,6 +3102,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
 
       <TradeKlineModal
         trade={selectedTrade}
+        assetType={assetType}
         navItems={tradeNavItems}
         currentKey={activeTradeKey}
         onNavigate={handleTradeNav}

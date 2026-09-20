@@ -42,7 +42,7 @@ export const QK = {
 
   // Screener
   screener:             ['screener'] as const,
-  screenerStrategies:   (assetType: string = 'stock', timeframe: '1d' | '1m' | 'all' = '1d') => ['screener-strategies', assetType, timeframe] as const,
+  screenerStrategies:   (assetType: string = 'stock', timeframe: '1d' | '1w' | '30m' | '1m' | 'all' = '1d') => ['screener-strategies', assetType, timeframe] as const,
   screenerCachedSummary: ['screener-cached', 'summary'] as const,
   screenerCachedResult: (strategyId: string, asOf?: string, ext?: string) => ['screener-cached', 'strategy', strategyId, asOf ?? '', ext ?? ''] as const,
   screenerCached:       (asOf?: string, ext?: string) => ['screener-cached', 'all', asOf ?? '', ext ?? ''] as const,
@@ -54,6 +54,7 @@ export const QK = {
   backtestStatus:       ['backtest-status'] as const,
   factorColumns:        ['backtest-factor-columns'] as const,
   factorLibrary:        (assetType: string) => ['factors-library', assetType] as const,
+  externalFactors:      ['external-factors'] as const,
   miningRuns:           ['backtest-mining-runs'] as const,
   miningAvailability:   (assetType: string, profile: string, start: string, end: string) =>
                           ['backtest-mining-availability', assetType, profile, start, end] as const,
@@ -65,9 +66,23 @@ export const QK = {
     ? ['strategy-link-options', assetType] as const
     : ['strategy-link-options'] as const,
   strategyDetail:       (id: string) => ['strategy-detail', id] as const,
+  strategySignals:      (strategyId: string, symbol: string, assetType: string, timeframe: string, start: string, end: string, days: number) =>
+                          ['strategy-signals', strategyId, symbol, assetType, timeframe, start, end, days] as const,
+  signalChartMarkers:   (symbol: string, assetType: string, timeframe: string, start: string, end: string, days: number, signalIds: string) =>
+                          ['signal-chart-markers', symbol, assetType, timeframe, start, end, days, signalIds] as const,
+
+  // ETF 模拟交易（独立 SSE 只失效当前账户）
+  paperSnapshot:        (accountId: string) => ['paper-trading', 'snapshot', accountId] as const,
+  paperRules:           ['paper-trading', 'rules'] as const,
+  paperReplays:         ['paper-trading', 'replays'] as const,
+  paperArchivedAccounts: ['paper-trading', 'archived-accounts'] as const,
+  paperReplayBars:      (accountId: string, symbol: string) =>
+                          ['paper-trading', 'replay-bars', accountId, symbol] as const,
 
   // Data / Pipeline
   dataStatus:           ['data-status'] as const,
+  exchangeRate:         ['exchange-rate'] as const,
+  commodity:            ['commodity'] as const,
   pipelineJobs:         ['pipeline-jobs'] as const,
   pipelineJob:          (id: string) => ['pipeline-job', id] as const,
   extData:              ['ext-data'] as const,
@@ -78,10 +93,14 @@ export const QK = {
   analysisMenu:         (id: string) => ['analysis-menu', id] as const,
 
   // Kline
-  kline:                (symbol: string, start: string, end: string, extColumns?: string) =>
-                           ['kline', symbol, start, end, extColumns ?? ''] as const,
+  kline:                (symbol: string, start: string, end: string, extColumns?: string, includeTechnicalScores = false) =>
+                           ['kline', symbol, start, end, extColumns ?? '', includeTechnicalScores] as const,
+  klinePeriod:          (symbol: string, period: string, start: string, end: string, days: number, includeTechnicalScores = false) =>
+                           ['kline-period', symbol, period, start, end, days, includeTechnicalScores] as const,
   klineLatest:          (symbol: string) => ['kline-latest', symbol] as const,
   stockLevels:          (symbol: string, days?: number) => ['stock-levels', symbol, days ?? 120] as const,
+  elliottAssessment:    (symbol: string, period: string, asOf: string, fingerprint: string) =>
+                             ['elliott-assessment', symbol, period, asOf, fingerprint] as const,
   klineMinute:          (symbol: string, date: string) =>
                              ['kline-minute', symbol, date] as const,
   klineMinuteRange:     (symbol: string, days: number) =>

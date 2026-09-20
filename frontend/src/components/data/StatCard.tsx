@@ -20,6 +20,7 @@ export const CARD_META: Record<string, {
   etf:         { capKey: 'kline.daily.batch',       missingCapName: '' },
   minute:      { capKey: 'kline.minute.batch',      missingCapName: '分钟 K(批量)' },
   financials:  { capKey: 'financial',               missingCapName: '财务数据' },
+  exchange_rate: { capKey: 'exchange_rate',         missingCapName: '汇率' },
   regime:      { capKey: '',                        missingCapName: '' },
 }
 
@@ -94,6 +95,7 @@ export function StatCard({
   active = false, done = false, skipped = false, stagePct = 0,
   tierKey, capLimits, customProvider,
   auto, onSettings, onShowFields, settingsOpen, subLabel, localBadgeSuffix, fieldTabs,
+  primaryValue, primaryLabel,
 }: {
   title: string
   hint: string
@@ -113,6 +115,9 @@ export function StatCard({
   auto?: boolean
   subLabel?: string
   localBadgeSuffix?: string
+  /** 覆盖卡片主数值，例如汇率卡展示最新 rate 而不是行数。 */
+  primaryValue?: string | number | null
+  primaryLabel?: string
   // 多表字段入口: [{label: '维表', table: 'index_instruments'}, ...]
   // 提供时渲染多个图标按钮(每个对应一张表的字段说明); 否则回退到单个 onShowFields
   fieldTabs?: FieldTab[]
@@ -164,7 +169,7 @@ export function StatCard({
   )
 
   // subLabel 文本内容 (不含图标)
-  const subLabelText = subLabel
+  const subLabelText = primaryLabel ?? subLabel
     ?? (isInstrument
       ? `标的 · ${((stats?.named ?? stats?.rows) ?? 0).toLocaleString()} 个含名称`
       : stats?.fields
@@ -272,7 +277,9 @@ export function StatCard({
         ) : (
           <>
             <div className="font-mono text-2xl font-bold tracking-tight tabular-nums text-foreground">
-              {stats.fields
+              {primaryValue != null
+                ? primaryValue
+                : stats.fields
                 ? stats.fields
                 : stats.trading_days && !stats.rows
                   ? stats.trading_days.toLocaleString()

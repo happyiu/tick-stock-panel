@@ -331,6 +331,9 @@ class EnrichedPublication:
             generation = uuid.uuid4().hex
             _write_marker(path, _ready_payload(generation))
         self._publishing = False
+        # 一个 publication 可以跨多个日期分区复用。提交后清除本轮变更状态,
+        # 后续遇到内容相同的分区时 commit() 应保持幂等,不能重复校验已结束的 ownership。
+        self._changed = False
         return generation
 
     def _claim_or_verify(self) -> None:

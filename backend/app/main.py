@@ -17,8 +17,11 @@ from app.api import (
     alerts,
     analysis,
     backtest,
+    commodity,
     data,
     ext_data,
+    exchange_rate,
+    external_factors,
     factors,
     financials,
     indices,
@@ -29,6 +32,7 @@ from app.api import (
     mining,
     monitor_rules,
     overview,
+    paper_trading,
     pipeline,
     regime,
     rps,
@@ -37,6 +41,7 @@ from app.api import (
     signals,
     stock_analysis,
     strategy,
+    strategy_chart,
     watchlist,
 )
 from app.api import auth as auth_api
@@ -49,6 +54,7 @@ from app.extensions.loader import (
     current_extension_context,
     start_backend_extensions,
 )
+from app.fork_version import DISPLAY_VERSION
 from app.jobs import daily_pipeline
 from app.services.matrix_prewarm_owner import MatrixCachePrewarmOwner
 from app.services.mining_process_lock import MiningProcessLock
@@ -89,8 +95,8 @@ if not getattr(sys, "frozen", False):
 @asynccontextmanager
 async def _application_lifespan(app: FastAPI):
     logger.info(
-        "Tick Stock Panel v%s starting (mode=%s)",
-        __version__, tf_client.current_mode(),
+        "Seek Hub %s starting (mode=%s)",
+        DISPLAY_VERSION, tf_client.current_mode(),
     )
 
     # 首次启动: 若配置了 AUTH_PASSWORD 环境变量且未设过密码, 用它初始化。
@@ -106,6 +112,9 @@ async def _application_lifespan(app: FastAPI):
     repo = KlineRepository(store)
     app.state.datastore = store
     app.state.repo = repo
+    from app.services.chart_data import ChartDataService
+    app.state.chart_data_service = ChartDataService()
+
     # 自定义/复合因子载入注册表 (P3); 单个失败只跳过该因子 (fail-隔离)
     from app.factors.store import load_into_registry
 
@@ -194,6 +203,22 @@ async def _application_lifespan(app: FastAPI):
         minute_refresh.start()
     except Exception as e:
         logger.warning("minute_refresh init failed: %s", e)
+
+    # ETF 模拟交易为独立的增量状态域; 即使页面关闭也持续维护活动账户.
+    try:
+        from app.services.paper_trading import (
+            PaperTradingEngine,
+            PaperTradingService,
+            PaperTradingStore,
+        )
+        paper_store = PaperTradingStore(store.data_dir)
+        paper_engine = PaperTradingEngine(paper_store, repo)
+        paper_service = PaperTradingService(paper_engine, repo, capset)
+        app.state.paper_trading_engine = paper_engine
+        app.state.paper_trading_service = paper_service
+        paper_service.start()
+    except Exception as e:
+        logger.warning("paper trading init failed: %s", e)
 
     # 停机缺口自检: 延迟后台扫描, 发现最近交易日的盘中快照/缺口时自动创建
     # 修复任务 (盘中停机→次日开实时场景, 不修则坏数据被"只刷今天"分支永久留存)
@@ -388,6 +413,9 @@ async def _application_lifespan(app: FastAPI):
         mrs = getattr(app.state, "minute_refresh", None)
         if mrs:
             mrs.stop()
+        pts = getattr(app.state, "paper_trading_service", None)
+        if pts:
+            pts.stop()
         logger.info("shutdown")
 
 
@@ -403,7 +431,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Tick Stock Panel",
+    title="Seek Hub",
     version=__version__,
     description="A 股选股 + 回测面板 — TickFlow 适配",
     lifespan=lifespan,
@@ -473,6 +501,7 @@ app.include_router(kline.router)
 app.include_router(watchlist.router)
 app.include_router(screener.router)
 app.include_router(backtest.router)
+app.include_router(paper_trading.router)
 app.include_router(factors.router)
 app.include_router(mining.router)
 app.include_router(intraday.router)
@@ -483,12 +512,16 @@ app.include_router(regime.router)
 app.include_router(analysis.router)
 app.include_router(pipeline.router)
 app.include_router(data.router)
+app.include_router(commodity.router)
 app.include_router(ext_data.router)
+app.include_router(exchange_rate.router)
+app.include_router(external_factors.router)
 app.include_router(financials.router)
 app.include_router(stock_analysis.router)
 app.include_router(market_recap.router)
 app.include_router(settings_api.router)
 app.include_router(strategy.router)
+app.include_router(strategy_chart.router)
 app.include_router(signals.router)
 app.include_router(monitor_rules.router)
 app.include_router(lots.router)

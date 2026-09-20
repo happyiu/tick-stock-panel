@@ -1,0 +1,1 @@
+"""FRED commodity provider."""

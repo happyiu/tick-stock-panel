@@ -5,24 +5,128 @@ import gzip
 import json
 import logging
 import math
-from datetime import date, timedelta
-from pathlib import Path
-from zoneinfo import ZoneInfo
+from datetime import date, datetime, timedelta
 from functools import lru_cache
-from typing import Optional
+from pathlib import Path
+from typing import Literal, Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from app.indicators.pipeline import compute_enriched, compute_enriched_single
+from app.db_safe import is_valid_ext_ident
 from app.market_time import cn_now, cn_today, in_continuous_session
 from app.price_limits import is_no_limit_day, is_risk_warning_name, parse_listing_date, price_limit_pct
-from app.db_safe import is_valid_ext_ident
 from app.services import kline_sync, trading_day
 from app.services import minute_adjust
+from app.services.chart_data import ChartSnapshot
+from app.services.kline_periods import aggregate_daily_period, aggregate_minute_30m
+from app.services.technical_scoring import (
+    TECHNICAL_SCORE_COLUMNS,
+    TECHNICAL_SCORE_INTERNAL_COLUMNS,
+    TECHNICAL_SCORE_VERSION,
+    score_technical_frame,
+    technical_score_payload,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/kline", tags=["kline"])
+
+# 风险评分需要此前最多250根日K的历史分位; 400个自然日为周末和节假日留出余量.
+_TECHNICAL_SCORE_WARMUP_DAYS = 400
+
+
+def _chart_snapshot(request, symbol, asset_type, period, start, end):
+    from app.services import preferences
+
+    service = getattr(request.app.state, "chart_data_service", None)
+    if service is None:
+        import polars as pl
+        return ChartSnapshot(pl.DataFrame(), "", stale=True)
+    provider = preferences.get_chart_data_provider()
+    return service.get(provider, provider, symbol, asset_type, period, start, end)
+
+
+def _score_frame_if_requested(frame, include_technical_scores: bool):
+    """按需给 K 线帧附加技术评分; 默认路径不改变原始帧."""
+    return score_technical_frame(frame) if include_technical_scores else frame
+
+
+def _normalize_include_technical_scores(value: object) -> bool:
+    """FastAPI Query defaults are objects when an endpoint is called directly in tests."""
+    return value if isinstance(value, bool) else False
+
+
+def _date_text(value: object) -> str:
+    """Normalize date-like values before mixing historical and live rows."""
+    text = value.isoformat() if hasattr(value, "isoformat") else str(value)
+    return text.replace("T", " ")[:10]
+
+
+def _clean_technical_columns(frame):
+    columns = [
+        column
+        for column in (*TECHNICAL_SCORE_COLUMNS, *TECHNICAL_SCORE_INTERNAL_COLUMNS)
+        if column in frame.columns
+    ]
+    return frame.drop(columns) if columns else frame
+
+
+def _rows_and_score_payload(frame, include_technical_scores: bool):
+    visible = _clean_technical_columns(frame)
+    payload = technical_score_payload(frame) if include_technical_scores else None
+    return visible.to_dicts(), payload
+
+
+def _annotate_bar_closure(rows: list[dict], period: str, requested_end: date) -> list[dict]:
+    """Attach an explicit close-state contract without changing stored market data."""
+    now = cn_now()
+    today = now.date()
+    result: list[dict] = []
+    for index, raw in enumerate(rows):
+        row = dict(raw)
+        raw_date = row.get("date")
+        text = raw_date.isoformat() if hasattr(raw_date, "isoformat") else str(raw_date or "")
+        row.setdefault("period_start", row.get("period_start") or raw_date)
+        row.setdefault("period_end", row.get("period_end") or raw_date)
+        if period == "30m":
+            # The visible label is the scheduled bucket end; raw sources may carry the first/last tick.
+            row["period_end"] = text.replace("T", " ")[:16]
+        is_last = index == len(rows) - 1
+        closed = not is_last
+        try:
+            if period == "30m":
+                scheduled = datetime.fromisoformat(text.replace("T", " "))
+                closed = scheduled <= now.replace(tzinfo=None)
+            elif period == "1d":
+                bar_date = date.fromisoformat(text[:10])
+                closed = bar_date < today or (bar_date == today and now.hour >= 15)
+            else:
+                bar_end = row.get("period_end")
+                end_date = bar_end if isinstance(bar_end, date) else date.fromisoformat(str(bar_end)[:10])
+                if period == "1w":
+                    end_bucket = end_date.isocalendar()[:2]
+                    request_bucket = requested_end.isocalendar()[:2]
+                    closed = not is_last or request_bucket > end_bucket or (
+                        request_bucket == end_bucket and requested_end.weekday() >= 5
+                    ) or (
+                        request_bucket == end_bucket
+                        and requested_end.weekday() == 4
+                        and end_date == requested_end
+                        and (end_date < today or now.hour >= 15)
+                    )
+                else:
+                    end_bucket = (end_date.year, end_date.month)
+                    request_bucket = (requested_end.year, requested_end.month)
+                    closed = not is_last or request_bucket > end_bucket
+                if end_date == today and now.hour < 15:
+                    closed = False
+        except (TypeError, ValueError):
+            closed = False
+        row["is_closed"] = closed
+        result.append(row)
+    return result
 
 
 def _gzip_payload(request: Request, payload: dict, *, pref_key: str) -> dict | Response:
@@ -377,72 +481,323 @@ def get_daily(
     start_date: Optional[str] = Query(None, description="起始日期 YYYY-MM-DD, 优先于 days"),
     end_date: Optional[str] = Query(None, description="截止日期 YYYY-MM-DD, 默认今天"),
     ext_columns: Optional[str] = Query(None, description="逗号分隔的 ext 列: config_id.field_name"),
+    include_technical_scores: bool = Query(False, description="是否附带 technical-score-v8 评分序列"),
 ):
-    """读取本地 enriched 表中某只股票的日 K。
-
-    - 若 QuoteService 有实时行情, 追加/覆盖今日实时蜡烛
-    - Free 用户: 若 enriched 表里没有该股票, 实时拉取 + 本地算 enriched 返回
-    - ext_columns: 可选，动态 LEFT JOIN 扩展数据表，结果平铺到 stock_info.ext 下
-      (key 为 "{config_id}__{field_name}")，供日K信息条等场景展示自定义字段
-    """
+    """优先读取展示行情快照, 不可用时回退本地 enriched 和当日行情。"""
     import polars as pl
 
+    include_technical_scores = _normalize_include_technical_scores(include_technical_scores)
+    include_analysis = include_technical_scores
     repo = request.app.state.repo
-    end = date.fromisoformat(end_date) if end_date else date.today()
-    if start_date:
-        start = date.fromisoformat(start_date)
-    else:
-        start = end - timedelta(days=days)
+    try:
+        end = date.fromisoformat(end_date) if end_date else cn_today()
+        start = date.fromisoformat(start_date) if start_date else end - timedelta(days=days)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="日期格式错误") from exc
+    if start > end:
+        raise HTTPException(status_code=422, detail="起始日期不能晚于截止日期")
 
     asset_type = repo.resolve_asset_type(symbol)
     stock_info = _get_stock_info(repo, symbol) if asset_type == "stock" else _get_asset_info(repo, symbol, asset_type)
     stock_name = stock_info.get("name")
 
-    # 从 enriched 表读取 (已含前复权 OHLCV + 技术指标 + 信号); ETF/指数走独立存储
-    df = repo.get_daily_asset(asset_type, symbol, start, end)
-
-    if df.is_empty():
-        try:
-            raw = kline_sync.sync_daily_batch([symbol], count=days + 30)
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"TickFlow fetch failed: {e}") from e
-        if raw.is_empty():
-            return _gzip_payload(
-                request,
-                {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": []},
-                pref_key="daily_batch_compress",
-            )
-        # 拉除权因子做前复权 (Starter+ 有权限), 否则空 df → compute_enriched 退回未复权
-        factors = pl.DataFrame()
-        capset = getattr(request.app.state, "capabilities", None)
-        try:
-            from app.tickflow.capabilities import Cap
-            if capset and capset.has(Cap.ADJ_FACTOR):
-                factors = kline_sync.fetch_adj_factor_single(symbol)
-        except Exception as e:  # noqa: BLE001
-            logger.debug("单股除权因子拉取失败 %s: %s", symbol, e)
-        enriched = compute_enriched(raw, factors=factors)
-        rows = enriched.tail(days).to_dicts()
-        # 即使 live 模式也尝试追加实时蜡烛
-        rows = _maybe_inject_live_candle(request, symbol, rows, asset_type)
-        resp = {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": rows, "source": "live"}
+    score_start = start - timedelta(
+        days=_TECHNICAL_SCORE_WARMUP_DAYS if include_technical_scores else 180,
+    )
+    snapshot = _chart_snapshot(request, symbol, asset_type, "1d", score_start, end)
+    if not snapshot.frame.is_empty():
+        if include_analysis:
+            chart_rows = snapshot.frame.to_dicts()
+            if start <= cn_today() <= end and in_continuous_session():
+                chart_rows = _maybe_inject_live_candle(request, symbol, chart_rows, asset_type)
+            chart_frame = pl.DataFrame([
+                {**row, "date": _date_text(row.get("date"))}
+                for row in chart_rows
+            ], infer_schema_length=None)
+            scored = _score_frame_if_requested(chart_frame, include_technical_scores)
+            visible = scored.filter(pl.col("date").is_between(pl.lit(start.isoformat()), pl.lit(end.isoformat())))
+            if not include_technical_scores:
+                visible = chart_frame.filter(pl.col("date").is_between(pl.lit(start.isoformat()), pl.lit(end.isoformat())))
+            rows, score_payload = _rows_and_score_payload(visible, include_technical_scores)
+        else:
+            visible = snapshot.frame.filter(pl.col("date").is_between(start, end))
+            rows = visible.to_dicts()
+            if start <= cn_today() <= end and in_continuous_session():
+                rows = _maybe_inject_live_candle(request, symbol, rows, asset_type)
+            score_payload = None
+        rows = _annotate_bar_closure(rows, "1d", end)
+        resp = {"symbol": symbol, "name": stock_name, "asset_type": asset_type,
+                "stock_info": stock_info, "rows": rows, "source": "chart",
+                "data_status": snapshot.metadata()}
+        if score_payload is not None:
+            resp["technical_scores"] = score_payload
         return _gzip_payload(
             request,
             _attach_ext(resp, repo, symbol, ext_columns),
             pref_key="daily_batch_compress",
         )
 
-    rows = df.to_dicts()
+    # 从 enriched 表读取 (已含前复权 OHLCV + 技术指标 + 信号); ETF/指数走独立存储
+    data_start = score_start if include_analysis else start
+    df = repo.get_daily_asset(asset_type, symbol, data_start, end)
 
-    # 追加/覆盖今日实时蜡烛
-    rows = _maybe_inject_live_candle(request, symbol, rows, asset_type)
+    source = "enriched"
+    if df.is_empty() and asset_type == "stock":
+        try:
+            raw = kline_sync.sync_daily_batch(
+                [symbol],
+                count=days + (_TECHNICAL_SCORE_WARMUP_DAYS if include_technical_scores else 30),
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"TickFlow fetch failed: {exc}") from exc
+        if not raw.is_empty():
+            from app.indicators.pipeline import compute_enriched
 
-    resp = {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": rows, "source": "enriched"}
+            factors = pl.DataFrame()
+            capset = getattr(request.app.state, "capabilities", None)
+            try:
+                from app.tickflow.capabilities import Cap
+                if capset and capset.has(Cap.ADJ_FACTOR):
+                    factors = kline_sync.fetch_adj_factor_single(symbol)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("单股除权因子拉取失败 %s: %s", symbol, exc)
+            df = compute_enriched(raw, factors=factors)
+            source = "live"
+    if df.is_empty():
+        resp = {"symbol": symbol, "name": stock_name, "asset_type": asset_type,
+                "stock_info": stock_info, "rows": [], "source": "none",
+                "data_status": snapshot.metadata()}
+        if include_technical_scores:
+            resp["technical_scores"] = {"version": TECHNICAL_SCORE_VERSION, "rows": []}
+        return _gzip_payload(
+            request,
+            _attach_ext(resp, repo, symbol, ext_columns),
+            pref_key="daily_batch_compress",
+        )
+    # 追加/覆盖今日实时蜡烛. 仅评分路径需要重新构造 Polars 帧; 实时注入的
+    # date 是字符串而历史 enriched 可能是 date, 先统一成 ISO 字符串避免混型.
+    raw_rows = _maybe_inject_live_candle(request, symbol, df.to_dicts(), asset_type)
+    if include_analysis:
+        normalized_rows = [
+            {
+                **row,
+                "date": _date_text(row.get("date")),
+            }
+            for row in raw_rows
+        ]
+        frame = pl.DataFrame(normalized_rows, infer_schema_length=None)
+        scored = _score_frame_if_requested(frame, include_technical_scores)
+        visible = scored.filter(pl.col("date").is_between(pl.lit(start.isoformat()), pl.lit(end.isoformat()))) if include_technical_scores else frame.filter(pl.col("date").is_between(pl.lit(start.isoformat()), pl.lit(end.isoformat())))
+        rows, score_payload = _rows_and_score_payload(visible, include_technical_scores)
+    else:
+        rows, score_payload = raw_rows, None
+        if source == "live":
+            rows = [
+                row for row in rows
+                if start.isoformat() <= _date_text(row.get("date")) <= end.isoformat()
+            ]
+
+    rows = _annotate_bar_closure(rows, "1d", end)
+
+    resp = {"symbol": symbol, "name": stock_name, "asset_type": asset_type,
+            "stock_info": stock_info, "rows": rows, "source": source,
+            "data_status": snapshot.metadata()}
+    if score_payload is not None:
+        resp["technical_scores"] = score_payload
     return _gzip_payload(
         request,
         _attach_ext(resp, repo, symbol, ext_columns),
         pref_key="daily_batch_compress",
     )
+
+@router.get("/period")
+def get_period_kline(
+    request: Request,
+    symbol: str = Query(..., description="标的代码,如 000001.SZ"),
+    period: Literal["30m", "1w", "1mo"] = Query(..., description="K线周期"),
+    start_date: Optional[str] = Query(None, description="展示起始日期 YYYY-MM-DD"),
+    end_date: Optional[str] = Query(None, description="展示截止日期 YYYY-MM-DD,默认今天"),
+    days: int = Query(20, ge=1, le=120, description="30分钟K最近交易日数量"),
+    include_technical_scores: bool = Query(False, description="是否附带 technical-score-v8 评分序列"),
+):
+    """优先原生30分钟K和展示日线, 周/月聚合后重算指标, 不落库。"""
+    import polars as pl
+
+    include_technical_scores = _normalize_include_technical_scores(include_technical_scores)
+    include_analysis = include_technical_scores
+    repo = request.app.state.repo
+    asset_type = repo.resolve_asset_type(symbol)
+    if asset_type == "index":
+        raise HTTPException(status_code=400, detail="指数周期切换暂未开放")
+
+    try:
+        end = date.fromisoformat(end_date) if end_date else cn_today()
+        if period == "30m":
+            default_days = days * 3 + 20
+        else:
+            default_days = 365 * 3 if period == "1w" else 365 * 4
+        start = date.fromisoformat(start_date) if start_date else end - timedelta(days=default_days)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="日期格式错误,应为 YYYY-MM-DD") from exc
+    if start > end:
+        raise HTTPException(status_code=422, detail="起始日期不能晚于截止日期")
+
+    stock_info = (
+        _get_stock_info(repo, symbol)
+        if asset_type == "stock"
+        else _get_asset_info(repo, symbol, asset_type)
+    )
+    base = {
+        "symbol": symbol,
+        "name": stock_info.get("name"),
+        "asset_type": asset_type,
+        "stock_info": stock_info,
+        "period": period,
+    }
+
+    if period == "30m":
+        snapshot = _chart_snapshot(request, symbol, asset_type, period, start, end)
+        base["data_status"] = snapshot.metadata()
+        if not snapshot.frame.is_empty():
+            from app.services.kline_periods import prepare_native_30m
+
+            native = snapshot.frame
+            source = "chart"
+            if start <= cn_today() <= end and in_continuous_session():
+                latest = get_minute(request, symbol=symbol, trade_date=cn_today(), live=True)
+                latest_rows = latest.get("rows", []) if isinstance(latest, dict) else []
+                if latest_rows:
+                    live_frame = pl.DataFrame(latest_rows, infer_schema_length=None).with_columns(
+                        pl.lit(symbol).alias("symbol"),
+                    )
+                    live_bars = aggregate_minute_30m(live_frame)
+                    if not live_bars.is_empty() and "period_end" in live_bars.columns:
+                        live_native = live_bars.with_columns(
+                            pl.col("period_end").cast(pl.Datetime("us"), strict=False).alias("datetime"),
+                        ).drop([column for column in ("period_start", "period_end") if column in live_bars.columns])
+                        native = pl.concat([
+                            native.filter(pl.col("datetime").dt.date() != cn_today()),
+                            live_native,
+                        ], how="diagonal_relaxed").unique(
+                            subset=["symbol", "datetime"], keep="last",
+                        ).sort(["symbol", "datetime"])
+                        source = "chart+live"
+            trade_dates = sorted(native["datetime"].dt.date().unique().to_list())[-days:]
+            if include_analysis:
+                bars = prepare_native_30m(native)
+                scored = score_technical_frame(bars) if include_technical_scores else bars
+                visible = scored.filter(pl.col("date").str.slice(0, 10).is_in([str(value) for value in trade_dates]))
+                rows, score_payload = _rows_and_score_payload(visible, include_technical_scores)
+            else:
+                native = native.filter(pl.col("datetime").dt.date().is_in(trade_dates))
+                rows, score_payload = _rows_and_score_payload(prepare_native_30m(native), False)
+            rows = _annotate_bar_closure(rows, "30m", end)
+            response = {**base, "rows": rows, "source": source,
+                        "requested_days": days, "available_days": len(trade_dates)}
+            if score_payload is not None:
+                response["technical_scores"] = score_payload
+            return response
+        # 多取自然日覆盖节假日，最终严格裁成最近 N 个实际交易日。
+        scan_start = min(start, end - timedelta(days=days * 3 + 20))
+        minute = repo.get_minute_range([symbol], scan_start, end, asset_type=asset_type)
+        source = "local" if not minute.is_empty() else "none"
+
+        # 当日形成中的分钟 K 复用详情分时的 live 路径，覆盖本地增量落盘的滞后尾部。
+        if start <= cn_today() <= end and in_continuous_session():
+            latest = get_minute(request, symbol=symbol, trade_date=cn_today(), live=True)
+            latest_rows = latest.get("rows", []) if isinstance(latest, dict) else []
+            if latest_rows:
+                live_frame = pl.DataFrame(latest_rows, infer_schema_length=None).with_columns(
+                    pl.lit(symbol).alias("symbol"),
+                )
+                minute = (
+                    pl.concat([minute, live_frame], how="diagonal_relaxed")
+                    if not minute.is_empty()
+                    else live_frame
+                )
+                minute = minute.unique(subset=["symbol", "datetime"], keep="last")
+                source = "live" if source == "none" else "local+live"
+
+        if minute.is_empty() or "datetime" not in minute.columns:
+            response = {**base, "rows": [], "source": source, "requested_days": days, "available_days": 0}
+            if include_technical_scores:
+                response["technical_scores"] = {"version": TECHNICAL_SCORE_VERSION, "rows": []}
+            return response
+        minute = minute.with_columns(pl.col("datetime").dt.date().alias("_trade_date"))
+        trade_dates = sorted(minute["_trade_date"].unique().to_list())[-days:]
+        if include_analysis:
+            minute = minute.drop("_trade_date")
+            bars = aggregate_minute_30m(minute)
+            scored = score_technical_frame(bars) if include_technical_scores else bars
+            visible = scored.filter(pl.col("date").str.slice(0, 10).is_in([str(value) for value in trade_dates]))
+            rows, score_payload = _rows_and_score_payload(visible, include_technical_scores)
+        else:
+            minute = minute.filter(pl.col("_trade_date").is_in(trade_dates)).drop("_trade_date")
+            rows, score_payload = _rows_and_score_payload(aggregate_minute_30m(minute), False)
+        rows = _annotate_bar_closure(rows, "30m", end)
+        response = {
+            **base,
+            "rows": rows,
+            "source": source,
+            "requested_days": days,
+            "available_days": len(trade_dates),
+        }
+        if score_payload is not None:
+            response["technical_scores"] = score_payload
+        return response
+
+    # 周/月聚合和技术评分需要额外读取预热数据; 只扫描单标的基础列。
+    warmup_days = 500 if period == "1w" else 6 * 366
+    warmup_start = start - timedelta(days=warmup_days)
+    base_columns = ["symbol", "date", "open", "high", "low", "close", "volume", "amount"]
+    source = "enriched"
+    snapshot = _chart_snapshot(request, symbol, asset_type, "1d", warmup_start, end)
+    base["data_status"] = snapshot.metadata()
+    if not snapshot.frame.is_empty():
+        daily = snapshot.frame
+        source = "chart"
+    else:
+        daily = repo.get_daily_asset(asset_type, symbol, warmup_start, end, columns=base_columns)
+    if daily.is_empty():
+        fallback = get_daily(
+            request,
+            symbol=symbol,
+            days=2000,
+            start_date=warmup_start.isoformat(),
+            end_date=end.isoformat(),
+            ext_columns=None,
+            include_technical_scores=include_technical_scores,
+        )
+        fallback_rows = fallback.get("rows", []) if isinstance(fallback, dict) else []
+        if not fallback_rows:
+            response = {**base, "rows": [], "source": "none"}
+            if include_technical_scores:
+                response["technical_scores"] = {"version": TECHNICAL_SCORE_VERSION, "rows": []}
+            return response
+        daily = pl.DataFrame(fallback_rows, infer_schema_length=None)
+        source = str(fallback.get("source") or "live")
+    elif source != "chart":
+        daily_rows = _maybe_inject_live_candle(request, symbol, daily.to_dicts(), asset_type)
+        daily = pl.DataFrame([
+            {
+                **row,
+                "date": _date_text(row.get("date")),
+            }
+            for row in daily_rows
+        ], infer_schema_length=None)
+
+    bars = aggregate_daily_period(daily, period)
+    scored = _score_frame_if_requested(bars, include_technical_scores)
+    if not scored.is_empty():
+        scored = scored.filter(
+            (pl.col("period_end") >= start) & (pl.col("period_start") <= end),
+        )
+    rows, score_payload = _rows_and_score_payload(scored, include_technical_scores)
+    rows = _annotate_bar_closure(rows, period, end)
+    response = {**base, "rows": rows, "source": source}
+    if score_payload is not None:
+        response["technical_scores"] = score_payload
+    return response
 
 
 def _attach_ext(resp: dict, repo, symbol: str, ext_columns: Optional[str]) -> dict:
@@ -512,7 +867,7 @@ def _latest_live_candle(
     # 必须用 cn_today(): 美洲时区主机整个 A 股交易时段本地日期落后北京一天,
     # 旧代码盘中直接丢K。UTC 主机盘中(UTC 1:30-7:00)本地日期与北京相同, 并不丢K;
     # UTC 的旧症状是北京 00:00-08:00 把昨日残留快照误当实时K注入。
-    if not enriched_date or enriched_date != cn_today():
+    if not enriched_date or str(enriched_date)[:10] != cn_today().isoformat():
         return None
 
     # 查找该 symbol 的实时 enriched 行
@@ -535,7 +890,7 @@ def _latest_live_candle(
     raw_high = q.get("high")
     raw_low = q.get("low")
     live_row = {
-        "date": str(enriched_date),
+        "date": cn_today().isoformat(),
         "symbol": symbol,
         "open": raw_open if raw_open and raw_open > 0 else close_price,
         "high": raw_high if raw_high and raw_high > 0 else close_price,
@@ -546,6 +901,11 @@ def _latest_live_candle(
         "change_pct": q.get("change_pct"),
         "is_live": True,
     }
+    if asset_type != "stock":
+        live_row["turnover_rate"] = q.get("turnover_rate")
+        for key in ("raw_close", "raw_high", "raw_low"):
+            if q.get(key) is not None:
+                live_row[key] = q[key]
     for key in ("ma5", "ma10", "ma20", "ma30", "ma60",
                 "macd_dif", "macd_dea", "macd_hist",
                 "kdj_k", "kdj_d", "kdj_j",
@@ -934,7 +1294,13 @@ def get_minute_range(
 
     end = cn_today()
     start = end - timedelta(days=days * 3 + 20)
-    minute = repo.get_minute_range([symbol], start, end, asset_type=asset_type)
+    snapshot = _chart_snapshot(request, symbol, asset_type, "1m", start, end)
+    base_response["data_status"] = snapshot.metadata()
+    minute = snapshot.frame
+    source = "chart"
+    if minute.is_empty():
+        minute = repo.get_minute_range([symbol], start, end, asset_type=asset_type)
+        source = "local"
     if minute.is_empty() or "datetime" not in minute.columns:
         return _gzip_payload(
             request,
@@ -975,6 +1341,7 @@ def get_minute_range(
             **base_response,
             "sessions": sessions,
             "source": "local" if sessions else "none",
+            "source": source if sessions else "none",
         },
         pref_key="minute_batch_compress",
     )
@@ -1002,6 +1369,20 @@ def get_minute(
     asset_type = repo.resolve_asset_type(symbol)
     stock_info = _get_stock_info(repo, symbol) if asset_type == "stock" else _get_asset_info(repo, symbol, asset_type)
     stock_name = stock_info.get("name")
+
+    default_snapshot = None
+    if live and trade_date is None and in_continuous_session() and trading_day.is_trading_day() is not False:
+        trade_date = cn_today()
+    elif trade_date is None and getattr(request.app.state, "chart_data_service", None) is not None:
+        # 周末或本地历史滞后时, 最新交易日由展示源返回日期决定。
+        latest = _chart_snapshot(request, symbol, asset_type, "1m", cn_today() - timedelta(days=10), cn_today())
+        if not latest.frame.is_empty():
+            from dataclasses import replace
+
+            import polars as pl
+
+            trade_date = latest.frame["datetime"].max().date()
+            default_snapshot = replace(latest, frame=latest.frame.filter(pl.col("datetime").dt.date() == trade_date))
 
     if trade_date is None:
         # 默认看今天, 而不是本地落盘的最近日 (盘中后者是昨天)。
@@ -1070,6 +1451,7 @@ def get_minute(
                 live_df = minute_adjust.apply_minute_adjustment(
                     live_df, repo.store.data_dir, asset_type,
                 )
+        if not live_df.is_empty():
             return _gzip_payload(
                 request,
                 {
@@ -1080,6 +1462,20 @@ def get_minute(
                 },
                 pref_key="minute_batch_compress",
             )
+    snapshot = default_snapshot or _chart_snapshot(request, symbol, asset_type, "1m", trade_date, trade_date)
+    if not snapshot.frame.is_empty():
+        return {"symbol": symbol, "name": stock_name, "stock_info": stock_info,
+                "date": str(trade_date), "rows": snapshot.frame.to_dicts(), "source": "chart",
+                "asset_type": asset_type, "price_limit": price_limit, "prev_close": prev_close,
+                "data_status": snapshot.metadata()}
+
+    if getattr(request.app.state, "chart_data_service", None) is not None:
+        local = repo.get_minute(symbol, trade_date, asset_type=asset_type)
+        return {"symbol": symbol, "name": stock_name, "stock_info": stock_info,
+                "date": str(trade_date), "rows": local.to_dicts(),
+                "source": "local" if not local.is_empty() else "none",
+                "asset_type": asset_type, "price_limit": price_limit, "prev_close": prev_close,
+                "data_status": snapshot.metadata()}
 
     df = repo.get_minute(symbol, trade_date, asset_type=asset_type)
 
@@ -1466,6 +1862,135 @@ async def extend_history(request: Request):
         raise
     except Exception as e:
         logger.error("extend_history error: %s\n%s", e, _tb.format_exc())
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post("/extend_etf_history")
+async def extend_etf_history(request: Request):
+    """向前扩展或按区间回补 ETF 历史日K数据 — 独立于盘后管道。
+
+    body: { "value": int, "unit": "day"|"month"|"year" }
+    或 { "start_date": "YYYY-MM-DD", "end_date": "YYYY-MM-DD" }
+    返回 job_id,可轮询 /api/pipeline/jobs 查看进度。
+    """
+    import asyncio
+    import traceback as _tb
+
+    try:
+        body = await request.json()
+        value = body.get("value")
+        unit = body.get("unit", "month")
+        if unit not in ("day", "month", "year"):
+            raise HTTPException(status_code=400, detail="unit 只支持 day/month/year")
+
+        raw_start = body.get("start_date")
+        raw_end = body.get("end_date")
+        range_requested = raw_start is not None or raw_end is not None
+        range_start = range_end = None
+        if range_requested:
+            if raw_start is None or raw_end is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="指定区间必须同时提供 start_date 和 end_date",
+                )
+            try:
+                range_start = date.fromisoformat(str(raw_start))
+                range_end = date.fromisoformat(str(raw_end))
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="日期格式错误 (应为 YYYY-MM-DD)",
+                ) from exc
+            if range_start > range_end:
+                raise HTTPException(
+                    status_code=400,
+                    detail="指定区间无效,start_date 不能晚于 end_date",
+                )
+        elif not value or value <= 0:
+            raise HTTPException(status_code=400, detail="value 必须为正整数")
+
+        repo = request.app.state.repo
+        capset = request.app.state.capabilities
+
+        from app.api.data import invalidate_storage_cache
+        from app.services.extend_etf_history import run_extend_etf_history
+        from app.services.pipeline_jobs import (
+            JobCancelledError,
+            job_store,
+            release_run_slot,
+            run_with_capacity,
+            try_acquire_run_slot,
+        )
+        from app.tickflow.capabilities import Cap
+        if not capset.has(Cap.KLINE_DAILY_BATCH):
+            raise HTTPException(status_code=403, detail="需要 Pro+ 权限 (batch K-line)")
+
+        # ETF 全市场标的数较多,用长任务停滞阈值。
+        job_id, is_new = job_store.create(long_running=True)
+        if not is_new:
+            return {"status": "reused", "job_id": job_id}
+
+        async def task() -> None:
+            if not try_acquire_run_slot(job_id):
+                job_store.fail(job_id, "已有数据任务在运行(或上一次任务卡死未结束),请稍后再试")
+                return
+            loop = asyncio.get_event_loop()
+            qs = getattr(request.app.state, "quote_service", None)
+
+            def progress(stage: str, pct: int, msg: str,
+                         stage_pct: int | None = None, skip_log: bool = False) -> None:
+                job_store.progress(job_id, stage, pct, msg,
+                                   stage_pct=stage_pct, skip_log=skip_log)
+
+            def _run() -> dict:
+                # 回补期间暂停实时行情,避免同时写 ETF 日K parquet 产生竞态。
+                try:
+                    if qs:
+                        with qs.paused():
+                            return run_extend_etf_history(
+                                repo,
+                                capset,
+                                value,
+                                unit,
+                                start_date=range_start,
+                                end_date=range_end,
+                                on_progress=progress,
+                            )
+                    return run_extend_etf_history(
+                        repo,
+                        capset,
+                        value,
+                        unit,
+                        start_date=range_start,
+                        end_date=range_end,
+                        on_progress=progress,
+                    )
+                finally:
+                    repo.refresh_cache()
+
+            try:
+                result = await loop.run_in_executor(_long_task_executor, run_with_capacity, job_id, _run)
+                if "error" in result:
+                    job_store.fail(job_id, result["error"])
+                else:
+                    job_store.succeed(job_id, result)
+                invalidate_storage_cache()
+            except JobCancelledError:
+                # 已由 terminate() 标记失败,拉取线程在分块回调处自行退出。
+                invalidate_storage_cache()
+            except Exception as e:
+                logger.exception("extend_etf_history failed: job_id=%s", job_id)
+                job_store.fail(job_id, str(e))
+                invalidate_storage_cache()
+            finally:
+                release_run_slot(job_id)
+
+        asyncio.create_task(task())  # noqa: RUF006
+        return {"status": "started", "job_id": job_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("extend_etf_history error: %s\n%s", e, _tb.format_exc())
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 

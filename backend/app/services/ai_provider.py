@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 import tomllib
+import uuid
 from collections.abc import AsyncIterator, Callable, Sequence
 from pathlib import Path
 from types import TracebackType
@@ -19,13 +20,18 @@ from urllib.parse import urlsplit, urlunsplit
 
 from app import secrets_store
 from app.config import settings
+from app.services.hermes_gateway import HERMES_AGENT_PROVIDER
+from app.services.hermes_gateway import complete_chat as hermes_complete_chat
+from app.services.hermes_gateway import stream_chat as hermes_stream_chat
 
 OPENAI_COMPAT_PROVIDER = "openai_compat"
 OPENAI_PROVIDER = "openai"
+OPENCODE_GO_PROVIDER = "opencode_go"
 CODEX_CLI_PROVIDER = "codex_cli"
 CODEX_DEFAULT_COMMAND = "codex"
 CODEX_SUPPORTED_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
 OPENAI_DEFAULT_REASONING_EFFORT = "high"
+OPENCODE_GO_DEFAULT_USER_AGENT = "tick-stock-panel/1.0"
 
 _CODEX_ENV_ALLOWLIST = (
     "PATH",
@@ -124,6 +130,18 @@ def current_ai_provider() -> str:
     return secrets_store.get_ai_config("ai_provider", settings.ai_provider) or OPENAI_COMPAT_PROVIDER
 
 
+def current_hermes_gateway_url() -> str:
+    return secrets_store.get_hermes_config("hermes_gateway_url")
+
+
+def current_hermes_model() -> str:
+    return secrets_store.get_hermes_config("hermes_model")
+
+
+def current_hermes_key() -> str:
+    return secrets_store.get_hermes_key()
+
+
 def current_openai_model() -> str:
     return secrets_store.get_ai_config("ai_model", settings.ai_model)
 
@@ -141,6 +159,8 @@ def current_codex_model() -> str:
 def current_ai_model() -> str:
     if current_ai_provider() == CODEX_CLI_PROVIDER:
         return current_codex_model()
+    if current_ai_provider() == HERMES_AGENT_PROVIDER:
+        return current_hermes_model()
     return current_openai_model()
 
 
@@ -173,7 +193,7 @@ def _resolve_max_tokens(max_tokens: int | None) -> int | None:
     return max(1, min(int(max_tokens), cap))
 
 
-def _estimate_input_tokens(messages: Sequence[Message]) -> int:
+def estimate_input_tokens(messages: Sequence[Message]) -> int:
     """粗略估算输入 token 数: 中文按 1 字 1 token, 其余按 4 字符 1 token。"""
     total = 0
     for m in messages:
@@ -181,6 +201,11 @@ def _estimate_input_tokens(messages: Sequence[Message]) -> int:
         cjk = sum(1 for ch in text if "一" <= ch <= "鿿")
         total += cjk + (len(text) - cjk) // 4 + 1
     return max(1, total)
+
+
+def _estimate_input_tokens(messages: Sequence[Message]) -> int:
+    """Backward-compatible private alias for existing callers/tests."""
+    return estimate_input_tokens(messages)
 
 
 def _check_input_budget(messages: Sequence[Message], *, max_tokens: int | None) -> None:
@@ -194,7 +219,7 @@ def _check_input_budget(messages: Sequence[Message], *, max_tokens: int | None) 
     if context_window <= 0:
         return
     output_reserve = max_tokens if max_tokens is not None else current_ai_max_output_tokens()
-    est = _estimate_input_tokens(messages)
+    est = estimate_input_tokens(messages)
     if est + output_reserve > context_window:
         raise ValueError(
             f"输入过长: 估算输入约 {est} tokens, 加上输出预算 {max_tokens} tokens, "
@@ -220,6 +245,22 @@ def current_codex_reasoning_effort() -> str:
 
 def is_codex_cli_provider(provider: str | None = None) -> bool:
     return (provider or current_ai_provider()) == CODEX_CLI_PROVIDER
+
+
+def is_hermes_agent_provider(provider: str | None = None) -> bool:
+    return (provider or current_ai_provider()) == HERMES_AGENT_PROVIDER
+
+
+def is_opencode_go_provider(provider: str | None = None) -> bool:
+    """识别 OpenCode Go, 兼容已手动填入 Go 地址但尚未切换预设的旧配置。"""
+    configured_provider = provider or current_ai_provider()
+    if configured_provider == OPENCODE_GO_PROVIDER:
+        return True
+    if configured_provider != OPENAI_COMPAT_PROVIDER:
+        return False
+    base_url = secrets_store.get_ai_config("ai_base_url", settings.ai_base_url)
+    parsed = urlsplit(str(base_url or "").strip().lower())
+    return parsed.netloc == "opencode.ai" and parsed.path.startswith("/zen/go/")
 
 
 def normalize_codex_model(model: str) -> str:
@@ -292,6 +333,8 @@ def ai_configured(provider: str | None = None) -> bool:
     provider = provider or current_ai_provider()
     if is_codex_cli_provider(provider):
         return codex_cli_available()
+    if is_hermes_agent_provider(provider):
+        return bool(current_hermes_gateway_url() and current_hermes_key() and current_hermes_model())
     return bool(secrets_store.get_ai_key())
 
 
@@ -313,6 +356,13 @@ async def generate_ai_text(
     _check_input_budget(messages, max_tokens=max_tokens)
     if is_codex_cli_provider():
         return await _run_codex_cli(messages, max_tokens=max_tokens, timeout=max(timeout, 600.0))
+    if is_hermes_agent_provider():
+        return await _run_hermes_once(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+        )
     return await _run_openai_once(
         messages,
         temperature=temperature,
@@ -433,6 +483,15 @@ async def stream_ai_text(
     if is_codex_cli_provider():
         yield await _run_codex_cli(messages, max_tokens=max_tokens, timeout=max(timeout, 600.0))
         return
+    if is_hermes_agent_provider():
+        async for chunk in _stream_hermes(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+        ):
+            yield chunk
+        return
 
     async for chunk in _stream_openai(
         messages,
@@ -442,6 +501,73 @@ async def stream_ai_text(
         prefer_final_answer=prefer_final_answer,
     ):
         yield chunk
+
+
+async def _run_hermes_once(
+    messages: Sequence[Message],
+    *,
+    temperature: float | None,
+    max_tokens: int | None,
+    timeout: float,
+) -> str:
+    gateway_url = current_hermes_gateway_url()
+    api_key = current_hermes_key()
+    model = current_hermes_model()
+    if not gateway_url:
+        raise RuntimeError("Hermes Gateway 地址未配置, 请在设置页配置")
+    if not api_key:
+        raise RuntimeError("Hermes API Server Key 未配置, 请在设置页配置")
+    if not model:
+        raise RuntimeError("Hermes Agent 模型未配置, 请在设置页配置")
+
+    try:
+        return await hermes_complete_chat(
+            gateway_url,
+            api_key,
+            messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        if isinstance(exc, (ValueError, RuntimeError)):
+            raise
+        raise RuntimeError(str(exc)) from exc
+
+
+async def _stream_hermes(
+    messages: Sequence[Message],
+    *,
+    temperature: float | None,
+    max_tokens: int | None,
+    timeout: float,
+) -> AsyncIterator[str]:
+    gateway_url = current_hermes_gateway_url()
+    api_key = current_hermes_key()
+    model = current_hermes_model()
+    if not gateway_url:
+        raise RuntimeError("Hermes Gateway 地址未配置, 请在设置页配置")
+    if not api_key:
+        raise RuntimeError("Hermes API Server Key 未配置, 请在设置页配置")
+    if not model:
+        raise RuntimeError("Hermes Agent 模型未配置, 请在设置页配置")
+
+    try:
+        async for chunk in hermes_stream_chat(
+            gateway_url,
+            api_key,
+            messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+        ):
+            yield chunk
+    except Exception as exc:
+        if isinstance(exc, (ValueError, RuntimeError)):
+            raise
+        raise RuntimeError(str(exc)) from exc
 
 
 async def _run_openai_once(
@@ -479,7 +605,8 @@ async def _run_openai_message_once(
     if not ai_key:
         raise RuntimeError("AI API Key 未配置, 请在设置页配置")
 
-    client = _openai_client(ai_key, timeout)
+    session_id = str(uuid.uuid4()) if is_opencode_go_provider() else None
+    client = _openai_client(ai_key, timeout, session_id=session_id)
     model = current_ai_model()
     req_messages = list(messages)
     kwargs = _openai_kwargs(temperature=temperature, max_tokens=max_tokens, tools=tools)
@@ -516,7 +643,8 @@ async def _stream_openai(
     if not ai_key:
         raise RuntimeError("AI API Key 未配置, 请在设置页配置")
 
-    client = _openai_client(ai_key, timeout)
+    session_id = str(uuid.uuid4()) if is_opencode_go_provider() else None
+    client = _openai_client(ai_key, timeout, session_id=session_id)
     model = current_ai_model()
     base_url = secrets_store.get_ai_config("ai_base_url", settings.ai_base_url)
     req_messages = list(messages)
@@ -603,10 +731,20 @@ async def _iter_openai_text(stream) -> AsyncIterator[str]:
         raise RuntimeError("AI 服务未返回正文内容; 请检查模型配置或稍后重试")
 
 
-def _openai_client(api_key: str, timeout: float):
+def _openai_default_headers(*, session_id: str | None = None) -> dict[str, str]:
+    configured_user_agent = secrets_store.get_ai_config("ai_user_agent", "")
+    user_agent = configured_user_agent or (
+        OPENCODE_GO_DEFAULT_USER_AGENT if is_opencode_go_provider() else settings.ai_user_agent
+    )
+    headers = {"User-Agent": user_agent}
+    if is_opencode_go_provider():
+        headers["x-opencode-session"] = (session_id or str(uuid.uuid4())).strip()
+    return headers
+
+
+def _openai_client(api_key: str, timeout: float, *, session_id: str | None = None):
     from openai import AsyncOpenAI
 
-    user_agent = secrets_store.get_ai_config("ai_user_agent", "") or settings.ai_user_agent
     return AsyncOpenAI(
         api_key=api_key,
         base_url=normalize_openai_base_url(secrets_store.get_ai_config("ai_base_url", settings.ai_base_url)),
@@ -615,7 +753,7 @@ def _openai_client(api_key: str, timeout: float):
         # 重试安全; 首 chunk 之后的断流不在此列, 由上层协议报错处理。
         # 根因: DeepSeek 等上游高峰过载时首包失败率高, max_retries=0 导致一次抖动即终止。
         max_retries=2,
-        default_headers={"User-Agent": user_agent},
+        default_headers=_openai_default_headers(session_id=session_id),
     )
 
 
@@ -952,7 +1090,7 @@ def _make_writable_and_retry(
 
 def _codex_prompt(messages: Sequence[Message], *, max_tokens: int | None) -> str:
     parts = [
-        "You are Tick Stock Panel's local AI provider.",
+        "You are Seek Hub's local AI provider.",
         "This is a text-generation task. The working directory is intentionally empty.",
         "Use only the user-provided prompt content below; do not inspect or modify local files.",
         "Return only the final requested content; do not include execution logs.",

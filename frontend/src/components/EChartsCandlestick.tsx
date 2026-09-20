@@ -1,8 +1,12 @@
 import { useEffect, useRef, useCallback, useMemo } from 'react'
 import { chartTheme, getTheme, useTheme } from '@/lib/theme'
-import { fmtPct } from '@/lib/format'
+import { fmtAssetPrice, fmtPct } from '@/lib/format'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
+import type { ChanlunAnalysis } from '@/lib/chanlun'
+import type { ElliottAnalysis } from '@/lib/elliott'
+import type { StockPreviewChanlunOverlayConfig, StockPreviewElliottOverlayConfig } from '@/lib/storage'
+import { zoomWindowEndingAt } from '@/lib/chartViewport'
 
 export interface OHLC {
   date: string
@@ -10,6 +14,8 @@ export interface OHLC {
   high: number
   low: number
   close: number
+  periodEnd?: string | null
+  isClosed?: boolean
   volume?: number
   ma5?: number | null
   ma10?: number | null
@@ -26,6 +32,8 @@ export interface OHLC {
   kdj_j?: number | null
   boll_upper?: number | null
   boll_lower?: number | null
+  atr_14?: number | null
+  atr14?: number | null
 }
 
 export interface ChartMarker {
@@ -43,6 +51,15 @@ export interface ChartRange {
   end: string
   label?: string
   color?: string
+}
+
+/** 横向价格区间覆盖层；与按时间的 ChartRange 保持独立。 */
+export interface ChartPriceBand {
+  low: number
+  high: number
+  label?: string
+  color?: string
+  borderColor?: string
 }
 
 export interface ChartPriceLine {
@@ -117,6 +134,51 @@ function volumeRatioAt(data: OHLC[], index: number, days: number): number | null
   const current = data[index]?.volume
   if (current == null || !Number.isFinite(current) || average <= 0) return null
   return current / average
+}
+
+function toCandlePixel(chart: ECharts, index: number, price: number): [number, number] | null {
+  if (!Number.isFinite(price)) return null
+  const point = chart.convertToPixel(
+    { xAxisIndex: 0, yAxisIndex: 0 },
+    [index, price],
+  )
+  if (!Array.isArray(point) || point.length < 2) return null
+  const x = Number(point[0])
+  const y = Number(point[1])
+  return Number.isFinite(x) && Number.isFinite(y) ? [x, y] : null
+}
+
+/** 只命中 K 线实体，不把影线或同一日期列的空白区域当成点击。 */
+function isCandleBodyHit(
+  chart: ECharts,
+  pixel: [number, number],
+  index: number,
+  data: OHLC[],
+): boolean {
+  const candle = data[index]
+  if (!candle) return false
+
+  const openPoint = toCandlePixel(chart, index, candle.open)
+  const closePoint = toCandlePixel(chart, index, candle.close)
+  if (!openPoint || !closePoint) return false
+
+  // ECharts 默认蜡烛实体宽度为 category band 的 1/2，点击区域按实际实体宽度计算。
+  const neighborIndex = index > 0 ? index - 1 : index + 1
+  const neighbor = data[neighborIndex]
+  const neighborPoint = neighbor
+    ? toCandlePixel(chart, neighborIndex, neighbor.open)
+    : null
+  const bandWidth = neighborPoint ? Math.abs(openPoint[0] - neighborPoint[0]) : 0
+  const halfBodyWidth = bandWidth > 0 ? Math.max(bandWidth / 4, 0.75) : 4
+
+  const bodyTop = Math.min(openPoint[1], closePoint[1])
+  const bodyBottom = Math.max(openPoint[1], closePoint[1])
+  // 开收相同的十字线实体高度很小，保留少量像素使其仍然可点击。
+  const bodyHalfHeight = Math.max((bodyBottom - bodyTop) / 2, 0.75)
+  const bodyCenterY = (bodyTop + bodyBottom) / 2
+
+  return Math.abs(pixel[0] - openPoint[0]) <= halfBodyWidth
+    && Math.abs(pixel[1] - bodyCenterY) <= bodyHalfHeight
 }
 
 function fmtVolumeRatio(value: number | null, digits = 2): string {
@@ -323,6 +385,7 @@ interface Props {
   data: OHLC[]
   markers?: ChartMarker[]
   ranges?: ChartRange[]
+  priceBands?: ChartPriceBand[]
   priceLines?: ChartPriceLine[]
   height?: number
   showMA?: boolean
@@ -333,6 +396,7 @@ interface Props {
   symbol?: string
   linkedPrice?: number | null
   onDateClick?: (date: string) => void
+  selectedDate?: string | null
   onPriceDoubleClick?: (price: number, currentPrice: number) => void
   /** 默认可见蜡烛根数, 默认 60; 'all' = 初始适配显示全部返回数据 */
   visibleBars?: number | 'all'
@@ -342,6 +406,13 @@ interface Props {
   volumeCompare?: VolumeCompareConfig
   /** 加入自选日 (北京时间 YYYY-MM-DD); 有值且落在当前区间内时, 主图画一条「自选」竖虚线 */
   addedDate?: string | null
+  assetType?: string
+  chanlunAnalysis?: ChanlunAnalysis
+  chanlunOverlay?: StockPreviewChanlunOverlayConfig
+  elliottAnalysis?: ElliottAnalysis
+  elliottOverlay?: StockPreviewElliottOverlayConfig
+  /** 调试设置开启时隐藏当前推进 K 线的日期展示。 */
+  hideCurrentDate?: boolean
 }
 
 // 序列颜色 (双主题通用); 画布轴/网格/文字等主题相关色走 CT() 动态取
@@ -370,6 +441,264 @@ const ADDED_DATE_COLOR = '#3B82F6'
 const INFO_BAR_H = 16
 /** 子图之间的间距 (px) */
 const SUB_GAP_PX = 4
+
+function appendChanlunMarkPoints(
+  target: any[],
+  dateIndexMap: Map<string, number>,
+  analysis: ChanlunAnalysis | undefined,
+  config: StockPreviewChanlunOverlayConfig | undefined,
+  compact: boolean,
+) {
+  if (!analysis || !config?.enabled) return
+  if (config.fractals) {
+    for (const fractal of analysis.fractals) {
+      if (!dateIndexMap.has(fractal.date)) continue
+      const isBottom = fractal.type === 'bottom'
+      target.push({
+        name: fractal.date,
+        coord: [fractal.date, fractal.price],
+        symbol: 'triangle',
+        symbolSize: compact ? 6 : 9,
+        symbolRotate: isBottom ? 0 : 180,
+        symbolOffset: isBottom ? [0, '75%'] : [0, '-75%'],
+        itemStyle: { color: isBottom ? '#60A5FA' : '#A78BFA', opacity: 0.9 },
+        label: {
+          show: !compact,
+          formatter: isBottom ? '底' : '顶',
+          position: isBottom ? 'bottom' : 'top',
+          distance: 5,
+          color: isBottom ? '#60A5FA' : '#A78BFA',
+          fontSize: 9,
+          fontFamily: 'JetBrains Mono, monospace',
+        },
+        tooltip: { formatter: `${isBottom ? '底' : '顶'}分型<br/>结构发生：${fractal.date}<br/>最早可知：${fractal.confirmedAt}` },
+        z: 90,
+      })
+    }
+  }
+  if (config.candidates) {
+    const labels = {
+      first_buy: '1买', second_buy: '2买', third_buy: '3买',
+      first_sell: '1卖', second_sell: '2卖', third_sell: '3卖',
+    } as const
+    for (const signal of analysis.candidateSignals) {
+      if ((signal.status !== 'candidate' && signal.status !== 'invalidated')
+        || !dateIndexMap.has(signal.availableDate)) continue
+      const isBuy = signal.kind.endsWith('_buy')
+      const invalidated = signal.status === 'invalidated'
+      const color = isBuy ? THEME.bull : THEME.bear
+      target.push({
+        name: signal.availableDate,
+        coord: [signal.availableDate, signal.price],
+        symbol: 'circle',
+        symbolSize: invalidated ? 7 : 9,
+        symbolOffset: isBuy ? [0, '80%'] : [0, '-80%'],
+        itemStyle: {
+          color: invalidated ? CT().text : color,
+          borderColor: CT().tooltipBg,
+          borderWidth: 1,
+          opacity: invalidated ? 0.45 : 0.95,
+        },
+        label: {
+          show: true,
+          formatter: invalidated ? `${labels[signal.kind]}失效` : `${labels[signal.kind]}候选`,
+          position: isBuy ? 'bottom' : 'top',
+          distance: 7,
+          color: invalidated ? CT().text : color,
+          fontSize: compact ? 8 : 9,
+          fontFamily: 'JetBrains Mono, monospace',
+        },
+        tooltip: {
+          formatter: `${labels[signal.kind]}${invalidated ? '失效' : '候选'}<br/>结构发生：${signal.structureDate}<br/>最早可知：${signal.availableDate}<br/>失效边界：${signal.boundary}`,
+        },
+        z: 95,
+      })
+    }
+  }
+  if (config.divergences) {
+    for (const divergence of analysis.divergences.filter(item => item.status === 'candidate')) {
+      if (!dateIndexMap.has(divergence.c.endDate)) continue
+      const price = analysis.bars.find(bar => bar.date === divergence.c.endDate)?.close ?? analysis.currentPrice
+      if (price == null) continue
+      target.push({
+        name: divergence.c.endDate,
+        coord: [divergence.c.endDate, price],
+        symbol: 'diamond',
+        symbolSize: compact ? 7 : 10,
+        itemStyle: { color: '#F59E0B', opacity: 0.9 },
+        label: { show: !compact, formatter: '背驰候选', position: 'top', color: '#F59E0B', fontSize: 9 },
+        tooltip: { formatter: `${divergence.kind === 'trend' ? '趋势' : '盘整'}背驰代理<br/>${divergence.evidence}` },
+        z: 94,
+      })
+    }
+  }
+}
+
+function appendElliottMarkPoints(
+  target: any[],
+  lineTarget: any[],
+  dateIndexMap: Map<string, number>,
+  analysis: ElliottAnalysis | undefined,
+  config: StockPreviewElliottOverlayConfig | undefined,
+  compact: boolean,
+) {
+  if (!analysis || !config?.enabled || !analysis.primaryCount) return
+  const primaryPivots = analysis.primaryCount.pivots.filter(pivot => dateIndexMap.has(pivot.eventTime) && pivot.state !== 'projected')
+  // 疑似末端只来自当前截面尾部，不属于已完成主计数；单独追加以虚线和问号呈现。
+  const suspected = analysis.pivots.find(pivot => pivot.state === 'suspected' && dateIndexMap.has(pivot.eventTime))
+  const pivots = suspected && !primaryPivots.some(pivot => pivot.eventTime === suspected.eventTime)
+    ? [...primaryPivots, suspected]
+    : primaryPivots
+  if (pivots.length === 0) return
+  for (const pivot of pivots) {
+    const isHigh = pivot.type === 'high'
+    target.push({
+      name: `elliott-${pivot.eventTime}-${pivot.label}`,
+      coord: [pivot.eventTime, pivot.price],
+      symbol: 'circle',
+      symbolSize: compact ? 5 : pivot.state === 'suspected' ? 7 : 8,
+      symbolOffset: isHigh ? [0, '-65%'] : [0, '65%'],
+      itemStyle: {
+        color: pivot.state === 'suspected' ? '#FCD34D' : '#F59E0B',
+        opacity: pivot.state === 'suspected' ? 0.65 : 0.95,
+      },
+      label: {
+        show: config.labels && !compact,
+        formatter: pivot.state === 'suspected'
+          ? (pivot.label === '?' ? '?' : `${pivot.label}?`)
+          : pivot.label,
+        position: isHigh ? 'top' : 'bottom',
+        distance: 5,
+        color: '#FBBF24',
+        fontSize: 9,
+        fontFamily: 'JetBrains Mono, monospace',
+      },
+      z: 88,
+    })
+  }
+  if (config.strokes && pivots.length > 1) {
+    for (let index = 1; index < pivots.length; index += 1) {
+      const start = pivots[index - 1]
+      const end = pivots[index]
+      lineTarget.push([
+        { coord: [start.eventTime, start.price], symbol: 'none' },
+        {
+          coord: [end.eventTime, end.price],
+          symbol: 'none',
+          lineStyle: {
+            color: '#F59E0B',
+            type: start.state === 'suspected' || end.state === 'suspected' ? 'dashed' : 'solid',
+            width: 1.2,
+            opacity: start.state === 'suspected' || end.state === 'suspected' ? 0.55 : 0.8,
+          },
+          label: { show: false },
+        },
+      ])
+    }
+  }
+}
+
+function appendPriceMarkLines(
+  target: any[],
+  priceLines: ChartPriceLine[] | undefined,
+  dateIndexMap: Map<string, number>,
+  linkedPrice: number | null | undefined,
+  assetType?: string,
+) {
+  for (const line of priceLines ?? []) {
+    if (!Number.isFinite(line.value)) continue
+    const lineStyle = {
+      color: line.color ?? CT().text,
+      type: 'dashed' as const,
+      width: 1,
+      opacity: 0.92,
+    }
+    const label = {
+      show: !!line.label,
+      formatter: line.label ?? '',
+      position: 'insideEndTop' as const,
+      color: line.color ?? CT().text,
+      backgroundColor: CT().tooltipBg,
+      borderRadius: 4,
+      padding: [2, 6],
+      fontSize: 10,
+      fontFamily: 'JetBrains Mono, monospace',
+    }
+    if (line.start && line.end && dateIndexMap.has(line.start) && dateIndexMap.has(line.end)) {
+      target.push([
+        { xAxis: line.start, yAxis: line.value },
+        { xAxis: line.end, yAxis: line.value, lineStyle, label, symbol: 'none' },
+      ])
+    } else {
+      target.push({ yAxis: line.value, lineStyle, label, symbol: 'none' })
+    }
+  }
+
+  if (linkedPrice != null) {
+    target.push({
+      yAxis: linkedPrice,
+      lineStyle: { color: '#3B82F6', type: 'dashed', width: 1, opacity: 0.7 },
+      label: {
+        show: true,
+        formatter: fmtAssetPrice(linkedPrice, assetType),
+        position: 'insideEndTop',
+        color: '#3B82F6',
+        fontSize: 10,
+        fontFamily: 'JetBrains Mono, monospace',
+        backgroundColor: CT().tooltipBg,
+        borderColor: '#3B82F6',
+        borderWidth: 1,
+        padding: [1, 4],
+        borderRadius: 2,
+      },
+      symbol: 'none',
+    })
+  }
+}
+
+function appendChanlunMarkLines(
+  target: any[],
+  dateIndexMap: Map<string, number>,
+  analysis: ChanlunAnalysis | undefined,
+  config: StockPreviewChanlunOverlayConfig | undefined,
+) {
+  if (!analysis || !config?.enabled) return
+  if (config.strokes) {
+    for (const stroke of analysis.strokes) {
+      if (!dateIndexMap.has(stroke.startDate) || !dateIndexMap.has(stroke.endDate)) continue
+      const color = stroke.direction === 'up' ? THEME.bull : THEME.bear
+      target.push([
+        { coord: [stroke.startDate, stroke.startPrice], symbol: 'none' },
+        {
+          coord: [stroke.endDate, stroke.endPrice],
+          symbol: 'none',
+          lineStyle: {
+            color,
+            type: stroke.confirmed ? 'solid' : 'dashed',
+            width: stroke.confirmed ? 1.4 : 1.2,
+            opacity: stroke.confirmed ? 0.82 : 0.6,
+          },
+          label: { show: false },
+        },
+      ])
+    }
+  }
+  if (config.segments) {
+    for (const segment of analysis.segments) {
+      if (!dateIndexMap.has(segment.startDate) || !dateIndexMap.has(segment.endDate)) continue
+      const color = segment.direction === 'up' ? THEME.bull : THEME.bear
+      target.push([
+        { coord: [segment.startDate, segment.startPrice], symbol: 'none' },
+        {
+          coord: [segment.endDate, segment.endPrice],
+          symbol: 'none',
+          lineStyle: { color, type: segment.confirmed ? 'solid' : 'dashed', width: 2.4, opacity: segment.confirmed ? 0.95 : 0.55 },
+          label: { show: false },
+        },
+      ])
+    }
+  }
+}
 
 function buildSubInfoGraphics(
   data: OHLC[],
@@ -471,6 +800,7 @@ function buildOption(
   dateIndexMap: Map<string, number>,
   markers: ChartMarker[] | undefined,
   ranges: ChartRange[] | undefined,
+  priceBands: ChartPriceBand[] | undefined,
   priceLines: ChartPriceLine[] | undefined,
   showMA: boolean,
   compact: boolean,
@@ -480,6 +810,12 @@ function buildOption(
   linkedPrice: number | null | undefined,
   volumeCompare: VolumeCompareConfig,
   addedDate: string | null | undefined,
+  assetType?: string,
+  chanlunAnalysis?: ChanlunAnalysis,
+  chanlunOverlay?: StockPreviewChanlunOverlayConfig,
+  elliottAnalysis?: ElliottAnalysis,
+  elliottOverlay?: StockPreviewElliottOverlayConfig,
+  hideCurrentDate = false,
 ): EChartsOption {
   const candleData = data.map(d => [d.open, d.close, d.low, d.high])
 
@@ -518,12 +854,13 @@ function buildOption(
         }
       } else {
         markPointData.push({
-          name: m.label ?? '',
+          // markPoint 点击需要回传对应 K 线日期；显示文字由 label.formatter 单独负责。
+          name: m.date,
           coord: [m.date, isBuy ? d.low : d.high],
           symbol: 'arrow', symbolSize: 12,
           symbolRotate: isBuy ? 0 : 180,
           symbolOffset: isBuy ? [0, '60%'] : [0, '-60%'],
-          itemStyle: { color: isBuy ? THEME.bull : isSell ? THEME.bear : CT().text },
+          itemStyle: { color: m.color ?? (isBuy ? THEME.bull : isSell ? THEME.bear : CT().text) },
           label: {
             show: !!m.label, formatter: m.label ?? '',
             position: isBuy ? 'bottom' : 'top', distance: 8,
@@ -534,6 +871,9 @@ function buildOption(
       }
     }
   }
+  appendChanlunMarkPoints(markPointData, dateIndexMap, chanlunAnalysis, chanlunOverlay, compact)
+  const elliottLineData: any[] = []
+  appendElliottMarkPoints(markPointData, elliottLineData, dateIndexMap, elliottAnalysis, elliottOverlay, compact)
 
   // ====== 布局计算 ======
   const left = 60
@@ -562,17 +902,21 @@ function buildOption(
   const priceLineValues = (priceLines ?? [])
     .map(line => line.value)
     .filter(value => Number.isFinite(value) && value > 0)
-  const axisMin = priceLineValues.length > 0
+  const priceBandValues = (priceBands ?? [])
+    .flatMap(band => [band.low, band.high])
+    .filter(value => Number.isFinite(value) && value > 0)
+  const priceOverlayValues = [...priceLineValues, ...priceBandValues]
+  const axisMin = priceOverlayValues.length > 0
     ? ({ min, max }: { min: number; max: number }) => {
-        const nextMin = Math.min(min, ...priceLineValues)
-        const nextMax = Math.max(max, ...priceLineValues)
+        const nextMin = Math.min(min, ...priceOverlayValues)
+        const nextMax = Math.max(max, ...priceOverlayValues)
         return nextMin - Math.max((nextMax - nextMin) * 0.03, nextMax * 0.001)
       }
     : undefined
-  const axisMax = priceLineValues.length > 0
+  const axisMax = priceOverlayValues.length > 0
     ? ({ min, max }: { min: number; max: number }) => {
-        const nextMin = Math.min(min, ...priceLineValues)
-        const nextMax = Math.max(max, ...priceLineValues)
+        const nextMin = Math.min(min, ...priceOverlayValues)
+        const nextMax = Math.max(max, ...priceOverlayValues)
         return nextMax + Math.max((nextMax - nextMin) * 0.03, nextMax * 0.001)
       }
     : undefined
@@ -582,7 +926,13 @@ function buildOption(
   xAxes.push({
     type: 'category', data: dates, boundaryGap: true,
     axisLine: { lineStyle: { color: CT().border } },
-    axisLabel: { color: CT().text, fontSize: 10, fontFamily: 'JetBrains Mono, monospace' },
+    axisLabel: {
+      show: !hideCurrentDate,
+      color: CT().text,
+      fontSize: 10,
+      fontFamily: 'JetBrains Mono, monospace',
+    },
+    axisPointer: { label: { show: !hideCurrentDate } },
     axisTick: { show: false },
     splitLine: { show: false },
   })
@@ -595,7 +945,10 @@ function buildOption(
     splitArea: { show: false },
     axisLine: { show: false }, axisTick: { show: false },
     splitLine: { lineStyle: { color: CT().grid } },
-    axisLabel: { color: CT().text, fontSize: 10, fontFamily: 'JetBrains Mono, monospace' },
+    axisLabel: {
+      color: CT().text, fontSize: 10, fontFamily: 'JetBrains Mono, monospace',
+      formatter: (value: number) => fmtAssetPrice(value, assetType),
+    },
   })
   xAxisIndices.push(0)
 
@@ -623,55 +976,60 @@ function buildOption(
       { xAxis: r.end },
     ]))
 
-  const markLineData: any[] = (priceLines ?? [])
-    .filter(line => Number.isFinite(line.value))
-    .map(line => {
-      const lineStyle = {
-        color: line.color ?? CT().text,
-        type: 'dashed' as const,
-        width: 1,
-        opacity: 0.92,
-      }
-      const label = {
-        show: !!line.label,
-        formatter: line.label ?? '',
-        position: 'insideEndTop' as const,
-        color: line.color ?? CT().text,
-        backgroundColor: CT().tooltipBg,
-        borderRadius: 4,
-        padding: [2, 6],
-        fontSize: 10,
-        fontFamily: 'JetBrains Mono, monospace',
-      }
-      if (line.start && line.end && dateIndexMap.has(line.start) && dateIndexMap.has(line.end)) {
-        return [
-          { xAxis: line.start, yAxis: line.value },
-          { xAxis: line.end, yAxis: line.value, lineStyle, label, symbol: 'none' },
-        ]
-      }
-      return { yAxis: line.value, lineStyle, label, symbol: 'none' }
-    })
-
-  if (linkedPrice != null) {
-    markLineData.push({
-      yAxis: linkedPrice,
-      lineStyle: { color: '#3B82F6', type: 'dashed', width: 1, opacity: 0.7 },
-      label: {
-        show: true,
-        formatter: linkedPrice.toFixed(2),
-        position: 'insideEndTop',
-        color: '#3B82F6',
-        fontSize: 10,
-        fontFamily: 'JetBrains Mono, monospace',
-        backgroundColor: CT().tooltipBg,
-        borderColor: '#3B82F6',
-        borderWidth: 1,
-        padding: [1, 4],
-        borderRadius: 2,
+  for (const band of priceBands ?? []) {
+    if (!Number.isFinite(band.low) || !Number.isFinite(band.high) || band.high < band.low) continue
+    markAreaData.push([
+      {
+        name: band.label ?? '',
+        yAxis: band.low,
+        itemStyle: {
+          color: band.color ?? 'rgba(249,115,22,0.10)',
+          borderColor: band.borderColor ?? 'rgba(249,115,22,0.42)',
+          borderWidth: 1,
+        },
+        label: {
+          show: !!band.label,
+          formatter: band.label ?? '',
+          position: 'insideTop',
+          color: band.borderColor ?? '#F97316',
+          fontSize: 9,
+          fontFamily: 'JetBrains Mono, monospace',
+        },
       },
-      symbol: 'none',
-    })
+      { yAxis: band.high },
+    ] as any)
   }
+
+  if (chanlunAnalysis && chanlunOverlay?.enabled && chanlunOverlay.centers) {
+    for (const center of chanlunAnalysis.centers) {
+      if (!dateIndexMap.has(center.startDate) || !dateIndexMap.has(center.endDate)) continue
+      markAreaData.push([
+        {
+          name: '中枢',
+          coord: [center.startDate, center.zd],
+          itemStyle: {
+            color: 'rgba(139,92,246,0.10)',
+            borderColor: 'rgba(139,92,246,0.50)',
+            borderWidth: 1,
+          },
+          label: {
+            show: true,
+            formatter: '中枢',
+            position: 'insideTop',
+            color: '#A78BFA',
+            fontSize: 9,
+            fontFamily: 'JetBrains Mono, monospace',
+          },
+        },
+        { coord: [center.endDate, center.zg] },
+      ] as any)
+    }
+  }
+
+  const markLineData: any[] = [...elliottLineData]
+  appendPriceMarkLines(markLineData, priceLines, dateIndexMap, linkedPrice, assetType)
+
+  appendChanlunMarkLines(markLineData, dateIndexMap, chanlunAnalysis, chanlunOverlay)
 
   series.push({
     name: 'K', type: 'candlestick', data: candleData,
@@ -835,7 +1193,11 @@ function buildOption(
     backgroundColor: THEME.bg,
     tooltip: {
       trigger: 'axis',
-      axisPointer: { type: 'cross', crossStyle: { color: CT().crosshair } },
+      axisPointer: {
+        type: 'cross',
+        crossStyle: { color: CT().crosshair },
+        label: { show: !hideCurrentDate },
+      },
       backgroundColor: 'transparent',
       borderWidth: 0,
       textStyle: { fontSize: 0 },
@@ -844,6 +1206,7 @@ function buildOption(
     axisPointer: {
       link: [{ xAxisIndex: 'all' }],
       label: {
+        show: !hideCurrentDate,
         backgroundColor: CT().crosshairLabelBg,
         fontFamily: 'JetBrains Mono, monospace',
         fontSize: 10,
@@ -872,6 +1235,7 @@ export function EChartsCandlestick({
   data,
   markers,
   ranges,
+  priceBands,
   priceLines,
   height = 480,
   showMA = true,
@@ -882,11 +1246,18 @@ export function EChartsCandlestick({
   symbol: _symbol,
   linkedPrice,
   onDateClick,
+  selectedDate,
   onPriceDoubleClick,
   visibleBars = 60,
   activeIndicators = [],
   volumeCompare = { enabled: true, days: 1 },
   addedDate,
+  assetType,
+  chanlunAnalysis,
+  chanlunOverlay,
+  elliottAnalysis,
+  elliottOverlay,
+  hideCurrentDate = false,
 }: Props) {
   const hoverSurfaceRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -916,6 +1287,14 @@ export function EChartsCandlestick({
   activeIndicatorsRef.current = activeIndicators
   const volumeCompareRef = useRef(volumeCompare)
   volumeCompareRef.current = volumeCompare
+  const chanlunAnalysisRef = useRef(chanlunAnalysis)
+  chanlunAnalysisRef.current = chanlunAnalysis
+  const chanlunOverlayRef = useRef(chanlunOverlay)
+  chanlunOverlayRef.current = chanlunOverlay
+  const elliottAnalysisRef = useRef(elliottAnalysis)
+  elliottAnalysisRef.current = elliottAnalysis
+  const elliottOverlayRef = useRef(elliottOverlay)
+  elliottOverlayRef.current = elliottOverlay
   const chartHeightRef = useRef(300)
   const subTotalHRef = useRef(0)
   const getInfoBarHTMLRef = useRef<() => string>(() => '')
@@ -973,6 +1352,25 @@ export function EChartsCandlestick({
       : Math.max(0, 100 - (visibleBars / Math.max(data.length, 1)) * 100)
     return { start, end: 100 }
   }, [visibleBars, data.length])
+  const initialZoomRef = useRef(initialZoom)
+  initialZoomRef.current = initialZoom
+
+  const moveChartToIndex = useCallback((index: number) => {
+    const chart = chartRef.current
+    const currentData = dataRef.current
+    const zoom = zoomWindowEndingAt(index, currentData.length, userZoomRef.current ?? initialZoomRef.current)
+    if (!chart || !zoom) return
+
+    // Category-axis dataZoom uses percentages. Move the selected candle to the
+    // right edge while preserving the current visible width.
+    const lastIndex = Math.max(currentData.length - 1, 1)
+    const nextZoom = {
+      start: (zoom.startValue / lastIndex) * 100,
+      end: currentData.length === 1 ? 100 : (zoom.endValue / lastIndex) * 100,
+    }
+    userZoomRef.current = nextZoom
+    chart.dispatchAction({ type: 'dataZoom', ...nextZoom })
+  }, [])
 
   // ===== 信息栏 HTML 内容 (基于 infoIdxRef.current) =====
   const getInfoBarHTML = useCallback(() => {
@@ -992,15 +1390,15 @@ export function EChartsCandlestick({
     const turnoverRate = floatShares && d.volume ? (d.volume * 100 / floatShares * 100) : null
 
     let html = `<div style="display:flex;align-items:center;gap:6px;padding:0 8px;font:11px 'JetBrains Mono',monospace;select:none;min-height:20px;flex-wrap:wrap">`
-    html += `<span style="color:${CT().text}">${d.date}</span>`
+    if (!hideCurrentDate) html += `<span style="color:${CT().text}">${d.date}</span>`
     html += `<span style="color:${CT().text}">开</span>`
-    html += `<span style="color:${d.open >= d.close ? THEME.bear : THEME.bull}">${d.open.toFixed(2)}</span>`
+    html += `<span style="color:${d.open >= d.close ? THEME.bear : THEME.bull}">${fmtAssetPrice(d.open, assetType)}</span>`
     html += `<span style="color:${CT().text}">高</span>`
-    html += `<span style="color:${THEME.bull}">${d.high.toFixed(2)}</span>`
+    html += `<span style="color:${THEME.bull}">${fmtAssetPrice(d.high, assetType)}</span>`
     html += `<span style="color:${CT().text}">低</span>`
-    html += `<span style="color:${THEME.bear}">${d.low.toFixed(2)}</span>`
+    html += `<span style="color:${THEME.bear}">${fmtAssetPrice(d.low, assetType)}</span>`
     html += `<span style="color:${CT().text}">收</span>`
-    html += `<span style="color:${clr};font-weight:600">${d.close.toFixed(2)}</span>`
+    html += `<span style="color:${clr};font-weight:600">${fmtAssetPrice(d.close, assetType)}</span>`
     // 涨跌幅 (收盘后, 换手前; 和收间隔一些距离)
     if (prev) {
       const chgPct = (chg / prev.close * 100)
@@ -1029,18 +1427,18 @@ export function EChartsCandlestick({
     // 第二行: MA + BOLL
     if (showMA) {
       html += `<div style="display:flex;align-items:center;gap:10px;padding:0 8px;font:11px 'JetBrains Mono',monospace;select:none;min-height:20px;flex-wrap:wrap">`
-      if (d.ma5 != null) html += `<span style="color:${THEME.ma5}">MA5:${Number(d.ma5).toFixed(2)}</span>`
-      if (d.ma10 != null) html += `<span style="color:${THEME.ma10}">MA10:${Number(d.ma10).toFixed(2)}</span>`
-      if (d.ma20 != null) html += `<span style="color:${THEME.ma20}">MA20:${Number(d.ma20).toFixed(2)}</span>`
-      if (d.ma60 != null) html += `<span style="color:${THEME.ma60}">MA60:${Number(d.ma60).toFixed(2)}</span>`
+      if (d.ma5 != null) html += `<span style="color:${THEME.ma5}">MA5:${fmtAssetPrice(Number(d.ma5), assetType)}</span>`
+      if (d.ma10 != null) html += `<span style="color:${THEME.ma10}">MA10:${fmtAssetPrice(Number(d.ma10), assetType)}</span>`
+      if (d.ma20 != null) html += `<span style="color:${THEME.ma20}">MA20:${fmtAssetPrice(Number(d.ma20), assetType)}</span>`
+      if (d.ma60 != null) html += `<span style="color:${THEME.ma60}">MA60:${fmtAssetPrice(Number(d.ma60), assetType)}</span>`
       if (d.boll_upper != null && activeIndicators.includes('boll')) {
-        html += `<span style="color:#E879F9">BOLL:${Number(d.boll_upper).toFixed(2)}/${Number(d.ma20).toFixed(2)}/${Number(d.boll_lower).toFixed(2)}</span>`
+        html += `<span style="color:#E879F9">BOLL:${fmtAssetPrice(Number(d.boll_upper), assetType)}/${fmtAssetPrice(Number(d.ma20), assetType)}/${fmtAssetPrice(Number(d.boll_lower), assetType)}</span>`
       }
       html += `</div>`
     }
 
     return html
-  }, [data, stockInfo, showMA, activeIndicators])
+  }, [data, stockInfo, showMA, activeIndicators, assetType, hideCurrentDate])
   getInfoBarHTMLRef.current = getInfoBarHTML
 
   // data/symbol 变化时重置 infoIdx:
@@ -1110,18 +1508,19 @@ export function EChartsCandlestick({
       if (idxChanged) triggerInfoBarUpdate()
     })
 
-    chart.on('click', (params: any) => {
-      if (params.componentType === 'markPoint' && params.name) {
-        onDateClickRef.current?.(params.name)
-        return
-      }
-      if (params.seriesName !== 'K' || params.dataIndex == null) return
-      const d = dataRef.current
-      const idx = params.dataIndex
-      if (idx >= 0 && idx < d.length) {
-        onDateClickRef.current?.(d[idx].date)
-      }
-    })
+    const handleNativeChartClick = (event: MouseEvent) => {
+      const rect = el.getBoundingClientRect()
+      const pixel: [number, number] = [event.clientX - rect.left, event.clientY - rect.top]
+      if (!chart.containPixel({ gridIndex: 0 }, pixel)) return
+      const coordinate = chart.convertFromPixel({ xAxisIndex: 0, yAxisIndex: 0 }, pixel)
+      const index = Array.isArray(coordinate) ? Math.round(Number(coordinate[0])) : -1
+      const currentData = dataRef.current
+      if (index < 0 || index >= currentData.length) return
+      if (!isCandleBodyHit(chart, pixel, index, currentData)) return
+      moveChartToIndex(index)
+      onDateClickRef.current?.(currentData[index].date)
+    }
+    el.addEventListener('click', handleNativeChartClick)
 
     const handlePriceDoubleClick = (event: { offsetX: number; offsetY: number }) => {
       const pixel: [number, number] = [event.offsetX, event.offsetY]
@@ -1158,8 +1557,8 @@ export function EChartsCandlestick({
 
     return () => {
       chart.off('updateAxisPointer')
-      chart.off('click')
       chart.off('dataZoom')
+      el.removeEventListener('click', handleNativeChartClick)
       hoverEl.removeEventListener('mouseenter', handlePointerEnter)
       hoverEl.removeEventListener('mouseleave', handlePointerLeave)
       chart.getZr().off('dblclick', handlePriceDoubleClick)
@@ -1207,12 +1606,13 @@ export function EChartsCandlestick({
         }
       } else {
         markPointData.push({
-          name: m.label ?? '',
+          // markPoint 点击需要回传对应 K 线日期；显示文字由 label.formatter 单独负责。
+          name: m.date,
           coord: [m.date, isBuy ? d.low : d.high],
           symbol: 'arrow', symbolSize: 12,
           symbolRotate: isBuy ? 0 : 180,
           symbolOffset: isBuy ? [0, '60%'] : [0, '-60%'],
-          itemStyle: { color: isBuy ? THEME.bull : isSell ? THEME.bear : CT().text },
+          itemStyle: { color: m.color ?? (isBuy ? THEME.bull : isSell ? THEME.bear : CT().text) },
           label: {
             show: !!m.label, formatter: m.label ?? '',
             position: isBuy ? 'bottom' : 'top', distance: 8,
@@ -1222,10 +1622,32 @@ export function EChartsCandlestick({
         })
       }
     }
-    if (mkrs?.length) {
+    const currentData = dataRef.current
+    const currentDateIndexMap = new Map(currentData.map((item, index) => [item.date, index]))
+    appendChanlunMarkPoints(
+      markPointData,
+      currentDateIndexMap,
+      chanlunAnalysisRef.current,
+      chanlunOverlayRef.current,
+      compact,
+    )
+    const elliottLineData: any[] = []
+    appendElliottMarkPoints(
+      markPointData,
+      elliottLineData,
+      currentDateIndexMap,
+      elliottAnalysisRef.current,
+      elliottOverlayRef.current,
+      compact,
+    )
+    if (mkrs?.length || (chanlunAnalysisRef.current && chanlunOverlayRef.current?.enabled) || (elliottAnalysisRef.current && elliottOverlayRef.current?.enabled)) {
+      const markLineData: any[] = [...elliottLineData]
+      appendPriceMarkLines(markLineData, priceLines, currentDateIndexMap, linkedPrice, assetType)
+      appendChanlunMarkLines(markLineData, currentDateIndexMap, chanlunAnalysisRef.current, chanlunOverlayRef.current)
       seriesUpdates.push({
         name: 'K',
         markPoint: markPointData.length > 0 ? { data: markPointData, animation: false } : undefined,
+        markLine: markLineData.length > 0 ? { silent: true, symbol: 'none', data: markLineData, animation: false } : undefined,
       })
     }
     if (activeIndicatorsRef.current.includes('vol')) {
@@ -1247,6 +1669,7 @@ export function EChartsCandlestick({
       data, dates, dateIndexMap,
       showMarkersProp ? markers : undefined,
       ranges,
+      priceBands,
       priceLines,
       showMA, compactRef.current,
       activeIndicators, chartHeight,
@@ -1254,6 +1677,12 @@ export function EChartsCandlestick({
       linkedPrice,
       volumeCompare,
       addedDate,
+      assetType,
+      chanlunAnalysis,
+      chanlunOverlay,
+      elliottAnalysis,
+      elliottOverlay,
+      hideCurrentDate,
     )
 
     chart.setOption(option, true)
@@ -1271,7 +1700,13 @@ export function EChartsCandlestick({
     if (infoEl) {
       infoEl.innerHTML = getInfoBarHTML()
     }
-  }, [data, markers, ranges, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, addedDate, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme])
+  }, [data, markers, ranges, priceBands, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, addedDate, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme, assetType, chanlunAnalysis, chanlunOverlay, elliottAnalysis, elliottOverlay, hideCurrentDate])
+
+  useEffect(() => {
+    if (!selectedDate) return
+    const index = dateIndexMap.get(selectedDate)
+    if (index != null) moveChartToIndex(index)
+  }, [dateIndexMap, moveChartToIndex, selectedDate])
 
   // 渲染信息栏容器 (内容由 JS 直接写入)
   const initialHTML = useMemo(() => {
@@ -1281,17 +1716,17 @@ export function EChartsCandlestick({
     const floatShares = stockInfo?.float_shares
     const turnoverRate = floatShares && d.volume ? (d.volume * 100 / floatShares * 100) : null
     let html = `<div style="display:flex;align-items:center;gap:6px;padding:0 8px;font:11px 'JetBrains Mono',monospace;min-height:20px;flex-wrap:wrap">`
-    html += `<span style="color:${CT().text}">${d.date}</span>`
+    if (!hideCurrentDate) html += `<span style="color:${CT().text}">${d.date}</span>`
     html += `<span style="color:${CT().text}">开</span>`
-    html += `<span style="color:${d.open >= d.close ? THEME.bear : THEME.bull}">${d.open.toFixed(2)}</span>`
+    html += `<span style="color:${d.open >= d.close ? THEME.bear : THEME.bull}">${fmtAssetPrice(d.open, assetType)}</span>`
     html += `<span style="color:${CT().text}">高</span>`
-    html += `<span style="color:${THEME.bull}">${d.high.toFixed(2)}</span>`
+    html += `<span style="color:${THEME.bull}">${fmtAssetPrice(d.high, assetType)}</span>`
     html += `<span style="color:${CT().text}">低</span>`
-    html += `<span style="color:${THEME.bear}">${d.low.toFixed(2)}</span>`
+    html += `<span style="color:${THEME.bear}">${fmtAssetPrice(d.low, assetType)}</span>`
     html += `<span style="color:${CT().text}">收</span>`
     const prevClose0 = data[idx-1]?.close ?? d.close
     const clr0 = d.close >= prevClose0 ? THEME.bull : THEME.bear
-    html += `<span style="color:${clr0};font-weight:600">${d.close.toFixed(2)}</span>`
+    html += `<span style="color:${clr0};font-weight:600">${fmtAssetPrice(d.close, assetType)}</span>`
     // 涨跌幅 (收盘后, 换手前; 和收间隔一些距离)
     if (idx > 0) {
       const chgPct0 = ((d.close - prevClose0) / prevClose0 * 100)
@@ -1304,18 +1739,17 @@ export function EChartsCandlestick({
     html += `</div>`
     if (showMA) {
       html += `<div style="display:flex;align-items:center;gap:10px;padding:0 8px;font:11px 'JetBrains Mono',monospace;min-height:20px;flex-wrap:wrap">`
-      if (d.ma5 != null) html += `<span style="color:${THEME.ma5}">MA5:${Number(d.ma5).toFixed(2)}</span>`
-      if (d.ma10 != null) html += `<span style="color:${THEME.ma10}">MA10:${Number(d.ma10).toFixed(2)}</span>`
-      if (d.ma20 != null) html += `<span style="color:${THEME.ma20}">MA20:${Number(d.ma20).toFixed(2)}</span>`
-      if (d.ma60 != null) html += `<span style="color:${THEME.ma60}">MA60:${Number(d.ma60).toFixed(2)}</span>`
+      if (d.ma5 != null) html += `<span style="color:${THEME.ma5}">MA5:${fmtAssetPrice(Number(d.ma5), assetType)}</span>`
+      if (d.ma10 != null) html += `<span style="color:${THEME.ma10}">MA10:${fmtAssetPrice(Number(d.ma10), assetType)}</span>`
+      if (d.ma20 != null) html += `<span style="color:${THEME.ma20}">MA20:${fmtAssetPrice(Number(d.ma20), assetType)}</span>`
+      if (d.ma60 != null) html += `<span style="color:${THEME.ma60}">MA60:${fmtAssetPrice(Number(d.ma60), assetType)}</span>`
       if (d.boll_upper != null && activeIndicators.includes('boll')) {
-        html += `<span style="color:#E879F9">BOLL:${Number(d.boll_upper).toFixed(2)}/${Number(d.ma20).toFixed(2)}/${Number(d.boll_lower).toFixed(2)}</span>`
+        html += `<span style="color:#E879F9">BOLL:${fmtAssetPrice(Number(d.boll_upper), assetType)}/${fmtAssetPrice(Number(d.ma20), assetType)}/${fmtAssetPrice(Number(d.boll_lower), assetType)}</span>`
       }
       html += `</div>`
     }
     return html
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [data, stockInfo, showMA, activeIndicators, assetType, hideCurrentDate])
 
   return (
     <div ref={hoverSurfaceRef} className="w-full">

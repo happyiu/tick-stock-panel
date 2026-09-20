@@ -62,6 +62,14 @@ def test_interval_setter_invalidates_cache(_isolated):
     assert preferences.load()["realtime_quote_interval"] == 2.0
 
 
+def test_exchange_rate_interval_defaults_to_three_hours_and_has_one_hour_floor(_isolated):
+    assert preferences.get_exchange_rate_interval_hours() == 3
+    assert preferences.set_exchange_rate_interval_hours(0) == 1
+    assert preferences.get_exchange_rate_interval_hours() == 1
+    assert preferences.set_exchange_rate_interval_hours(6) == 6
+    assert preferences.get_exchange_rate_interval_hours() == 6
+
+
 def test_load_returns_copy_not_cached_object(_isolated):
     _isolated.write_text(json.dumps({"k": [1, 2]}), encoding="utf-8")
     first = preferences.load()

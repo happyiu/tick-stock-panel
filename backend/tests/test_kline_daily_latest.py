@@ -150,8 +150,6 @@ def test_daily_latest_uses_etf_enriched_cache(monkeypatch) -> None:
     assert response.json()["source"] == "live"
     assert repo.latest_asset_calls == 1
     assert repo.latest_asset_refresh is False
-
-
 def test_daily_latest_uses_index_enriched_cache(monkeypatch) -> None:
     """指数日K的当日实时行走独立 index enriched 缓存, 不能直接 return None。"""
     from app.api import kline as kline_api

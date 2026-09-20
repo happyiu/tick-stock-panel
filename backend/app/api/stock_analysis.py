@@ -5,12 +5,15 @@
 端点:
   GET  /levels?symbol=         11 类关键价位(图表 markLine 数据源)
   POST /analyze                AI 流式四维分析(NDJSON)
+  POST /chat/stream            Hermes-only 详情页多轮对话(NDJSON)
+  POST /elliott/explain        详情页本地波浪结果的 AI 只读解释
   GET  /reports                历史报告列表
   POST /reports                保存一条报告
   DELETE /reports/{report_id}  删除一条报告
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
 from datetime import date, timedelta
@@ -22,8 +25,23 @@ from pydantic import BaseModel
 
 from app.indicators.levels import compute_levels, summarize_levels
 from app.services import stock_reports
+from app.services.ai_provider import ai_configured
+from app.services.elliott_wave_analyzer import (
+    ElliottAnalyzeRequest,
+    ElliottAssessment,
+    ElliottAssessmentError,
+    ElliottExplanation,
+    analyze_elliott,
+    explain_elliott,
+)
 from app.services.ndjson_heartbeat import with_heartbeat
 from app.services.stock_analyzer import analyze_stock_stream
+from app.services.stock_chat import (
+    StockChatError,
+    StockChatRequest,
+    prepare_stock_chat,
+    stream_stock_chat,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +66,7 @@ def _to_float_list(series: pl.Series) -> list:
 def _build_series(df: pl.DataFrame) -> dict:
     """提取带状指标(布林带 / Keltner通道 / ATR止损)的每日时间序列。
 
-    这些指标的本质是"每日一条线",随 MA/ATR/σ 漂移,画成曲线才能体现通道形态。
+    这些指标的本质是"每日一条线",随 MA/ATR/sigma 漂移,画成曲线才能体现通道形态。
     其余固定价位(枢轴/前高前低等)不在此,仍用水平 markLine。
 
     返回结构(每个 value 都是按日期对齐的数组):
@@ -94,7 +112,7 @@ def _build_series(df: pl.DataFrame) -> dict:
         if ma120 is not None:
             out["keltner_l"] = _channel(ma120, 3.0)
 
-        # ATR 止损/止盈: close ± 2×ATR(跟随行情漂移的动态止损线)
+        # ATR 止损/止盈: close ± 2xATR(跟随行情漂移的动态止损线)
         out["atr"] = {
             "stop_loss": _to_float_list(close - 2 * atr),
             "take_profit": _to_float_list(close + 2 * atr),
@@ -123,12 +141,14 @@ def get_levels(
     end = date.today()
     start = end - timedelta(days=days * 2)
     # 按资产类型分流: ETF/指数走独立 enriched 存储, 股票保持原路径
-    df = repo.get_daily_asset(repo.resolve_asset_type(symbol), symbol, start, end)
+    asset_type = repo.resolve_asset_type(symbol)
+    df = repo.get_daily_asset(asset_type, symbol, start, end)
     if df.is_empty():
         return {"levels": {"sr": [], "pivot": [], "extreme": [],
                            "boll": [], "keltner_s": [], "keltner_m": [], "keltner_l": [],
                            "atr_stop": [], "gap": [], "fib": [], "round": []},
                 "close": None, "summary": "无数据", "symbol": symbol,
+                "asset_type": asset_type,
                 "dates": [], "series": {}}
 
     levels = compute_levels(df)
@@ -141,6 +161,7 @@ def get_levels(
         "close": close,
         "summary": summarize_levels(levels, close),
         "symbol": symbol,
+        "asset_type": asset_type,
         "dates": [str(d) for d in dates],
         "series": series,
     }
@@ -174,6 +195,63 @@ async def analyze_stock(request: Request, req: AnalyzeRequest):
         media_type="application/x-ndjson",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/chat/stream")
+async def stock_chat_stream(req: StockChatRequest):
+    """Hermes-only multi-turn detail-page chat (NDJSON with heartbeats)."""
+    try:
+        provider_messages, prepared = prepare_stock_chat(req)
+    except StockChatError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    async def stream_gen():
+        yield json.dumps(prepared["meta"], ensure_ascii=False) + "\n"
+        async for event in stream_stock_chat(
+            provider_messages,
+            gateway_url=prepared["gateway_url"],
+            api_key=prepared["api_key"],
+            model=prepared["model"],
+        ):
+            yield json.dumps(event, ensure_ascii=False) + "\n"
+
+    return StreamingResponse(
+        stream_gen(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/elliott/analyze", response_model=ElliottAssessment)
+async def analyze_elliott_wave(req: ElliottAnalyzeRequest):
+    """艾略特波浪 AI 增强评估。
+
+    K 线快照由详情页提交, 服务端再次按 as_of 截断; 该接口只返回研究评估,
+    不写入报告、不连接券商, 也不参与技术分、选股或监控。
+    """
+    if not ai_configured():
+        raise HTTPException(status_code=503, detail="AI 未配置; 请在设置页配置 API Key 与接口地址")
+    try:
+        return await analyze_elliott(req)
+    except ElliottAssessmentError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("AI Elliott assessment failed for %s: %s", req.symbol, exc)
+        raise HTTPException(status_code=502, detail=f"艾略特波浪 AI 评估失败: {exc}") from exc
+
+
+@router.post("/elliott/explain", response_model=ElliottExplanation)
+async def explain_elliott_wave(req: ElliottAnalyzeRequest):
+    """艾略特波浪 AI v2 解释; 计数、排名、规则和价格事实必须来自详情页本地结果。"""
+    if not ai_configured():
+        raise HTTPException(status_code=503, detail="AI 未配置; 请在设置页配置 API Key 与接口地址")
+    try:
+        return await explain_elliott(req)
+    except ElliottAssessmentError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("AI Elliott explanation failed for %s: %s", req.symbol, exc)
+        raise HTTPException(status_code=502, detail=f"艾略特波浪 AI 解释失败: {exc}") from exc
 
 
 # ================================================================

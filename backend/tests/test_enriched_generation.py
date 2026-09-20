@@ -41,6 +41,21 @@ def test_repository_enriched_noop_does_not_bump_generation(tmp_path) -> None:
     assert repo.get_matrix_data_generation("stock") == first
 
 
+def test_repository_enriched_upsert_skips_existing_partition_after_write(tmp_path) -> None:
+    repo = KlineRepository(DataStore(tmp_path))
+    existing = _frame().with_columns(pl.lit(date(2026, 8, 14)).alias("date"))
+    incoming = pl.concat([
+        _frame(11.0).with_columns(pl.lit(date(2026, 8, 13)).alias("date")),
+        existing,
+    ])
+    repo.append_enriched(existing)
+
+    # 同一批次先写新日期,再遇到内容相同的已有日期,不应重复提交已结束的 ownership。
+    repo.append_enriched(incoming)
+
+    assert (tmp_path / "kline_daily_enriched" / "date=2026-08-13" / "part.parquet").is_file()
+
+
 def test_failed_multi_partition_publication_remains_fail_closed(
     tmp_path,
     monkeypatch,

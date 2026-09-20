@@ -10,8 +10,7 @@ import { PageHeader } from '@/components/PageHeader'
 import { Modal } from '@/components/Modal'
 import { DatePicker } from '@/components/DatePicker'
 import { DateShortcuts } from '@/components/DateShortcuts'
-import { StockPreviewDialog } from '@/components/StockPreviewDialog'
-import { toNavItems } from '@/lib/listNav'
+import { StockPreviewDialog, toNavItems } from '@/components/StockPreviewDialog'
 import { boardTag } from '@/components/stock-table/primitives'
 
 const emptyDraft = (): Lot => ({

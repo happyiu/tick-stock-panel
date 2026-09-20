@@ -1,4 +1,4 @@
-"""Tick Stock Panel backend."""
+"""Seek Hub backend."""
 
 import sys
 

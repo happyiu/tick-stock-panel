@@ -936,7 +936,9 @@ class StrategyEngine:
         if signal_df is None:
             signal_df = pl.DataFrame()
         if not signal_df.is_empty() and "date" in signal_df.columns:
-            signal_df = signal_df.filter(pl.col("date") == as_of)
+            signal_df = signal_df.filter(
+                pl.col("date").cast(pl.Date, strict=False) == as_of
+            )
         if pool and not signal_df.is_empty():
             signal_df = signal_df.filter(pl.col("symbol").is_in(pool))
         exit_signal_hits = self._collect_signal_hits(signal_df, exit_signals)
@@ -1008,7 +1010,9 @@ class StrategyEngine:
                 )
             df = s.filter_history_fn(df, params)
             if "date" in df.columns:
-                df = df.filter(pl.col("date") == as_of)
+                df = df.filter(
+                    pl.col("date").cast(pl.Date, strict=False) == as_of
+                )
         else:
             if current is None:
                 raise ValueError(f"strategy {strategy_id} requires current data")
@@ -1549,7 +1553,9 @@ class StrategyEngine:
             latest = target["datetime"].max()
             target = target.filter(pl.col("datetime") == latest)
         elif "date" in panel.columns:
-            target = panel.filter(pl.col("date") == as_of)
+            target = panel.filter(
+                pl.col("date").cast(pl.Date, strict=False) == as_of
+            )
         else:
             return panel.head(0)
         return target.unique(subset=["symbol"], keep="last")

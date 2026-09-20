@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { ScanSearch, Clock, TrendingUp, Star, Filter, Layers, Network, Sparkles, RefreshCw, Settings2, Store, RotateCcw, X } from 'lucide-react'
+import { ScanSearch, Clock, TrendingUp, Star, Filter, Layers, Network, Sparkles, RefreshCw, Settings2, Store, RotateCcw, X, Trash2 } from 'lucide-react'
 import { api, genRuleId, type ScreenerStrategy, type ScreenerResult } from '@/lib/api'
 import { fetchMinuteBatchIncremental } from '@/lib/minuteBatchIncremental'
 import { DEFAULT_STRATEGY_NOTIFY_EVENTS } from '@/lib/strategyMonitorEvents'
@@ -40,11 +40,45 @@ import {
 // 获取策略为占位功能, 暂时隐藏入口; 恢复时改回 true
 const SHOW_STRATEGY_STORE = false
 
+type StrategyTimeframe = '1d' | '1w' | '30m' | '1m'
+type TimeframeFilter = 'all' | StrategyTimeframe
+
+const TIMEFRAME_LABEL: Record<StrategyTimeframe, string> = {
+  '1d': '日线',
+  '1w': '周线',
+  '30m': '30F',
+  '1m': '分钟',
+}
+
+const TIMEFRAME_ORDER: StrategyTimeframe[] = ['1d', '1w', '30m', '1m']
+
+function supportsTimeframe(strategy: ScreenerStrategy | undefined, timeframe: StrategyTimeframe): boolean {
+  const declared = strategy?.timeframes
+  return declared ? declared.includes(timeframe) : timeframe === '1d'
+}
+
+function resolveStrategyTimeframe(strategy: ScreenerStrategy | undefined, preferred: TimeframeFilter): StrategyTimeframe {
+  if (preferred !== 'all' && supportsTimeframe(strategy, preferred)) return preferred
+  const declared = strategy?.timeframes ?? ['1d']
+  return TIMEFRAME_ORDER.find(timeframe => declared.includes(timeframe)) ?? '1d'
+}
+
+function strategyTimeframeBadge(strategy: ScreenerStrategy, filter: TimeframeFilter): string | undefined {
+  if (filter === 'all') {
+    const nonDaily = TIMEFRAME_ORDER.slice(1).find(timeframe => strategy.timeframes?.includes(timeframe))
+    return nonDaily ? TIMEFRAME_LABEL[nonDaily] : undefined
+  }
+  const timeframe = resolveStrategyTimeframe(strategy, filter)
+  return timeframe === '1d' ? undefined : TIMEFRAME_LABEL[timeframe]
+}
+
 export function Screener() {
-  const [assetType, setAssetType] = useState<'stock' | 'etf'>('stock')
-  // 周期显示筛选: 全部 / 日线 / 分钟 — 只过滤卡片显示, 不影响池和执行;
-  // 执行按每个策略自己声明的 timeframes 路由 (日线走盘后缓存, 分钟走本地分钟K分区)
-  const [tfFilter, setTfFilter] = useState<'all' | '1d' | '1m'>('all')
+  const [assetType, setAssetType] = useState<'stock' | 'etf'>(() => {
+    const saved = storage.screenerAssetType.get('stock')
+    return saved === 'etf' ? 'etf' : 'stock'
+  })
+  // 周期显示筛选: 只过滤卡片显示; 执行按策略声明的 timeframes 路由。
+  const [tfFilter, setTfFilter] = useState<TimeframeFilter>('all')
   const [activeStrategy, setActiveStrategy] = useState<string | null>(null)
   const [result, setResult] = useState<ScreenerResult | null>(null)
   const [asOf, setAsOf] = useState<string>('')
@@ -58,6 +92,7 @@ export function Screener() {
     setPreviewNavList([])
   }, [])
   const [settingsStrategyId, setSettingsStrategyId] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null)
   const [showPoolDialog, setShowPoolDialog] = useState(false)
   const [showBuilder, setShowBuilder] = useState(false)
   const [builderMode, setBuilderMode] = useState<'create' | 'modify'>('create')
@@ -101,6 +136,10 @@ export function Screener() {
   const runAllDateRef = useRef<string | null>(null)
   const qc = useQueryClient()
 
+  useEffect(() => {
+    storage.screenerAssetType.set(assetType)
+  }, [assetType])
+
   // 结果列配置 — 默认内置列，异步合并后端/localStorage 偏好
   const [columns, setColumns] = useState<ColumnConfig[]>([...SCREENER_BUILTIN_COLUMNS])
   const [customizerOpen, setCustomizerOpen] = useState(false)
@@ -121,6 +160,8 @@ export function Screener() {
 
   // 各策略命中数 (进入页面自动跑)
   const [hitCounts, setHitCounts] = useState<Record<string, number>>({})
+  // 周线/30F 的“全部”模式不读日线缓存，保留最近一次完整 run_all 的明细。
+  const [batchResultRows, setBatchResultRows] = useState<Record<string, { total: number; as_of: string; rows: any[] }>>({})
   // 各策略失效数 (今日曾命中 - 当前命中)
   const [expiredCounts, setExpiredCounts] = useState<Record<string, number>>({})
   // 各策略显示上限 (null = 全部)
@@ -149,19 +190,19 @@ export function Screener() {
   const { data: prefs } = usePreferences()
   const screenerAutoRun = prefs?.screener_auto_run ?? true
 
-  // 统一列表: 不按周期过滤, 日线+分钟策略合并返回, 分钟策略带 timeframes 标识
+  // 统一列表: 不按周期过滤, 所有策略合并返回, 用 timeframes 做前端筛选和执行路由
   const strategies = useQuery({
     queryKey: [...QK.screenerStrategies('all'), 'all'],
     queryFn: () => api.screenerStrategies(undefined, 'all'),
   })
 
-  // 激活策略自身的执行周期 (决定走缓存还是分钟实时跑)。
+  // 激活策略自身的执行周期 (决定走缓存、周线聚合或分钟K实时跑)。
   // 在 queries 之前独立计算, 避免依赖下方 strategyMap 的定义顺序。
   const activeStrategyTimeframe = useMemo(() => {
     if (!activeStrategy) return '1d' as const
     const meta = (strategies.data?.presets ?? []).find(s => s.id === activeStrategy)
-    return meta?.timeframes?.includes('1m') ? ('1m' as const) : ('1d' as const)
-  }, [strategies.data, activeStrategy])
+    return resolveStrategyTimeframe(meta, tfFilter)
+  }, [strategies.data, activeStrategy, tfFilter])
 
   // 卡片首屏只读取轻量摘要；明细在点击策略或“全部”时按需加载。
   // 摘要只覆盖日线缓存; 分钟策略命中数来自手动单跑。
@@ -176,7 +217,7 @@ export function Screener() {
   const fullCachedQuery = useQuery({
     queryKey: QK.screenerCached(asOf, extColumnsParam),
     queryFn: () => api.screenerCached(extColumnsParam || undefined),
-    enabled: assetType === 'stock' && tfFilter !== '1m' && showAll,
+    enabled: assetType === 'stock' && (tfFilter === 'all' || tfFilter === '1d') && showAll,
   })
 
   const singleCachedQuery = useQuery({
@@ -220,6 +261,49 @@ export function Screener() {
     return map
   }, [strategyPresets])
 
+  const handleStrategyDeleted = useCallback((strategyId: string) => {
+    removeFromPool(strategyId)
+    filterMap.current.delete(strategyId)
+    const rules = storage.strategyRules.get({})
+    if (strategyId in rules) {
+      delete rules[strategyId]
+      storage.strategyRules.set(rules)
+    }
+    setHitCounts(prev => { const next = { ...prev }; delete next[strategyId]; return next })
+    setExpiredCounts(prev => { const next = { ...prev }; delete next[strategyId]; return next })
+    setStrategyLimits(prev => { const next = { ...prev }; delete next[strategyId]; return next })
+    setPendingRun(prev => {
+      if (!prev) return prev
+      const ids = prev.ids.filter(id => id !== strategyId)
+      return ids.length > 0 ? { ...prev, ids } : null
+    })
+    if (activeStrategy === strategyId) {
+      setActiveStrategy(null)
+      setResult(null)
+      setShowAll(false)
+    }
+    qc.invalidateQueries({ queryKey: ['screener-strategies'] })
+    qc.invalidateQueries({ queryKey: ['screener-cached'] })
+  }, [activeStrategy, qc, removeFromPool])
+
+  const handleStrategyRemovedFromPool = useCallback((strategyId: string) => {
+    removeFromPool(strategyId)
+    filterMap.current.delete(strategyId)
+    setHitCounts(prev => { const next = { ...prev }; delete next[strategyId]; return next })
+    setExpiredCounts(prev => { const next = { ...prev }; delete next[strategyId]; return next })
+    setStrategyLimits(prev => { const next = { ...prev }; delete next[strategyId]; return next })
+    setPendingRun(prev => {
+      if (!prev) return prev
+      const ids = prev.ids.filter(id => id !== strategyId)
+      return ids.length > 0 ? { ...prev, ids } : null
+    })
+    if (activeStrategy === strategyId) {
+      setActiveStrategy(null)
+      setResult(null)
+      setShowAll(false)
+    }
+  }, [activeStrategy, removeFromPool])
+
   const allStrategyIds = useMemo(
     () => new Set((strategies.data?.presets ?? []).map(s => s.id)),
     [strategies.data],
@@ -230,17 +314,19 @@ export function Screener() {
   )
   const visiblePool = useMemo(() => pool.filter(id => availableStrategyIds.has(id)), [pool, availableStrategyIds])
 
-  // 卡片显示: 按周期筛选 (all=全部, 1d=仅日线, 1m=仅分钟); 未声明 timeframes 视为日线
+  // 卡片显示: 按周期精确筛选; 未声明 timeframes 的旧策略视为日线。
   const displayPool = useMemo(() => visiblePool.filter(id => {
     if (tfFilter === 'all') return true
-    const isMinute = strategyMap.get(id)?.timeframes?.includes('1m') ?? false
-    return tfFilter === '1m' ? isMinute : !isMinute
+    return supportsTimeframe(strategyMap.get(id), tfFilter)
   }), [visiblePool, strategyMap, tfFilter])
 
-  // runAll/盘后缓存只覆盖日线策略; 池中分钟策略由手动单跑实时计算
+  // 批量执行使用当前周期。全部视图保持日线缓存语义；周线/30F 不写入日线缓存。
+  const runAllTimeframe: StrategyTimeframe = tfFilter === '1w' || tfFilter === '30m' || tfFilter === '1m'
+    ? tfFilter
+    : '1d'
   const dailyPoolIds = useMemo(
-    () => visiblePool.filter(id => !(strategyMap.get(id)?.timeframes?.includes('1m') ?? false)),
-    [visiblePool, strategyMap],
+    () => visiblePool.filter(id => supportsTimeframe(strategyMap.get(id), runAllTimeframe)),
+    [visiblePool, strategyMap, runAllTimeframe],
   )
 
   // 策略列表加载后,自动清除池中失效的自定义策略(如本地开发残留的、
@@ -264,13 +350,15 @@ export function Screener() {
     }
   }, [loadErrors])
 
-  // 进入页面自动跑策略池中的策略，获取命中数 (仅日线策略; 分钟策略手动单跑)
+  // 进入页面自动跑当前周期策略池，获取命中数。
   const runAll = useMutation({
-    mutationFn: ({ date, strategyIds }: { date?: string; strategyIds?: string[] } = {}) =>
+    mutationFn: ({ date, strategyIds, timeframe, summaryOnly }: { date?: string; strategyIds?: string[]; timeframe?: StrategyTimeframe; summaryOnly?: boolean } = {}) =>
       api.screenerRunAll(
         date,
         strategyIds ?? dailyPoolIds,
         assetType,
+        timeframe ?? runAllTimeframe,
+        summaryOnly,
       ),
     onSuccess: (data) => {
       if (data.as_of) setAsOf(data.as_of)
@@ -279,6 +367,14 @@ export function Screener() {
         counts[id] = item.total
       }
       setHitCounts(prev => ({ ...prev, ...counts }))
+      const detailed = Object.fromEntries(
+        Object.entries(data.results)
+          .filter(([, item]) => Array.isArray(item.rows))
+          .map(([id, item]) => [id, { total: item.total, as_of: item.as_of, rows: item.rows ?? [] }]),
+      )
+      if (Object.keys(detailed).length > 0) {
+        setBatchResultRows(prev => ({ ...prev, ...detailed }))
+      }
       // 渐进式返回: 慢策略后台继续算, 开启摘要轮询逐个点亮
       setPendingRun(
         data.pending?.length
@@ -287,6 +383,18 @@ export function Screener() {
       )
       if (data.error) toast(`策略计算失败：${data.error}`, 'error')
       qc.invalidateQueries({ queryKey: ['screener-cached'] })
+    },
+  })
+
+  const deleteStrategy = useMutation({
+    mutationFn: (strategyId: string) => api.strategyDelete(strategyId),
+    onSuccess: (_data, strategyId) => {
+      handleStrategyDeleted(strategyId)
+      setDeleteTarget(null)
+      toast('自定义策略已删除', 'success')
+    },
+    onError: (error: any) => {
+      toast(String(error?.message ?? '删除策略失败'), 'error')
     },
   })
 
@@ -300,7 +408,7 @@ export function Screener() {
   // 用 ref 同步门闩，避免同一渲染周期内 isPending 尚未更新导致重复触发
   const runAllPendingRef = useRef(false)
   const requestRunAll = useCallback((
-    vars: { date?: string; strategyIds?: string[] } = {},
+    vars: { date?: string; strategyIds?: string[]; timeframe?: StrategyTimeframe; summaryOnly?: boolean } = {},
     options?: Parameters<typeof runAll.mutate>[1],
   ) => {
     if (runAllPendingRef.current || runAll.isPending) return
@@ -316,6 +424,7 @@ export function Screener() {
 
   // 摘要只同步当前日期的卡片数量，避免旧日期缓存短暂显示成当前结果。
   useEffect(() => {
+    if (tfFilter !== 'all' && tfFilter !== '1d') return
     if (!summaryQuery.data || !asOf) return
     const counts: Record<string, number> = {}
     const expired: Record<string, number> = {}
@@ -341,7 +450,7 @@ export function Screener() {
         setPendingRun(rest.length ? { ...pendingRun, ids: rest } : null)
       }
     }
-  }, [summaryQuery.data, asOf, pendingRun])
+  }, [summaryQuery.data, asOf, pendingRun, tfFilter])
 
   // 渐进式兜底: 后台计算最长等 8 分钟, 防止异常时无限轮询
   useEffect(() => {
@@ -361,18 +470,23 @@ export function Screener() {
   }, [singleCachedQuery.data, showAll, activeStrategy, asOf])
 
   const effectiveResults = useMemo(() => {
+    if (showAll && (tfFilter === '1w' || tfFilter === '30m')) {
+      const entries = Object.entries(batchResultRows)
+        .filter(([, item]) => item.as_of === asOf)
+      return Object.fromEntries(entries)
+    }
     if (fullCachedQuery.data?.as_of !== asOf) return null
     const entries = Object.entries(fullCachedQuery.data.results)
       .filter(([, item]) => item.as_of === asOf)
     return Object.fromEntries(entries)
-  }, [fullCachedQuery.data, asOf])
+  }, [fullCachedQuery.data, batchResultRows, asOf, showAll, tfFilter])
 
   // symbol → 所属策略列表。单策略接口同时返回轻量归属映射，保留策略列原有展示。
   const symbolStrategyMap = useMemo(() => {
     const map = new Map<string, string[]>()
     if (showAll) {
       for (const [sid, r] of Object.entries(effectiveResults ?? {})) {
-        for (const row of r.rows) {
+        for (const row of r.rows ?? []) {
           const arr = map.get(row.symbol)
           if (arr) arr.push(sid)
           else map.set(row.symbol, [sid])
@@ -397,7 +511,7 @@ export function Screener() {
     const seen = new Set<string>()
     const merged: any[] = []
     for (const r of Object.values(effectiveResults)) {
-      for (const row of r.rows) {
+      for (const row of r.rows ?? []) {
         if (!seen.has(row.symbol)) {
           seen.add(row.symbol)
           merged.push(row)
@@ -527,13 +641,13 @@ export function Screener() {
   const minuteData = intradayVisible ? (minuteBatch.data?.data ?? {}) : {}
 
   // asOf 确定后 + 策略列表就绪 + 策略池非空 → 自动跑一次 (受系统设置开关控制)
-  // 缓存命中时秒加载; 未命中时, 仅当 screener_auto_run 开启才自动触发 runAll
+  // 日线缓存命中时秒加载; 未命中时, 仅当 screener_auto_run 开启才自动触发 runAll
   useEffect(() => {
-    // ETF 模式无股票盘后缓存/ runAll, 单策略走实时单跑, 不触发 runAll
-    // 分钟筛选视图下不跑日线缓存 (切回 全部/日线 视图时本 effect 会重新评估)
-    if (assetType !== 'stock' || tfFilter === '1m') return
+    // ETF 模式无股票盘后缓存/ runAll, 单策略走实时单跑, 不触发 runAll。
+    // 周线/30F 由下方独立 effect 运行，避免把周期结果混入日线缓存。
+    if (assetType !== 'stock' || (tfFilter !== 'all' && tfFilter !== '1d')) return
     if (!asOf || strategyPresets.length === 0 || !summaryQuery.isSuccess || runAll.isPending || dailyPoolIds.length === 0) return
-    const runKey = `${asOf}|${dailyPoolIds.join(',')}`
+    const runKey = `1d|${asOf}|${dailyPoolIds.join(',')}`
     if (runAllDateRef.current === runKey) return
     // 缓存已覆盖当前策略池 → 秒加载, 不触发 runAll
     if (cacheCoversPool) {
@@ -546,9 +660,21 @@ export function Screener() {
     requestRunAll({ date: asOf, strategyIds: missingStrategyIds })
   }, [asOf, strategyPresets.length, summaryQuery.isSuccess, dailyPoolIds, cacheCoversPool, missingStrategyIds, screenerAutoRun, assetType, tfFilter, runAll.isPending, requestRunAll])
 
-  // 执行周期由策略自身声明决定: 日线走盘后缓存/单跑, 分钟走本地分钟K分区实时跑
+  // 周线/30F 没有日线缓存，按当前筛选周期直接批量计算一次，结果只用于本页面。
+  useEffect(() => {
+    if (assetType !== 'stock' || (tfFilter !== '1w' && tfFilter !== '30m')) return
+    if (!asOf || strategyPresets.length === 0 || runAll.isPending || dailyPoolIds.length === 0) return
+    if (!screenerAutoRun) return
+    const runKey = `${runAllTimeframe}|${asOf}|${dailyPoolIds.join(',')}`
+    if (runAllDateRef.current === runKey) return
+    runAllDateRef.current = runKey
+    requestRunAll({ date: asOf, strategyIds: dailyPoolIds, timeframe: runAllTimeframe })
+  }, [asOf, strategyPresets.length, dailyPoolIds, screenerAutoRun, assetType, tfFilter, runAllTimeframe, runAll.isPending, requestRunAll])
+
+  // 执行周期由策略自身声明决定: 日线走缓存/单跑, 周线和 30F 走聚合周期数据,
+  // 1m 仍走原有本地分钟K分区路径。
   const run = useMutation({
-    mutationFn: ({ id, date, timeframe: tf }: { id: string; date: string; timeframe: '1d' | '1m' }) =>
+    mutationFn: ({ id, date, timeframe: tf }: { id: string; date: string; timeframe: StrategyTimeframe }) =>
       api.screenerRunPreset(id, undefined, date || undefined, extColumnsParam || undefined, assetType, tf),
     onSuccess: (data, vars) => {
       setResult(data)
@@ -564,11 +690,11 @@ export function Screener() {
     setActiveStrategy(s.id)
     setShowAll(false)
     if (result?.strategy !== s.id || result.as_of !== asOf) setResult(null)
-    const tf = s.timeframes?.includes('1m') ? '1m' as const : '1d' as const
-    // ETF 模式无股票盘后缓存、分钟策略走本地分钟分区 → 始终实时单跑。
+    const tf = resolveStrategyTimeframe(s, tfFilter)
+    // ETF 模式无股票盘后缓存、非日线策略走对应周期数据 → 始终实时单跑。
     // 传空日期让后端用自身的最新交易日 (ETF 与分钟分区跟股票 enriched 可能不同日)。
-    if (assetType !== 'stock' || tf === '1m') {
-      run.mutate({ id: s.id, date: '', timeframe: tf })
+    if (assetType !== 'stock' || tf !== '1d') {
+      run.mutate({ id: s.id, date: assetType === 'stock' ? asOf : '', timeframe: tf })
       return
     }
     // 摘要命中时由 singleCachedQuery 按需加载明细；缺失时才单独计算。
@@ -581,6 +707,7 @@ export function Screener() {
     setAsOf(newDate)
     runAllDateRef.current = null
     setResult(null)
+    setBatchResultRows({})
   }
 
   const minDate = dataStatus.data?.enriched?.earliest_date ?? ''
@@ -695,7 +822,7 @@ export function Screener() {
               {(['stock', 'etf'] as const).map(t => (
                 <button
                   key={t}
-                  onClick={() => { setAssetType(t); setActiveStrategy(null); setResult(null); setShowAll(false) }}
+                  onClick={() => { setAssetType(t); setActiveStrategy(null); setResult(null); setShowAll(false); setBatchResultRows({}) }}
                   className={`h-full px-2.5 text-xs font-medium transition-colors
                     cursor-pointer ${assetType === t
                       ? 'bg-accent/10 text-accent'
@@ -706,15 +833,15 @@ export function Screener() {
                 </button>
               ))}
             </div>
-            {/* 周期筛选: 全部 / 日线 / 分钟 — 只过滤卡片显示, 不影响池与执行路由 */}
+            {/* 周期筛选: 只显示当前周期策略，执行也按该周期装配数据 */}
             <div className="flex items-center h-7 rounded-btn border border-border overflow-hidden">
-              {(['all', '1d', '1m'] as const).map(tf => (
+              {(['all', '1d', '1w', '30m', '1m'] as const).map(tf => (
                 <button
                   key={tf}
                   onClick={() => {
                     if (tfFilter === tf) return
                     setTfFilter(tf)
-                    setActiveStrategy(null); setResult(null); setShowAll(false)
+                    setActiveStrategy(null); setResult(null); setShowAll(false); setBatchResultRows({})
                   }}
                   className={`h-full px-2.5 text-xs font-medium transition-colors cursor-pointer
                     ${tfFilter === tf
@@ -722,7 +849,7 @@ export function Screener() {
                       : 'text-muted hover:text-secondary hover:bg-elevated'
                     }`}
                 >
-                  {tf === 'all' ? '全部' : tf === '1d' ? '日线' : '分钟'}
+                  {tf === 'all' ? '全部' : TIMEFRAME_LABEL[tf]}
                 </button>
               ))}
             </div>
@@ -749,7 +876,22 @@ export function Screener() {
             )}
             {/* 全部切换 */}
             <button
-              onClick={() => setShowAll(v => { if (!v) setActiveStrategy(null); return !v })}
+              onClick={() => {
+                const next = !showAll
+                if (next) {
+                  setActiveStrategy(null)
+                  if (tfFilter === '1w' || tfFilter === '30m') {
+                    setBatchResultRows({})
+                    requestRunAll({
+                      date: asOf || undefined,
+                      strategyIds: dailyPoolIds,
+                      timeframe: runAllTimeframe,
+                      summaryOnly: false,
+                    })
+                  }
+                }
+                setShowAll(next)
+              }}
               title="显示全部策略个股"
               className={`inline-flex items-center justify-center h-7 w-7 rounded-btn border transition-colors cursor-pointer
                 ${showAll
@@ -855,9 +997,11 @@ export function Screener() {
                   onRun={() => handleRun(s)}
                   disabled={run.isPending && activeStrategy === s.id}
                   onSettings={() => setSettingsStrategyId(s.id)}
+                  onDelete={s.source === 'custom' ? () => setDeleteTarget({ id: s.id, name: s.name }) : undefined}
+                  onRemove={() => handleStrategyRemovedFromPool(s.id)}
                   monitored={strategyMonitorMap.has(s.id)}
                   onToggleMonitor={() => toggleStrategyMonitor(s.id, s.name)}
-                  timeframeBadge={s.timeframes?.includes('1m') ? '分钟' : undefined}
+                  timeframeBadge={strategyTimeframeBadge(s, tfFilter)}
                 />
               )
             })}
@@ -1017,6 +1161,7 @@ export function Screener() {
                 <>
                   <ScreenerTable
                     rows={displayRows}
+                    assetType={assetType}
                     columns={columns}
                     strategyIdToName={strategyIdToName}
                     symbolStrategyMap={symbolStrategyMap}
@@ -1085,8 +1230,9 @@ export function Screener() {
         onSaved={(limit) => {
           if (settingsStrategyId) {
             setStrategyLimits(prev => ({ ...prev, [settingsStrategyId]: limit }))
-            // 按策略自身周期重跑: 日线用当前 asOf, 分钟实时单跑交后端取最新分区
-            const tf = strategyMap.get(settingsStrategyId)?.timeframes?.includes('1m') ? '1m' as const : '1d' as const
+            qc.invalidateQueries({ queryKey: ['screener-strategies'] })
+            // 按策略自身周期重跑: 日线使用缓存口径，其它周期走对应聚合数据。
+            const tf = resolveStrategyTimeframe(strategyMap.get(settingsStrategyId), tfFilter)
             run.mutate({ id: settingsStrategyId, date: tf === '1m' ? '' : asOf, timeframe: tf })
           }
         }}
@@ -1103,6 +1249,9 @@ export function Screener() {
               direction: 'long',
               rules: storage.strategyRules.get({})[settingsStrategyId] ?? '',
               code: src.code, step: 2, strategyId: settingsStrategyId, source: src.source as any,
+              assetTypes: (detail.asset_types ?? []).filter(
+                (assetType): assetType is 'stock' | 'etf' => assetType === 'stock' || assetType === 'etf',
+              ),
             })
             setSettingsStrategyId(null)
             setBuilderMode('modify')
@@ -1110,27 +1259,63 @@ export function Screener() {
           } catch {}
         }}
         onDeleted={() => {
-          if (settingsStrategyId) {
-            removeFromPool(settingsStrategyId)
-            const rules = storage.strategyRules.get({})
-            delete rules[settingsStrategyId]; storage.strategyRules.set(rules)
-            setStrategyLimits(prev => { const next = {...prev}; delete next[settingsStrategyId]; return next })
-            qc.invalidateQueries({ queryKey: ['screener-strategies'] })
-          }
+          if (settingsStrategyId) handleStrategyDeleted(settingsStrategyId)
         }}
       />
+
+      {deleteTarget && (
+        <motion.div
+          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm"
+          onClick={() => { if (!deleteStrategy.isPending) setDeleteTarget(null) }}
+        >
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
+            className="w-[380px] max-w-[calc(100vw-2rem)] bg-surface border border-border/50 rounded-2xl shadow-2xl p-6"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="text-center space-y-3">
+              <div className="w-10 h-10 rounded-full bg-danger/10 flex items-center justify-center mx-auto">
+                <Trash2 className="h-5 w-5 text-danger" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-foreground">删除自定义策略</div>
+                <div className="text-xs text-muted mt-1">确定要删除「{deleteTarget.name}」吗？</div>
+              </div>
+              <div className="text-[11px] text-danger/70 bg-danger/[0.04] rounded-lg px-3 py-2 border border-danger/10">
+                删除后策略文件、配置和关联数据将被永久清除。
+              </div>
+              <div className="flex gap-2 pt-2">
+                <button onClick={() => setDeleteTarget(null)} disabled={deleteStrategy.isPending}
+                  className="flex-1 h-8 rounded-lg border border-border text-xs text-secondary hover:text-foreground disabled:opacity-50">取消</button>
+                <button onClick={() => deleteStrategy.mutate(deleteTarget.id)} disabled={deleteStrategy.isPending}
+                  className="flex-1 h-8 rounded-lg bg-danger text-white text-xs font-medium hover:bg-danger/90 disabled:opacity-50">
+                  {deleteStrategy.isPending ? '删除中...' : '确认删除'}
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
 
       {showPoolDialog && (
         <StrategyPoolDialog
           pool={pool}
+          assetType={assetType}
           onConfirm={(newPool) => {
-            // 新增的日线策略立即自动扫描, 免去手动点刷新; 纯排序/删除不重跑
+            // 新增的当前周期策略立即自动扫描; 纯排序/删除不重跑
             if (assetType === 'stock') {
               const prev = new Set(pool)
-              const addedDaily = newPool.filter(
-                id => !prev.has(id) && !(strategyMap.get(id)?.timeframes?.includes('1m') ?? false),
+              const addedForTimeframe = newPool.filter(
+                id => !prev.has(id) && supportsTimeframe(strategyMap.get(id), runAllTimeframe),
               )
-              if (addedDaily.length > 0) requestRunAll({ date: asOf || undefined, strategyIds: addedDaily })
+              if (addedForTimeframe.length > 0) {
+                requestRunAll({
+                  date: asOf || undefined,
+                  strategyIds: addedForTimeframe,
+                  timeframe: runAllTimeframe,
+                })
+              }
             }
             reorderPool(newPool)
           }}
@@ -1148,15 +1333,15 @@ export function Screener() {
             toast('AI 策略已保存为草稿，请在策略池「AI」标签发布后使用', 'success')
             return
           }
-          const data = await qc.fetchQuery({ queryKey: QK.screenerStrategies('all'), queryFn: () => api.screenerStrategies(), staleTime: 0 })
+          const data = await qc.fetchQuery({ queryKey: [...QK.screenerStrategies('all'), 'all'], queryFn: () => api.screenerStrategies(undefined, 'all'), staleTime: 0 })
           if (!data.presets.some(s => s.id === id)) {
             throw new Error(`策略 ${id} 已保存但未加载，请检查策略代码`)
           }
           addToPool(id)
-          // 新建策略为日线时立即扫描, 免去手动点刷新 (分钟策略仍手动单跑)
+          // 新建策略支持当前周期时立即扫描
           const preset = data.presets.find(s => s.id === id)
-          if (assetType === 'stock' && preset && !preset.timeframes?.includes('1m')) {
-            requestRunAll({ date: asOf || undefined, strategyIds: [id] })
+          if (assetType === 'stock' && preset && supportsTimeframe(preset, runAllTimeframe)) {
+            requestRunAll({ date: asOf || undefined, strategyIds: [id], timeframe: runAllTimeframe })
           }
         }}
       />
@@ -1165,12 +1350,12 @@ export function Screener() {
         open={showComposite}
         onClose={() => setShowComposite(false)}
         onSavedId={async id => {
-          const data = await qc.fetchQuery({ queryKey: QK.screenerStrategies('all'), queryFn: () => api.screenerStrategies(), staleTime: 0 })
+          const data = await qc.fetchQuery({ queryKey: [...QK.screenerStrategies('all'), 'all'], queryFn: () => api.screenerStrategies(undefined, 'all'), staleTime: 0 })
           addToPool(id)
-          // 新建叠加策略为日线时立即扫描, 免去手动点刷新 (分钟策略仍手动单跑)
+          // 新建叠加策略支持当前周期时立即扫描
           const preset = data.presets.find(s => s.id === id)
-          if (assetType === 'stock' && preset && !preset.timeframes?.includes('1m')) {
-            requestRunAll({ date: asOf || undefined, strategyIds: [id] })
+          if (assetType === 'stock' && preset && supportsTimeframe(preset, runAllTimeframe)) {
+            requestRunAll({ date: asOf || undefined, strategyIds: [id], timeframe: runAllTimeframe })
           }
         }}
       />

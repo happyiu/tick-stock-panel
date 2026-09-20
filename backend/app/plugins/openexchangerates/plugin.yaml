@@ -1,0 +1,13 @@
+# Open Exchange Rates latest snapshot provider.
+# Historical ranges remain on the Frankfurter/CFETS daily source.
+
+name: openexchangerates
+display_name: "Open Exchange Rates"
+runtime: none
+entry: app.plugins.openexchangerates.provider:OpenExchangeRatesProvider
+check: app.plugins.openexchangerates.provider:availability
+datasets: [exchange_rate]
+api_key_env: OPENEXCHANGERATES_APP_ID
+description: "Open Exchange Rates 当前参考汇率快照；历史日期范围继续使用 Frankfurter/CFETS 日频数据。"
+install_hint: "点击卡片中的输入框配置 App ID，或在 .env 中配置 OPENEXCHANGERATES_APP_ID"
+homepage: "https://openexchangerates.org/signup"

@@ -58,6 +58,32 @@ def test_matrix_backend_prompt_and_imports_are_supported():
     )
 
 
+def test_build_step1_includes_selected_asset_types():
+    prompt = build_step1(
+        "ETF策略",
+        "技术面突破",
+        "long",
+        "收盘价站上 MA20",
+        asset_types=["etf"],
+    )
+
+    assert "适用资产：ETF" in prompt
+    assert 'asset_types 必须严格使用 ["etf"]' in prompt
+
+
+def test_build_step1_includes_selected_timeframes():
+    prompt = build_step1(
+        "周线策略",
+        "周线突破",
+        "long",
+        "收盘价站上 MA20",
+        timeframes=["1w", "30m"],
+    )
+
+    assert "适用周期：周线、30F" in prompt
+    assert 'timeframes 必须严格使用 ["1w", "30m"]' in prompt
+
+
 @pytest.mark.asyncio
 async def test_generate_only_repairs_structural_output_once(monkeypatch):
     calls = 0

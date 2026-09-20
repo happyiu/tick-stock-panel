@@ -8,7 +8,7 @@ import { api, type KlineRow, type MinuteKlineRow, type WatchlistGroup, type Watc
 import { fetchMinuteBatchIncremental } from '@/lib/minuteBatchIncremental'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
-import { fmtPrice, fmtPct, fmtBigNum, priceColorClass, formatExtNumber } from '@/lib/format'
+import { fmtAssetPrice, fmtPrice, fmtPct, fmtBigNum, priceColorClass, formatExtNumber } from '@/lib/format'
 import { cn } from '@/lib/cn'
 import { computeGroupPcts, loadGroupStatsConfig, type GroupStatsConfigPatch } from '@/lib/watchlistGroupStats'
 import { PageHeader } from '@/components/PageHeader'
@@ -58,6 +58,50 @@ import {
 const BOARDS = ['沪主板', '深主板', '创业板', '科创板', '北交所'] as const
 type BoardType = typeof BOARDS[number]
 
+type WatchlistAssetType = 'stock' | 'etf' | 'index'
+type WatchlistScope = 'stock' | 'etf'
+
+const WATCHLIST_SCOPE_LABELS: Record<WatchlistScope, string> = {
+  stock: '自选股',
+  etf: '自选ETF',
+}
+
+// ETF 不适用的股票专属列。列配置本身仍保留，股票页显示，ETF 页隐藏。
+const STOCK_ONLY_COLUMN_KEYS = new Set([
+  'turnover',
+  'float_val',
+  'limit_ups',
+  'limit_downs',
+  'eps',
+  'bps',
+  'roe',
+  'pe_ttm',
+  'pb',
+  'gross_margin',
+  'net_margin',
+  'revenue_yoy',
+  'net_income_yoy',
+  'debt_ratio',
+])
+
+function resolveWatchlistAssetType(value: unknown): WatchlistAssetType {
+  return value === 'etf' || value === 'index' ? value : 'stock'
+}
+
+function watchlistAssetBadge(assetType: unknown): React.ReactNode {
+  const type = resolveWatchlistAssetType(assetType)
+  if (type === 'stock') return null
+  const isEtf = type === 'etf'
+  return (
+    <span className={`shrink-0 px-1 py-0.5 rounded text-[10px] leading-none ${isEtf ? 'bg-accent/10 text-accent' : 'bg-sky-500/10 text-sky-400'}`}>
+      {isEtf ? 'ETF' : '指数'}
+    </span>
+  )
+}
+
+function isWatchlistStock(assetType: unknown): boolean {
+  return resolveWatchlistAssetType(assetType) === 'stock'
+}
 // 板块筛选选项 = 股票板块 + ETF（ETF 无 symbol 板块语义，按 asset_type 匹配）
 const ETF_BOARD = 'ETF'
 const BOARD_OPTIONS = [...BOARDS, ETF_BOARD]
@@ -237,6 +281,7 @@ function StockSearchBox({
   preferredGroupId,
   addPending,
   memberPending,
+  assetType,
 }: {
   onPreview: (symbol: string, name: string) => void
   /** symbol -> 该标的当前所属分组 id 列表; 不在 Map 中 = 未加自选 */
@@ -247,6 +292,7 @@ function StockSearchBox({
   preferredGroupId: string | null
   addPending: boolean
   memberPending: boolean
+  assetType: WatchlistScope
 }) {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
@@ -255,8 +301,8 @@ function StockSearchBox({
   const [activeIdx, setActiveIdx] = useState(-1)
 
   const search = useQuery({
-    queryKey: QK.instrumentSearch(query, 'stock,etf,index'),
-    queryFn: () => api.instrumentSearch(query, 20, 'stock,etf,index'),
+    queryKey: QK.instrumentSearch(query, assetType),
+    queryFn: () => api.instrumentSearch(query, 20, assetType),
     enabled: query.trim().length > 0,
     staleTime: 30_000,
   })
@@ -325,6 +371,7 @@ function StockSearchBox({
             {results.map((r, i) => {
               const entryGids = existingBySymbol.get(r.symbol)
               const inWatchlist = entryGids !== undefined
+              const b = isWatchlistStock(r.asset_type) ? boardTag(r.symbol) : null
               return (
                 <div
                   key={r.symbol}
@@ -341,18 +388,10 @@ function StockSearchBox({
                     {/* 名称+标签组: 标签紧贴名称文字, 而不是被 flex-1 推到行尾 */}
                     <span className="flex min-w-0 flex-1 items-center gap-1">
                       <span className="truncate text-secondary">{r.name}</span>
-                      {r.asset_type === 'etf' && (
-                        <span className="shrink-0 px-1 py-0.5 rounded text-[10px] leading-none bg-accent/10 text-accent">ETF</span>
+                      {watchlistAssetBadge(r.asset_type)}
+                      {b && (
+                        <span className={`shrink-0 px-1 py-0.5 rounded text-[10px] leading-none border ${b.color}`}>{b.label}</span>
                       )}
-                      {r.asset_type === 'index' && (
-                        <span className="shrink-0 px-1 py-0.5 rounded text-[10px] leading-none bg-sky-500/10 text-sky-400">指数</span>
-                      )}
-                      {(() => {
-                        const b = boardTag(r.symbol)
-                        return b && (
-                          <span className={`shrink-0 px-1 py-0.5 rounded text-[10px] leading-none border ${b.color}`}>{b.label}</span>
-                        )
-                      })()}
                     </span>
                   </button>
                   {inWatchlist ? (
@@ -436,33 +475,14 @@ function RealtimeDot({ title = '实时监控中' }: { title?: string }) {
 
 // ===== 卡片组件 =====
 
-// 共享的空 K 线数组常量 — 避免每次渲染传入新的 [] 破坏 StockCard 的 memo
-const EMPTY_KLINE: KlineRow[] = []
-
-function cardColumnCount(viewportWidth: number): number {
-  if (viewportWidth >= 1536) return 6
-  if (viewportWidth >= 1280) return 5
-  if (viewportWidth >= 768) return 4
-  if (viewportWidth >= 640) return 3
-  return 2
-}
-
-function useCardColumnCount(): number {
-  const [count, setCount] = useState(() => cardColumnCount(window.innerWidth))
-
-  useEffect(() => {
-    const update = () => setCount(cardColumnCount(window.innerWidth))
-    window.addEventListener('resize', update)
-    return () => window.removeEventListener('resize', update)
-  }, [])
-
-  return count
+function finiteNumber(value: unknown): number | null {
+  if (value == null) return null
+  const number = Number(value)
+  return Number.isFinite(number) ? number : null
 }
 
 const StockCard = React.memo(function StockCard({
   r,
-  candleRows,
-  showCandle,
   onPreview,
   onConfirmRemove,
   onCancelRemove,
@@ -479,8 +499,6 @@ const StockCard = React.memo(function StockCard({
   groupChangePending,
 }: {
   r: any
-  candleRows: KlineRow[]
-  showCandle: boolean
   onPreview: (symbol: string, name: string) => void
   onConfirmRemove: (symbol: string) => void
   onCancelRemove: () => void
@@ -497,13 +515,35 @@ const StockCard = React.memo(function StockCard({
   onToggleMember: (symbol: string, groupId: string, member: boolean) => void
   groupChangePending: boolean
 }) {
-  const board = boardTag(r.symbol)
-  const price = r.rt_price ?? r.close
-  const pct = r.rt_pct ?? r.change_pct
+  const stockAsset = isWatchlistStock(r.asset_type)
+  const board = stockAsset ? boardTag(r.symbol) : null
+  const price = finiteNumber(r.rt_price ?? r.close)
+  const pct = finiteNumber(r.rt_pct ?? r.change_pct)
   const name = r.rt_name ?? r.name
   const signals = getSignals(r)
   const isUp = (pct ?? 0) > 0
   const isDown = (pct ?? 0) < 0
+  const ma5 = finiteNumber(r.ma5)
+  const ma10 = finiteNumber(r.ma10)
+  const ma20 = finiteNumber(r.ma20)
+  const macdDif = finiteNumber(r.macd_dif)
+  const macdDea = finiteNumber(r.macd_dea)
+  const high20 = finiteNumber(r.high_20d)
+  const low20 = finiteNumber(r.low_20d)
+  const turnover = finiteNumber(r.turnover_rate)
+  const rangePosition = price != null && high20 != null && low20 != null && high20 > low20
+    ? Math.min(100, Math.max(0, (price - low20) / (high20 - low20) * 100))
+    : null
+  const maAlignment = ma5 != null && ma10 != null && ma20 != null
+    ? ma5 > ma10 && ma10 > ma20
+      ? { label: '多头排列', className: 'text-bull' }
+      : ma5 < ma10 && ma10 < ma20
+        ? { label: '空头排列', className: 'text-bear' }
+        : { label: '震荡', className: 'text-muted' }
+    : null
+  const macdDirection = macdDif != null && macdDea != null
+    ? { label: macdDif >= macdDea ? '多头' : '空头', className: macdDif >= macdDea ? 'text-bull' : 'text-bear' }
+    : null
 
   // 动态背景渐变: 涨=红底, 跌=绿底, 平=无色
   const bgGlow = isUp
@@ -558,75 +598,105 @@ const StockCard = React.memo(function StockCard({
         )}
       </div>
 
-      {/* 卡片内容 */}
-      <div className="pl-4 pr-2.5 pt-2.5 pb-0">
-        {/* 第一行: 代码 + 名称 + 板块标识 */}
-        <div className="flex items-center gap-1.5 min-w-0 mb-2 pr-8">
-          <span className="shrink-0 font-mono text-foreground text-xs tracking-wide">
-            {r.symbol}
-          </span>
-          {name && (
-            <span className="text-xs text-secondary truncate">{name}</span>
-          )}
-          {board && (
-            <span className={`shrink-0 inline-flex items-center justify-center px-1 h-[16px] rounded text-[9px] font-bold leading-none ${board.color}`}>
-              {board.label}
+      {/* 第一行: 名称、代码、标签、价格与操作 */}
+      <div className="flex min-w-0 flex-wrap items-center gap-x-5 gap-y-2 pl-4 pr-24 pt-2.5 pb-2.5">
+        <div className="w-40 max-w-full min-w-0 shrink-0">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="min-w-0 truncate text-sm font-semibold text-foreground">
+              {name || r.symbol}
             </span>
-          )}
-          {r.consecutive_limit_ups > 0 && (
-            <span className="shrink-0 inline-flex items-center justify-center px-1 h-[16px] rounded bg-danger/15 text-danger text-[9px] font-bold tabular-nums">
-              {r.consecutive_limit_ups === 1 ? '首板' : `${r.consecutive_limit_ups}连`}
-            </span>
-          )}
-          {isMonitored && <span className="ml-auto"><RealtimeDot /></span>}
+            {watchlistAssetBadge(r.asset_type)}
+            {board && (
+              <span className={`shrink-0 inline-flex items-center justify-center px-1 h-[16px] rounded text-[9px] font-bold leading-none ${board.color}`}>
+                {board.label}
+              </span>
+            )}
+            {stockAsset && r.consecutive_limit_ups > 0 && (
+              <span className="shrink-0 inline-flex items-center justify-center px-1 h-[16px] rounded bg-danger/15 text-danger text-[9px] font-bold tabular-nums">
+                {r.consecutive_limit_ups === 1 ? '首板' : `${r.consecutive_limit_ups}连`}
+              </span>
+            )}
+            {isMonitored && <RealtimeDot />}
+          </div>
+          <div className="mt-0.5 font-mono text-[10px] tracking-wide text-muted">{r.symbol}</div>
         </div>
 
-        {/* 第二行: 大价格 + 涨跌幅胶囊 */}
-        <div className="flex items-end justify-between gap-2 mb-2">
+        <div className="flex shrink-0 items-baseline gap-2">
           <span className={`text-xl tabular-nums tracking-tighter leading-none ${priceColorClass(pct)}`}>
-            {fmtPrice(price)}
+            {fmtAssetPrice(price, r.asset_type)}
           </span>
           {pct != null && (
-            <span className={`shrink-0 inline-flex items-center px-1.5 py-[2px] rounded text-[11px] tabular-nums ${pctBg}`}>
+            <span className={`inline-flex items-center rounded px-1.5 py-[2px] text-[11px] tabular-nums ${pctBg}`}>
               {fmtPct(pct)}
             </span>
           )}
         </div>
+      </div>
 
-        {/* 第三行: 指标 */}
-        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[10px] text-muted leading-relaxed">
-          <span title="换手率">换手<span className={`font-mono ml-0.5 ${turnoverColor(r.turnover_rate)}`}>{r.turnover_rate != null ? `${r.turnover_rate.toFixed(2)}%` : '—'}</span></span>
-          <span title="量比">量比<span className="font-mono ml-0.5">{fmtPrice(r.vol_ratio_5d)}</span></span>
-          <span title="RSI14">RSI<span className="font-mono ml-0.5">{r.rsi_14 != null ? r.rsi_14.toFixed(1) : '—'}</span></span>
-          {/* 扩展数据列展示在卡片中 */}
-          {extCols.map(col => {
-            if (col.source.type !== 'ext') return null
-            const { configId, fieldName } = col.source
-            const val = r[`${configId}__${fieldName}`]
-            if (val == null) return null
+      {/* 第二行: 技术指标；按既有列分组，组间用 | 分隔，窄屏自动换行 */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-dashed border-border/60 px-4 py-2 text-[10px] leading-relaxed text-muted">
+        <span className="inline-flex shrink-0 items-center gap-x-3">
+          <span title="MA5"><span className="text-muted/70">MA5</span><span className="ml-1 font-mono text-secondary">{fmtAssetPrice(ma5, r.asset_type)}</span></span>
+          <span title="MA10"><span className="text-muted/70">MA10</span><span className="ml-1 font-mono text-secondary">{fmtAssetPrice(ma10, r.asset_type)}</span></span>
+          <span title="MA20"><span className="text-muted/70">MA20</span><span className="ml-1 font-mono text-secondary">{fmtAssetPrice(ma20, r.asset_type)}</span></span>
+          <span>均线 <span className={`ml-1 ${maAlignment?.className ?? 'text-muted'}`}>{maAlignment?.label ?? '—'}</span></span>
+        </span>
+        <span aria-hidden="true" className="shrink-0 text-muted/40">|</span>
+        <span className="inline-flex shrink-0 items-center gap-x-3">
+          <span>MACD <span className={`ml-1 ${macdDirection?.className ?? 'text-muted'}`}>{macdDirection?.label ?? '—'}</span></span>
+          <span title="RSI14">RSI <span className="ml-1 font-mono text-secondary">{finiteNumber(r.rsi_14)?.toFixed(1) ?? '—'}</span></span>
+        </span>
+        <span aria-hidden="true" className="shrink-0 text-muted/40">|</span>
+        <span className="inline-flex shrink-0 items-center gap-x-3">
+          <span title="5日动量">5日 <span className={`ml-1 font-mono ${priceColorClass(finiteNumber(r.momentum_5d))}`}>{fmtPct(finiteNumber(r.momentum_5d))}</span></span>
+          <span title="20日动量">20日 <span className={`ml-1 font-mono ${priceColorClass(finiteNumber(r.momentum_20d))}`}>{fmtPct(finiteNumber(r.momentum_20d))}</span></span>
+        </span>
+        <span aria-hidden="true" className="shrink-0 text-muted/40">|</span>
+        <span className="inline-flex shrink-0 items-center">
+          <span title="当前价在最近20个交易日收盘区间的位置">20日区间 <span className="ml-1 font-mono text-secondary">{rangePosition != null ? `${rangePosition.toFixed(0)}%` : '—'}</span></span>
+        </span>
+        <span aria-hidden="true" className="shrink-0 text-muted/40">|</span>
+        <span className="inline-flex shrink-0 items-center gap-x-3">
+          <span title="量比">量比 <span className="ml-1 font-mono text-secondary">{fmtPrice(finiteNumber(r.vol_ratio_5d))}</span></span>
+          {stockAsset && (
+            <span title="换手率">换手 <span className={`ml-1 font-mono ${turnoverColor(turnover)}`}>{turnover != null ? `${turnover.toFixed(2)}%` : '—'}</span></span>
+          )}
+        </span>
+        {/* 扩展数据列展示在卡片中 */}
+        {extCols.some(col => col.source.type === 'ext' && r[`${col.source.configId}__${col.source.fieldName}`] != null) && (
+          <>
+            <span aria-hidden="true" className="shrink-0 text-muted/40">|</span>
+            <span className="inline-flex max-w-full flex-wrap items-center gap-x-3">
+              {extCols.map(col => {
+                if (col.source.type !== 'ext') return null
+                const { configId, fieldName } = col.source
+                const val = r[`${configId}__${fieldName}`]
+                if (val == null) return null
 
-            const cellKey = `${r.symbol}::${col.id}`
-            const expanded = expandedCells.has(cellKey)
-            const sourceField = `${configId}.${fieldName}`
-            const dimensionKind = dimensionKindForSourceField(sourceField)
+                const cellKey = `${r.symbol}::${col.id}`
+                const expanded = expandedCells.has(cellKey)
+                const sourceField = `${configId}.${fieldName}`
+                const dimensionKind = dimensionKindForSourceField(sourceField)
 
-            return (
-              <span key={col.id} title={col.label}>
-                <span className="text-secondary">{col.label}</span>
-                <span className="font-mono ml-0.5">
-                  {renderExtValue(
-                    val,
-                    col,
-                    expanded,
-                    () => onToggleExpand(cellKey),
-                    true,
-                    dimensionKind ? value => onDimensionClick({ kind: dimensionKind, value, sourceField }) : undefined,
-                  )}
-                </span>
-              </span>
-            )
-          })}
-        </div>
+                return (
+                  <span key={col.id} title={col.label}>
+                    <span className="text-secondary">{col.label}</span>
+                    <span className="ml-1 font-mono">
+                      {renderExtValue(
+                        val,
+                        col,
+                        expanded,
+                        () => onToggleExpand(cellKey),
+                        true,
+                        dimensionKind ? value => onDimensionClick({ kind: dimensionKind, value, sourceField }) : undefined,
+                      )}
+                    </span>
+                  </span>
+                )
+              })}
+            </span>
+          </>
+        )}
       </div>
 
       {/* 信号标签区 */}
@@ -645,20 +715,15 @@ const StockCard = React.memo(function StockCard({
         </div>
       )}
 
-      {/* 迷你蜡烛图 */}
-      {showCandle && candleRows.length > 0 && (
-        <div className="border-t border-border/40 px-3 py-1.5">
-          <MiniCandlestick rows={candleRows} height={32} />
-        </div>
-      )}
     </div>
   )
 })
 
 // ===== 主页面 =====
 
-export function Watchlist() {
+export function Watchlist({ assetType }: { assetType: WatchlistScope }) {
   const qc = useQueryClient()
+  const scopeLabel = WATCHLIST_SCOPE_LABELS[assetType]
   const [viewMode, setViewMode] = useState<'table' | 'card'>(() => {
     return (storage.watchlistView.get('table') as 'table' | 'card')
   })
@@ -724,10 +789,16 @@ export function Watchlist() {
   const hasMinuteBatch = !!caps.data?.capabilities?.['kline.minute.batch']
   const intradayVisible = !!intradayColumn && hasMinuteBatch && intradayChartVisible
 
-  // 计算可见列（列是否出现只由自定义列配置决定）
+  // 计算可见列（列配置本身不改写; ETF/指数视图额外隐藏股票专属列）
   const visibleColumns = useMemo(() => {
     return columns.filter(c => c.visible)
   }, [columns])
+  const assetVisibleColumns = useMemo(() => {
+    if (assetType === 'stock') return visibleColumns
+    return visibleColumns.filter(c =>
+      c.source.type === 'ext' || !STOCK_ONLY_COLUMN_KEYS.has(c.source.key),
+    )
+  }, [assetType, visibleColumns])
 
   // 计算 ext 列参数
   const extColumnsParam = useMemo(() => buildExtColumnsParam(columns), [columns])
@@ -814,7 +885,9 @@ export function Watchlist() {
     enabled: (list.data?.symbols.length ?? 0) > 0,
   })
 
-  const symbols = enriched.data?.rows?.map((r: any) => r.symbol) ?? []
+  const symbols = enriched.data?.rows
+    ?.filter((r: any) => resolveWatchlistAssetType(r.asset_type) === assetType)
+    .map((r: any) => r.symbol) ?? []
   const symbolsKey = symbols.join(',')
 
   // 指数无本地分钟K数据, 分时批量请求剔除指数 symbol (省请求, 避免逐只 404)
@@ -828,11 +901,11 @@ export function Watchlist() {
   const quoteStatus = useQuoteStatus()
   const realtimeRunning = quoteStatus.data?.running ?? false
 
-  // 批量日k数据 (天数由列配置决定; 分组卡片视图不展示蜡烛, 挂起请求)
+  // 批量日k数据 (天数由列配置决定; 仅列表模式展示, 卡片/分组视图挂起请求)
   const klineBatch = useQuery({
     queryKey: QK.watchlistKlineBatch(`${symbolsKey}|${candleDays}`),
     queryFn: () => api.klineDailyBatch(symbols, candleDays),
-    enabled: dailyKVisible && symbols.length > 0 && !groupCardsOpen,
+    enabled: dailyKVisible && viewMode === 'table' && symbols.length > 0 && !groupCardsOpen,
     staleTime: 5 * 60_000,  // 5 分钟内不重请求
   })
 
@@ -1065,13 +1138,22 @@ export function Watchlist() {
     () => new Map(listEntries.map(entry => [entry.symbol, entry.group_ids ?? []])),
     [listEntries],
   )
-  // 分组等权平均涨跌幅 (实时优先 rt_pct, 收盘兜底 change_pct; 与表格同源)
+  const rowsWithGroup = useMemo(
+    () => rows.map(row => ({ ...row, group_ids: groupBySymbol.get(row.symbol) ?? [] })),
+    [groupBySymbol, rows],
+  )
+  const assetScopedRows = useMemo(
+    () => rowsWithGroup.filter(row => resolveWatchlistAssetType(row.asset_type) === assetType),
+    [assetType, rowsWithGroup],
+  )
+  // 分组等权平均涨跌幅 (实时优先 rt_pct, 收盘兜底 change_pct; 与表格同源),
+  // 统计范围跟随当前资产类型, 但不跟随当前选中的具体分组。
   const groupPcts = useMemo(
     () => computeGroupPcts(
-      listEntries,
-      new Map(rows.map((r: any) => [r.symbol as string, r])),
+      assetScopedRows,
+      new Map(assetScopedRows.map((r: any) => [r.symbol as string, r])),
     ),
-    [listEntries, rows],
+    [assetScopedRows],
   )
   // 分组「指标 + 排序 + 卡片显示项」配置: 分组统计条与分组卡片共享同一份持久化设置
   const [groupStatsConfig, setGroupStatsConfig] = useState(loadGroupStatsConfig)
@@ -1085,19 +1167,18 @@ export function Watchlist() {
   const groupCounts = useMemo(() => {
     // 多组并存: 一股计入每个所属分组的计数; 不属于任何分组才计未分组
     const counts: Record<string, number> = { ungrouped: 0 }
-    for (const entry of listEntries) {
-      const gids = entry.group_ids ?? []
+    for (const row of assetScopedRows) {
+      const gids = row.group_ids ?? []
       if (gids.length === 0) counts.ungrouped += 1
       else for (const gid of gids) counts[gid] = (counts[gid] ?? 0) + 1
     }
     return counts
-  }, [listEntries])
+  }, [assetScopedRows])
   const rowsInSelectedGroup = useMemo(() => {
-    const rowsWithGroup = rows.map(row => ({ ...row, group_ids: groupBySymbol.get(row.symbol) ?? [] }))
-    if (selectedGroup === 'all') return rowsWithGroup
-    if (selectedGroup === 'ungrouped') return rowsWithGroup.filter(row => row.group_ids.length === 0)
-    return rowsWithGroup.filter(row => row.group_ids.includes(selectedGroup))
-  }, [groupBySymbol, rows, selectedGroup])
+    if (selectedGroup === 'all') return assetScopedRows
+    if (selectedGroup === 'ungrouped') return assetScopedRows.filter(row => row.group_ids.length === 0)
+    return assetScopedRows.filter(row => row.group_ids.includes(selectedGroup))
+  }, [assetScopedRows, selectedGroup])
   const watchlistContentLoading = list.isLoading || (allSymbols.length > 0 && enriched.isLoading)
 
   // 实时监控圆点: 仅 Free/低档 "按自选股实时监控" 模式 (mode === 'watchlist') 下显示;
@@ -1169,8 +1250,8 @@ export function Watchlist() {
 
   // 可筛选的内置列
   const filterableBuiltinCols = useMemo(
-    () => columns.filter(c => c.source.type === 'builtin' && !UNSORTABLE_KEYS.has(c.source.key) && c.id !== 'builtin:symbol'),
-    [columns],
+    () => assetVisibleColumns.filter(c => c.source.type === 'builtin' && !UNSORTABLE_KEYS.has(c.source.key) && c.id !== 'builtin:symbol'),
+    [assetVisibleColumns],
   )
 
   // 按类别索引（复用列配置的分组定义）
@@ -1188,9 +1269,10 @@ export function Watchlist() {
 
   // 筛选 + 排序
   const filteredRows = useMemo(() => {
+    const stockFiltersVisible = assetType === 'stock'
     // 板块筛选（全选时跳过）
     let result = rowsInSelectedGroup
-    if (boardFilter.size > 0 && boardFilter.size < BOARD_OPTIONS.length) {
+    if (stockFiltersVisible && boardFilter.size > 0 && boardFilter.size < BOARD_OPTIONS.length) {
       result = result.filter(r => {
         if (r.asset_type === 'etf') return boardFilter.has(ETF_BOARD)
         // 其他非股票 (指数等) 无板块语义, 不受板块筛选影响
@@ -1200,15 +1282,17 @@ export function Watchlist() {
       })
     }
     // 排除 ST: 按简称判定 (ST/*ST/S*ST 均含 "ST"); 非股票名称不含该标记, 天然不受影响
-    if (excludeST) {
+    if (stockFiltersVisible && excludeST) {
       result = result.filter(r => !((r.rt_name ?? r.name ?? '').toUpperCase().includes('ST')))
     }
     // 数值/文本筛选
-    const activeFilters = Object.entries(filters).filter(([, v]) => v.min || v.max || v.text)
+    const activeFilters = Object.entries(filters).filter(([colId, v]) =>
+      (v.min || v.max || v.text) && filterableBuiltinCols.some(col => col.id === colId),
+    )
     if (activeFilters.length > 0) {
       result = result.filter(r => {
         for (const [colId, f] of activeFilters) {
-          const col = columns.find(c => c.id === colId)
+          const col = filterableBuiltinCols.find(c => c.id === colId)
           if (!col) continue
           const val = getSortValue(r, col)
           if (val == null) return false
@@ -1223,11 +1307,15 @@ export function Watchlist() {
       })
     }
     return result
-  }, [rowsInSelectedGroup, filters, columns, boardFilter, excludeST])
+  }, [assetType, rowsInSelectedGroup, filters, filterableBuiltinCols, boardFilter, excludeST])
 
-  const activeFilterCount = Object.values(filters).filter(v => v.min || v.max || v.text).length
-  const hasBoardFilter = boardFilter.size > 0 && boardFilter.size < BOARD_OPTIONS.length
-  const hasActiveFilters = activeFilterCount > 0 || hasBoardFilter || excludeST
+  const stockFiltersVisible = assetType === 'stock'
+  const activeFilterCount = Object.entries(filters).filter(([colId, v]) =>
+    (v.min || v.max || v.text) && filterableBuiltinCols.some(col => col.id === colId),
+  ).length
+  const hasBoardFilter = stockFiltersVisible && boardFilter.size > 0 && boardFilter.size < BOARD_OPTIONS.length
+  const hasExcludeST = stockFiltersVisible && excludeST
+  const hasActiveFilters = activeFilterCount > 0 || hasBoardFilter || hasExcludeST
 
   // 排序（复用共享三态排序 hook）。分时列按「最新分钟收盘 vs 昨收」排序（分时图最后一点同口径），
   // 其余列走共享取值；眼睛关闭时不拉分钟数据，取值为 null → 保持原序。
@@ -1240,8 +1328,8 @@ export function Watchlist() {
   const { sort, toggle: handleSortToggle, sortRows } = useTableSort(getWatchlistSortValue)
 
   const sortedRows = useMemo(
-    () => sortRows(filteredRows, columns),
-    [filteredRows, sortRows, columns],
+    () => sortRows(filteredRows, assetVisibleColumns),
+    [filteredRows, sortRows, assetVisibleColumns],
   )
 
   // 切股导航列表: 按列表当前展示顺序 (与 sortedRows 一致, 排序/筛选后行序随之变化)。
@@ -1251,20 +1339,18 @@ export function Watchlist() {
     [previewSymbol, sortedRows],
   )
 
-  const cardColumns = useCardColumnCount()
   const cardGridRef = useRef<HTMLDivElement>(null)
   const virtualizeCards = viewMode === 'card' && !groupCardsOpen && sortedRows.length > VIRTUAL_LIST_THRESHOLD
-  const cardRowCount = Math.ceil(sortedRows.length / cardColumns)
   const { getScrollElement: getCardScrollElement, scrollMargin: cardScrollMargin } = useParentScroll(
     cardGridRef,
     virtualizeCards,
   )
   const cardRowVirtualizer = useVirtualizer({
-    count: virtualizeCards ? cardRowCount : 0,
+    count: virtualizeCards ? sortedRows.length : 0,
     getScrollElement: getCardScrollElement,
-    estimateSize: () => dailyKVisible ? 180 : 140,
-    getItemKey: index => `${cardColumns}:${(sortedRows[index * cardColumns] as any)?.symbol ?? index}`,
-    gap: 12,
+    estimateSize: () => 96,
+    getItemKey: index => (sortedRows[index] as any)?.symbol ?? index,
+    gap: 8,
     overscan: 3,
     scrollMargin: cardScrollMargin,
   })
@@ -1279,10 +1365,8 @@ export function Watchlist() {
     const items = cardRowVirtualizer.getVirtualItems()
     const out: string[] = []
     for (const item of items) {
-      for (let i = item.index * cardColumns; i < (item.index + 1) * cardColumns && i < sortedRows.length; i++) {
-        const s = (sortedRows[i] as any)?.symbol
-        if (typeof s === 'string' && scope.has(s)) out.push(s)
-      }
+      const s = (sortedRows[item.index] as any)?.symbol
+      if (typeof s === 'string' && scope.has(s)) out.push(s)
     }
     return out.length ? out : null
   })()
@@ -1305,11 +1389,11 @@ export function Watchlist() {
 
   // 可见的 ext 列（卡片视图使用）
   const visibleExtCols = useMemo(
-    () => visibleColumns.filter(c => c.source.type === 'ext'),
-    [visibleColumns]
+    () => assetVisibleColumns.filter(c => c.source.type === 'ext'),
+    [assetVisibleColumns]
   )
 
-  // "数据未就绪" 的个股数: 后端 LEFT JOIN 保证返回所有自选行,
+  // "数据未就绪" 的标的数: 后端 LEFT JOIN 保证返回所有自选行,
   // 指标全为 null 的行属于 enriched 缓存未覆盖 (新股/冷门/新用户未同步), 非筛选导致.
   // 用 close 是否为 null/undefined 判断 "整行指标缺失" (close 是 enriched 最基础字段).
   const pendingCount = useMemo(
@@ -1317,7 +1401,7 @@ export function Watchlist() {
     [sortedRows],
   )
 
-  // "被筛选条件隐藏" 的个股数: 后端返回的行数 vs 经过前端筛选后的行数.
+  // "被筛选条件隐藏" 的标的数: 后端返回的行数 vs 经过前端筛选后的行数.
   // 分组切换不计入筛选隐藏，只比较当前分组内的数据。
   const hiddenCount = Math.max(0, rowsInSelectedGroup.length - sortedRows.length)
 
@@ -1325,8 +1409,6 @@ export function Watchlist() {
     <StockCard
       key={r.symbol}
       r={r}
-      candleRows={klineData[r.symbol] ?? EMPTY_KLINE}
-      showCandle={dailyKVisible}
       onPreview={handleCardPreview}
       onConfirmRemove={handleCardConfirmRemove}
       onCancelRemove={handleCardCancelRemove}
@@ -1347,7 +1429,7 @@ export function Watchlist() {
   return (
     <div className="flex flex-col h-full">
       <PageHeader
-        title="自选股"
+        title={scopeLabel}
         titleExtra={
           <span className="inline-flex items-center gap-1.5">
             {/* 计数胶囊: 显示数/总数, mono 字体突出数字 */}
@@ -1412,6 +1494,7 @@ export function Watchlist() {
               preferredGroupId={activeGroupId}
               addPending={addMutation.isPending}
               memberPending={addGroupMember.isPending || removeGroupMember.isPending}
+              assetType={assetType}
             />
             <button
               onClick={() => setImportOpen(true)}
@@ -1481,7 +1564,7 @@ export function Watchlist() {
                 <button
                   onClick={() => setConfirmClear(true)}
                   className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-danger/10 text-danger hover:bg-danger/20 transition-colors duration-150 ease-smooth"
-                  title="清空自选"
+                  title="清空全部自选"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
@@ -1517,7 +1600,7 @@ export function Watchlist() {
         groups={groups}
         counts={groupCounts}
         selected={selectedGroup}
-        total={allSymbols.length}
+        total={assetScopedRows.length}
         pcts={groupPcts}
         onSelect={handleGroupSelect}
         onCreate={(name, color) => createGroup.mutateAsync({ name, color }).then(() => undefined)}
@@ -1525,50 +1608,55 @@ export function Watchlist() {
         onDelete={groupId => deleteGroup.mutateAsync(groupId).then(() => undefined)}
         onClearGroup={groupId => clearGroup.mutateAsync(groupId).then(() => undefined)}
         onReorder={orderedIds => reorderGroup.mutateAsync(orderedIds).then(() => undefined)}
+        clearScopeLabel={assetType === 'stock' ? '股票' : 'ETF'}
       />
 
       {/* 筛选栏 */}
       {filterOpen && (
         <div className="px-5 py-2 border-b border-border bg-surface/50 max-h-[184px] overflow-y-auto">
-          {/* 板块筛选 */}
-          <div className="mb-2">
-            <div className="text-[10px] text-muted uppercase tracking-wider mb-0.5">板块</div>
-            <div className="flex flex-wrap gap-1">
-              {BOARD_OPTIONS.map(board => {
-                const active = boardFilter.has(board)
-                return (
+          {stockFiltersVisible && (
+            <>
+              {/* 板块筛选 */}
+              <div className="mb-2">
+                <div className="text-[10px] text-muted uppercase tracking-wider mb-0.5">板块</div>
+                <div className="flex flex-wrap gap-1">
+                  {BOARDS.map(board => {
+                    const active = boardFilter.has(board)
+                    return (
+                      <button
+                        key={board}
+                        onClick={() => toggleBoard(board)}
+                        className={`px-2 py-0.5 rounded text-[11px] transition-colors ${
+                          active
+                            ? 'bg-accent/15 text-accent'
+                            : 'bg-elevated text-secondary hover:text-foreground hover:bg-elevated/80'
+                        }`}
+                      >
+                        {board}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+              {/* 排除 ST */}
+              <div className="mb-2">
+                <div className="text-[10px] text-muted uppercase tracking-wider mb-0.5">风险警示</div>
+                <div className="flex flex-wrap gap-1">
                   <button
-                    key={board}
-                    onClick={() => toggleBoard(board)}
+                    onClick={toggleExcludeST}
                     className={`px-2 py-0.5 rounded text-[11px] transition-colors ${
-                      active
+                      excludeST
                         ? 'bg-accent/15 text-accent'
                         : 'bg-elevated text-secondary hover:text-foreground hover:bg-elevated/80'
                     }`}
+                    title="勾选后隐藏简称含 ST 标记的标的 (ST/*ST/S*ST)"
                   >
-                    {board}
+                    排除ST
                   </button>
-                )
-              })}
-            </div>
-          </div>
-          {/* 排除 ST */}
-          <div className="mb-2">
-            <div className="text-[10px] text-muted uppercase tracking-wider mb-0.5">风险警示</div>
-            <div className="flex flex-wrap gap-1">
-              <button
-                onClick={toggleExcludeST}
-                className={`px-2 py-0.5 rounded text-[11px] transition-colors ${
-                  excludeST
-                    ? 'bg-accent/15 text-accent'
-                    : 'bg-elevated text-secondary hover:text-foreground hover:bg-elevated/80'
-                }`}
-                title="勾选后隐藏简称含 ST 标记的标的 (ST/*ST/S*ST)"
-              >
-                排除ST
-              </button>
-            </div>
-          </div>
+                </div>
+              </div>
+            </>
+          )}
           {COLUMN_GROUPS.map(cat => {
             const items = colsByCategory[cat.label]?.filter(i => i.col)
             if (!items?.length) return null
@@ -1626,22 +1714,22 @@ export function Watchlist() {
             <div className="text-sm text-danger">读取自选失败</div>
           ) : enriched.isError ? (
             <div className="text-sm text-danger">读取自选行情失败</div>
-          ) : allSymbols.length === 0 ? (
+          ) : assetScopedRows.length === 0 ? (
             <EmptyState
               icon={Star}
-              title="自选股为空"
-              hint="点击右上角搜索添加标的，或用导入按钮从券商自选 CSV / 截图批量导入、粘贴代码。"
+              title={`${scopeLabel}为空`}
+              hint={`点击右上角搜索添加${assetType === 'stock' ? '股票' : 'ETF'}，或用导入按钮从券商自选 CSV / 截图批量导入、粘贴代码。`}
             />
           ) : rowsInSelectedGroup.length === 0 ? (
             <EmptyState
               icon={FolderOpen}
-              title="该分组暂无标的"
-              hint="使用右上角搜索添加、通过股票旁的分组按钮移入，或用导入弹窗把整批标的并入本组。"
+              title={`该分组暂无${assetType === 'stock' ? '股票' : 'ETF'}标的`}
+              hint="使用右上角搜索添加、通过标的旁的分组按钮移入，或用导入弹窗把整批标的并入本组。"
             />
           ) : groupCardsOpen ? (
             <WatchlistGroupCards
               groups={groups}
-              rows={rows}
+              rows={assetScopedRows}
               groupBySymbol={groupBySymbol}
               pcts={groupPcts}
               onPreview={handleCardPreview}
@@ -1651,7 +1739,7 @@ export function Watchlist() {
             />
           ) : viewMode === 'table' ? (
             <StockDataTable
-              columns={visibleColumns}
+              columns={assetVisibleColumns}
               rows={sortedRows}
               headerSticky
               sort={sort}
@@ -1730,9 +1818,10 @@ export function Watchlist() {
                 const price = r.rt_price ?? r.close
                 const pct = r.rt_pct ?? r.change_pct
                 const name = r.rt_name ?? r.name
+                const stockAsset = isWatchlistStock(r.asset_type)
                 // 自选页 symbol 列：预览 + 内嵌删除（减号图标，二次确认）
                 if (key === 'symbol') {
-                  const board = boardTag(r.symbol)
+                  const board = stockAsset ? boardTag(r.symbol) : null
                   return (
                     <td className="px-1.5 py-1.5">
                       <div className="flex items-center gap-1 w-full">
@@ -1749,6 +1838,7 @@ export function Watchlist() {
                               {name}
                             </span>
                           )}
+                          {watchlistAssetBadge(r.asset_type)}
                           {board ? (
                             <span className={`shrink-0 inline-flex items-center justify-center w-[18px] h-[18px] rounded text-[9px] font-bold leading-none border ${board.color}`}>
                               {board.label}
@@ -1820,7 +1910,7 @@ export function Watchlist() {
                 // 实时行情列：price/pct/amount 使用 rt_ 回退（自选页有实时推送）
                 const numCls = 'px-2 py-1.5 text-right num tabular-nums'
                 if (key === 'price') {
-                  return <td className={`${numCls} ${priceColorClass(pct)}`}>{fmtPrice(price)}</td>
+                  return <td className={`${numCls} ${priceColorClass(pct)}`}>{fmtAssetPrice(price, r.asset_type)}</td>
                 }
                 if (key === 'pct') {
                   return <td className={`${numCls} ${priceColorClass(pct)}`}>{fmtPct(pct)}</td>
@@ -1896,7 +1986,7 @@ export function Watchlist() {
               className="rounded-card overflow-x-auto"
             />
           ) : !virtualizeCards ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
+            <div className="flex w-full flex-col gap-2">
               {sortedRows.map(renderStockCard)}
             </div>
           ) : (
@@ -1906,17 +1996,15 @@ export function Watchlist() {
               style={{ height: cardRowVirtualizer.getTotalSize() }}
             >
               {cardRowVirtualizer.getVirtualItems().map(virtualRow => {
-                const start = virtualRow.index * cardColumns
-                const row = sortedRows.slice(start, start + cardColumns)
                 return (
                   <div
                     key={virtualRow.key}
                     ref={cardRowVirtualizer.measureElement}
                     data-index={virtualRow.index}
-                    className="absolute left-0 top-0 w-full grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3"
+                    className="absolute left-0 top-0 w-full"
                     style={{ transform: `translateY(${virtualRow.start - cardScrollMargin}px)` }}
                   >
-                    {row.map(renderStockCard)}
+                    {renderStockCard(sortedRows[virtualRow.index])}
                   </div>
                 )
               })}
@@ -1944,9 +2032,9 @@ export function Watchlist() {
               transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
               className="relative w-[90vw] max-w-[380px] rounded-card border border-border bg-base shadow-2xl p-6"
             >
-              <h3 className="text-sm font-medium text-foreground mb-2">确认清空自选</h3>
+              <h3 className="text-sm font-medium text-foreground mb-2">确认清空全部自选</h3>
               <p className="text-xs text-secondary mb-5">
-                将移除全部 {allSymbols.length} 只自选股，此操作不可恢复。
+                当前仅显示{assetType === 'stock' ? '股票' : 'ETF'}，但此操作会移除统一自选池中的全部 {allSymbols.length} 个标的（包括其他类型），且不可恢复。
               </p>
               <div className="flex items-center justify-end gap-2">
                 <button

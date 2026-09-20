@@ -7,20 +7,80 @@
  * placeholderData 内置"仅同 symbol 占位"守卫: 改日期范围/扩展字段时旧数据可暂显(不闪),
  * 切股时不透传上一只股票的数据(不误显示)。
  */
-import { api, type KlineDailyLatestResponse, type KlineDailyResponse } from '@/lib/api'
+import type { UseQueryOptions } from '@tanstack/react-query'
+import {
+  api,
+  type KlineDailyLatestResponse,
+  type KlineDailyResponse,
+  type KlinePeriod,
+  type KlineResponse,
+  type KlineRow,
+} from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+
+export { canAutoRefreshAnalysis, nextThirtyMinuteBoundaryAt } from './analysisRefresh'
 
 /** 分时 tab 多日分时默认周期 (StockPanel 预取与弹窗存储回退共用, 避免魔数两处漂移) */
 export const DEFAULT_INTRADAY_DAYS = 10
+export const DEFAULT_30M_DAYS = 20
+export const PERIOD_30M_DAY_OPTIONS = [20, 40, 60, 120] as const
+
+export const KLINE_PERIOD_OPTIONS: { value: KlinePeriod; label: string }[] = [
+  { value: '30m', label: '30F' },
+  { value: '1d', label: '日 K' },
+  { value: '1w', label: '周 K' },
+  { value: '1mo', label: '月 K' },
+]
+
+/** 将不同周期的 K 线日期统一成图表使用的选中键。 */
+export function normalizeKlineBarKey(value: unknown, period: KlinePeriod): string {
+  const text = String(value ?? '')
+  return period === '30m'
+    ? text.replace('T', ' ').slice(0, 16)
+    : text.slice(0, 10)
+}
+
+/** 按周期裁剪到某一根 K 线，保留原始行字段以供信息条和分析使用。 */
+export function filterKlineRowsThrough(
+  rows: KlineRow[],
+  period: KlinePeriod,
+  through?: string | null,
+): KlineRow[] {
+  if (!through) return rows
+  const boundary = normalizeKlineBarKey(through, period)
+  if (!boundary) return rows
+  return rows.filter(row => normalizeKlineBarKey(row.date, period) <= boundary)
+}
+
+/** 各周期首次切换时采用的展示范围。30F 的精确交易日数量由后端 days 参数裁剪。 */
+export function defaultKlineRange(
+  period: KlinePeriod,
+  now = new Date(),
+  thirtyMinuteDays = DEFAULT_30M_DAYS,
+): { start: string; end: string } {
+  const formatLocalDate = (value: Date) => [
+    value.getFullYear(),
+    String(value.getMonth() + 1).padStart(2, '0'),
+    String(value.getDate()).padStart(2, '0'),
+  ].join('-')
+  const end = formatLocalDate(now)
+  const start = new Date(now)
+  if (period === '30m') start.setDate(start.getDate() - (thirtyMinuteDays * 3 + 20))
+  else if (period === '1d') start.setMonth(start.getMonth() - 6)
+  else if (period === '1w') start.setFullYear(start.getFullYear() - 3)
+  else start.setFullYear(start.getFullYear() - 4)
+  return { start: formatLocalDate(start), end }
+}
 
 export function klineDailyQueryOptions(
   symbol: string,
   dateRange: { start: string; end: string },
   extColumns?: string,
+  includeTechnicalScores = false,
 ) {
   return {
-    queryKey: QK.kline(symbol, dateRange.start, dateRange.end, extColumns),
-    queryFn: () => api.klineDaily(symbol, undefined, dateRange, extColumns),
+    queryKey: QK.kline(symbol, dateRange.start, dateRange.end, extColumns, includeTechnicalScores),
+    queryFn: () => api.klineDaily(symbol, undefined, dateRange, extColumns, includeTechnicalScores),
     // 工厂无 TData 泛型, 参数用 any 以便 useQuery/prefetchQuery 共用
     placeholderData: (prev: any, prevQuery: any) => {
       const prevKey = prevQuery?.queryKey as readonly unknown[] | undefined
@@ -29,6 +89,24 @@ export function klineDailyQueryOptions(
   }
 }
 
+export function klinePeriodQueryOptions(
+  symbol: string,
+  period: KlinePeriod,
+  dateRange: { start: string; end: string },
+  days = DEFAULT_30M_DAYS,
+  extColumns?: string,
+  includeTechnicalScores = false,
+): UseQueryOptions<KlineResponse, Error, KlineResponse, readonly unknown[]> {
+  if (period === '1d') return klineDailyQueryOptions(symbol, dateRange, extColumns, includeTechnicalScores)
+  return {
+    queryKey: QK.klinePeriod(symbol, period, dateRange.start, dateRange.end, days, includeTechnicalScores),
+    queryFn: () => api.klinePeriod(symbol, period, dateRange, days, includeTechnicalScores),
+    placeholderData: (prev: any, prevQuery: any) => {
+      const prevKey = prevQuery?.queryKey as readonly unknown[] | undefined
+      return prevKey?.[1] === symbol && prevKey?.[2] === period ? prev : undefined
+    },
+  }
+}
 export function klineDailyLatestQueryOptions(symbol: string) {
   return {
     queryKey: QK.klineLatest(symbol),

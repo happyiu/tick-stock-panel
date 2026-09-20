@@ -25,6 +25,123 @@ logger = logging.getLogger(__name__)
 # 策略运行用 engine.required_history_bars 的精确值。
 MIN_INDICATOR_WARMUP_DAYS = 30
 
+# 周线和 30F 策略使用独立周期的 OHLCV 序列计算指标, 不能直接复用日线/原始分钟
+# 指标。这里给一段固定暖机窗口, 覆盖常用 MA120 以及量价指标; 策略自身声明的
+# history bars 会在此基础上继续扩大窗口。
+_WEEKLY_MIN_WARMUP_BARS = 120
+_THIRTY_MINUTE_BARS_PER_SESSION = 8
+_THIRTY_MINUTE_MIN_WARMUP_BARS = 120
+
+
+def _compute_strategy_indicators(frame: pl.DataFrame) -> pl.DataFrame:
+    """对一个已经按 symbol/date 排序的周期 OHLCV 帧计算完整策略指标。"""
+    if frame.is_empty():
+        return frame
+    from app.indicators.pipeline import compute_indicators, compute_signals
+
+    frame = compute_indicators(frame.sort(["symbol", "date"]), assume_sorted=True)
+    return compute_signals(frame)
+
+
+def _aggregate_weekly_strategy_frame(df: pl.DataFrame, as_of: date) -> pl.DataFrame:
+    """把 enriched 日 K 聚合为截至 as_of 的周 K, 并重新计算策略指标。
+
+    当前周只使用 as_of 之前的数据, 并把周期的 date 标成 as_of, 保证普通策略,
+    filter_history 和矩阵策略都能用同一套目标日期语义。周内的涨跌停信号采用
+    ``any``, 连板状态采用周末最后一日的值; 它们只是周期摘要, 不重新计算股票
+    专属的日内涨跌停价。
+    """
+    required = {"symbol", "date", "open", "high", "low", "close", "volume"}
+    if df.is_empty() or not required.issubset(df.columns):
+        return pl.DataFrame()
+
+    frame = (
+        df.with_columns(pl.col("date").cast(pl.Date, strict=False))
+        .filter(pl.col("date").is_not_null() & (pl.col("date") <= pl.lit(as_of)))
+        .sort(["symbol", "date"])
+    )
+    if frame.is_empty():
+        return frame
+
+    aggregations: list[pl.Expr] = [
+        pl.col("date").min().alias("period_start"),
+        pl.col("date").max().alias("period_end"),
+        pl.col("open").drop_nulls().first().alias("open"),
+        pl.col("high").max().alias("high"),
+        pl.col("low").min().alias("low"),
+        pl.col("close").last().alias("close"),
+    ]
+    if "volume" in frame.columns:
+        aggregations.append(pl.col("volume").fill_null(0).sum().alias("volume"))
+    if "amount" in frame.columns:
+        aggregations.append(pl.col("amount").fill_null(0).sum().alias("amount"))
+    if "turnover_rate" in frame.columns:
+        aggregations.append(pl.col("turnover_rate").fill_null(0).sum().alias("turnover_rate"))
+
+    for column, reducer in (
+        ("raw_close", "last"),
+        ("raw_high", "max"),
+        ("raw_low", "min"),
+        ("name", "last"),
+        ("total_shares", "last"),
+        ("float_shares", "last"),
+        ("quote_ts", "last"),
+        ("consecutive_limit_ups", "last"),
+        ("consecutive_limit_downs", "last"),
+        ("status", "last"),
+    ):
+        if column not in frame.columns:
+            continue
+        aggregations.append(
+            (pl.col(column).max() if reducer == "max" else pl.col(column).last()).alias(column)
+        )
+
+    for column in (
+        "signal_limit_up",
+        "signal_limit_down",
+        "signal_limit_down_recovery",
+        "signal_broken_limit_up",
+    ):
+        if column in frame.columns:
+            aggregations.append(pl.col(column).fill_null(False).any().alias(column))
+
+    # 周线上的偏离/外部快照因子没有可靠的周线重算口径, 保留周末值, 避免字段
+    # 消失导致已有自定义策略直接报列不存在。
+    for column in ("deviate_3d", "deviate_10d", "deviate_30d"):
+        if column in frame.columns:
+            aggregations.append(pl.col(column).last().alias(column))
+
+    current_week_start = as_of - timedelta(days=as_of.weekday())
+    aggregated = (
+        frame.with_columns(pl.col("date").dt.truncate("1w").alias("_period"))
+        .group_by(["symbol", "_period"], maintain_order=True)
+        .agg(aggregations)
+        .with_columns(
+            pl.when(pl.col("_period") == pl.lit(current_week_start))
+            .then(pl.lit(as_of))
+            .otherwise(pl.col("period_end"))
+            .alias("date")
+        )
+        .drop("_period")
+        .sort(["symbol", "date"])
+    )
+    return _compute_strategy_indicators(aggregated)
+
+
+def _prepare_30m_strategy_frame(df: pl.DataFrame) -> pl.DataFrame:
+    """把原始分钟 K 聚合为 30F, 并重新计算完整策略指标。"""
+    if df.is_empty():
+        return df
+    from app.services.kline_periods import aggregate_minute_30m
+
+    aggregated = aggregate_minute_30m(df)
+    if aggregated.is_empty() or "period_end" not in aggregated.columns:
+        return pl.DataFrame()
+    # kline_periods 为图表使用的 date 保留了字符串桶标签; 策略需要可比较的
+    # Datetime, 以便指标排序、历史过滤和矩阵取当前最后一根 K。
+    aggregated = aggregated.with_columns(pl.col("period_end").alias("date"))
+    return _compute_strategy_indicators(aggregated)
+
 
 def enriched_history_days(data_dir, asset_type: str = "stock", as_of: date | None = None) -> int:
     """本地 enriched 在 as_of 及之前覆盖的交易日数 (#303)。
@@ -297,7 +414,11 @@ class ScreenerService:
         )
 
         warmup = 60
-        start = target_date - timedelta(days=min((lookback_days + warmup) * 2, 180))
+        # 周线策略会把周根数换算成数百个日线交易日; 固定 180 个自然日会把
+        # 周线历史窗口截断到约 20~30 根, 导致 MA/历史过滤失真。按请求窗口
+        # 动态扩大自然日范围, 并设置十年上限防止异常参数扫描过大范围。
+        calendar_span = min(max((lookback_days + warmup) * 2, 180), 3650)
+        start = target_date - timedelta(days=calendar_span)
 
         enriched_dir = self.repo.store.data_dir / self._enriched_dirname
         # 同 _compute_enriched_full: turnover_rate 存储列随行透传 (#187)
@@ -467,6 +588,64 @@ class ScreenerService:
                 market=None,
                 cache_key=cache_key,
             )
+        if timeframe == "1w":
+            # 周线策略需要按周聚合日K后再算指标。至少保留 MA120 所需的周线暖机,
+            # 同时按策略声明的历史窗口扩大日线读取范围。
+            history_bars = engine.required_history_bars(
+                strategy_ids,
+                params_map=params_map,
+                overrides_map=overrides_map,
+            ) if engine is not None else 1
+            weekly_bars = max(history_bars, _WEEKLY_MIN_WARMUP_BARS)
+            daily_history = self._load_enriched_history(
+                as_of,
+                weekly_bars * 5 + 10,
+            )
+            history = _aggregate_weekly_strategy_frame(daily_history, as_of)
+            current = history.filter(pl.col("date") == pl.lit(as_of)) if not history.is_empty() else history
+            return StrategyDataContext(
+                asset_type=self.asset_type,
+                timeframe=timeframe,
+                as_of=as_of,
+                current=current,
+                history=history,
+                market=market,
+                cache_key=cache_key,
+            )
+        if timeframe == "30m":
+            # 30F 策略使用多日分钟K, 不能只读当日分区, 否则 MA/量比等历史指标
+            # 永远处于暖机状态。历史窗口按 30F 根数换算为交易日范围。
+            history_bars = engine.required_history_bars(
+                strategy_ids,
+                params_map=params_map,
+                overrides_map=overrides_map,
+            ) if engine is not None else 1
+            minute_history = self._load_30m_minute_history(
+                as_of,
+                current,
+                max(history_bars, _THIRTY_MINUTE_MIN_WARMUP_BARS),
+            )
+            history = _prepare_30m_strategy_frame(minute_history)
+            if not history.is_empty() and current is not None and not current.is_empty():
+                snapshot_cols = [
+                    column for column in ("name", "total_shares", "float_shares")
+                    if column in current.columns and column not in history.columns
+                ]
+                if snapshot_cols:
+                    snapshot = current.select(["symbol", *snapshot_cols]).unique(
+                        subset=["symbol"], keep="last"
+                    )
+                    history = history.join(snapshot, on="symbol", how="left")
+            current = self._latest_30m_rows(history) if not history.is_empty() else history
+            return StrategyDataContext(
+                asset_type=self.asset_type,
+                timeframe=timeframe,
+                as_of=as_of,
+                current=current,
+                history=history,
+                market=market,
+                cache_key=cache_key,
+            )
         history_bars = engine.required_history_bars(
             strategy_ids,
             params_map=params_map,
@@ -483,6 +662,67 @@ class ScreenerService:
             history=history,
             market=market,
             cache_key=cache_key,
+        )
+
+    def _load_30m_minute_history(
+        self,
+        as_of: date,
+        current: pl.DataFrame | None,
+        required_bars: int,
+    ) -> pl.DataFrame:
+        """读取 30F 所需的多日分钟K, 并严格限制在 as_of 之前。"""
+        symbols: list[str] = []
+        if current is not None and not current.is_empty() and "symbol" in current.columns:
+            symbols = current["symbol"].cast(pl.Utf8).unique().to_list()
+        if not symbols:
+            return pl.DataFrame()
+
+        sessions = max(
+            20,
+            (required_bars + _THIRTY_MINUTE_BARS_PER_SESSION - 1)
+            // _THIRTY_MINUTE_BARS_PER_SESSION
+            + 5,
+        )
+        start = as_of - timedelta(days=sessions * 2 + 10)
+        get_range = getattr(self.repo, "get_minute_range", None)
+        if callable(get_range):
+            try:
+                frame = get_range(symbols, start, as_of, asset_type=self.asset_type)
+            except TypeError:
+                # 兼容精简测试 repo / 旧插件实现没有 asset_type 参数的情况。
+                frame = get_range(symbols, start, as_of)
+            if frame.is_empty():
+                raise ValueError(
+                    "无 30F 分钟K数据 — 请先在 数据→分钟K 完成对应资产的历史同步"
+                )
+            return frame
+
+        # 旧插件没有范围查询时退化为按日期分区读取; 日期范围仍然不超过 as_of。
+        get_by_dates = getattr(self.repo, "get_minute_by_dates", None)
+        if not callable(get_by_dates):
+            return pl.DataFrame()
+        dates = [start + timedelta(days=offset) for offset in range((as_of - start).days + 1)]
+        try:
+            frame = get_by_dates(symbols, dates, asset_type=self.asset_type)
+        except TypeError:
+            frame = get_by_dates(symbols, dates)
+        if frame.is_empty():
+            raise ValueError(
+                "无 30F 分钟K数据 — 请先在 数据→分钟K 完成对应资产的历史同步"
+            )
+        return frame
+
+    @staticmethod
+    def _latest_30m_rows(history: pl.DataFrame) -> pl.DataFrame:
+        """取每个标的最新 30F K, 保留 Datetime date 以便评分列对齐历史。"""
+        if history.is_empty() or "date" not in history.columns:
+            return history
+        latest = history.group_by("symbol").agg(pl.col("date").max().alias("_latest"))
+        return (
+            history.join(latest, on="symbol", how="inner")
+            .filter(pl.col("date") == pl.col("_latest"))
+            .drop("_latest")
+            .sort(["symbol", "date"])
         )
 
     def _load_minute_history(self, as_of: date, current: pl.DataFrame | None) -> pl.DataFrame:

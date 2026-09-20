@@ -1,0 +1,10 @@
+name: goldapi
+display_name: "Gold API"
+runtime: none
+entry: app.plugins.goldapi.provider:GoldApiProvider
+check: app.plugins.goldapi.provider:availability
+datasets: [commodity]
+api_key_env: GOLD_API_KEY
+description: "XAU/XAG 日频历史聚合数据；支持贵金属实时价格接口。"
+install_hint: "输入 Gold API Key，或在 .env 中配置 GOLD_API_KEY"
+homepage: "https://gold-api.com/"

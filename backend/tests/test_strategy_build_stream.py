@@ -53,6 +53,8 @@ async def test_build_strategy_stream_yields_delta_and_normalized_result(monkeypa
         direction="long",
         rules="1. 规则一\n2. 规则二\n3. 规则三",
         strategy_id="ai_streamed",
+        asset_types=["etf"],
+        timeframes=["1w", "30m"],
     )
 
     response = await build_strategy_stream(req, None)
@@ -67,7 +69,11 @@ async def test_build_strategy_stream_yields_delta_and_normalized_result(monkeypa
     assert result["valid"] is True
     assert result["meta"]["id"] == "ai_streamed"
     assert result["meta"]["name"] == "新策略"
+    assert result["meta"]["asset_types"] == ["etf"]
+    assert result["meta"]["timeframes"] == ["1w", "30m"]
     assert '"id": "ai_streamed"' in result["code"]
+    assert '"asset_types": ["etf"]' in result["code"]
+    assert '"timeframes": ["1w", "30m"]' in result["code"]
 
 
 @pytest.mark.asyncio

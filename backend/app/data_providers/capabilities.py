@@ -27,6 +27,15 @@ from app.data_providers import custom as custom_sources
 
 CAPABILITY_REGISTRY: list[dict] = [
     {
+        "id": "chart",
+        "label": "图表行情",
+        "desc": "按需获取分时与各周期K线; 仅缓存展示; 不改变盘后同步源",
+        "field": "chart_data_provider",
+        "default": "tickflow",
+        "tf_tier": "pro",
+        "required_datasets": ("daily", "adj_factor", "minute"),
+    },
+    {
         "id": "daily",
         "label": "日K",
         "desc": "历史K线与实时覆写",
@@ -85,6 +94,15 @@ CAPABILITY_REGISTRY: list[dict] = [
         "tf_tier": "expert",
         # TickFlow 侧需 Expert 档; 插件/自定义源声明 full_minute 数据集即可提供
         # (插件实现 get_intraday_batch / 可选 get_intraday_latest, YAML 仅修复轮)
+    },
+    {
+        "id": "exchange_rate",
+        "label": "汇率",
+        "desc": "货币对与美元指数日频数据",
+        "field": "exchange_rate_data_provider",
+        "default": "frankfurter",
+        "tf_tier": "none",
+        "tickflow_supported": False,
     },
 ]
 
@@ -163,13 +181,16 @@ def build_capability_matrix(current: dict[str, str], tickflow_tier: str = "none"
     for cap in CAPABILITY_REGISTRY:
         # field=None → 不可路由能力 (仅 TickFlow 提供, 无路由偏好), 生效源恒为默认
         effective = current.get(cap["field"], cap["default"]) if cap["field"] else cap["default"]
-        tf_available = tier_rank >= _TIER_RANK[cap["tf_tier"]]
+        tf_available = (
+            cap.get("tickflow_supported", True)
+            and tier_rank >= _TIER_RANK[cap["tf_tier"]]
+        )
         candidates: list[dict] = []
         pending: list[dict] = []
-        if tf_available:
+        if cap.get("tickflow_supported", True) and tf_available:
             candidates.append(dict(_TICKFLOW_CANDIDATE))
         for s in sources:
-            if cap["id"] not in s["datasets"]:
+            if not set(cap.get("required_datasets", (cap["id"],))).issubset(s["datasets"]):
                 continue
             entry = {
                 "name": s["name"],

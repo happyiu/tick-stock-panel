@@ -8,6 +8,15 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "lint": "eslint .",
+    "test:chanlun": "node --experimental-strip-types scripts/assert-chanlun.mjs",
+    "test:decision": "node --experimental-strip-types scripts/assert-decision.mjs",
+    "test:action-signals": "node --experimental-strip-types scripts/assert-action-signals.mjs",
+    "test:analysis-refresh": "node --experimental-strip-types scripts/assert-analysis-refresh.mjs",
+    "test:stock-chat": "node --experimental-strip-types scripts/assert-stock-chat.mjs",
+    "test:elliott": "node --experimental-strip-types scripts/assert-elliott.mjs",
+    "test:format": "node --experimental-strip-types scripts/assert-format.mjs",
+    "test:paper-trading-time": "node --experimental-strip-types scripts/assert-paper-trading-time.mjs",
+    "test:find-feel": "node --experimental-strip-types scripts/assert-find-feel.mjs",
     "test:indices": "vitest run src/pages/Indices.test.tsx"
   },
   "dependencies": {

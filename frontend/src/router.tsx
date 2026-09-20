@@ -16,11 +16,14 @@ import {
 // framer-motion 等重库) → 大幅减小首屏 bundle。命名导出用 .then 映射为 default。
 // Layout / Onboarding / Auth 为应用外壳与入口, 保持同步加载。
 const Watchlist = lazy(() => import('./pages/Watchlist').then(m => ({ default: m.Watchlist })))
+const ETFSimulation = lazy(() => import('./pages/ETFSimulation').then(m => ({ default: m.ETFSimulation })))
 const Screener = lazy(() => import('./pages/Screener').then(m => ({ default: m.Screener })))
 const Backtest = lazy(() => import('./pages/Backtest').then(m => ({ default: m.Backtest })))
 const Factors = lazy(() => import('./pages/Factors').then(m => ({ default: m.Factors })))
+const Commodity = lazy(() => import('./pages/Commodity').then(m => ({ default: m.Commodity })))
 const Financials = lazy(() => import('./pages/Financials').then(m => ({ default: m.Financials })))
 const Data = lazy(() => import('./pages/Data').then(m => ({ default: m.Data })))
+const ExchangeRates = lazy(() => import('./pages/ExchangeRates').then(m => ({ default: m.ExchangeRates })))
 const Monitor = lazy(() => import('./pages/Monitor').then(m => ({ default: m.Monitor })))
 const Lots = lazy(() => import('./pages/Lots').then(m => ({ default: m.Lots })))
 const Dashboard = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })))
@@ -50,12 +53,16 @@ const CORE_ROUTE_PATHS = new Set([
   '/stock-analysis',
   '/review',
   '/watchlist',
+  '/watchlist-etf',
+  '/etf-simulation',
   '/screener',
   '/backtest',
   '/factors',
+  '/commodity',
   '/mining',
   '/financials',
   '/data',
+  '/exchange-rate',
   '/monitor',
   '/limit-ladder',
   '/indices',
@@ -130,13 +137,17 @@ export const router = createBrowserRouter([
       { path: 'industry-analysis', element: <IndustryAnalysis /> },
       { path: 'stock-analysis', element: <StockAnalysis /> },
       { path: 'review', element: <Review /> },
-      { path: 'watchlist', element: <Watchlist /> },
+      { path: 'watchlist', element: <Watchlist assetType="stock" /> },
+      { path: 'watchlist-etf', element: <Watchlist assetType="etf" /> },
+      { path: 'etf-simulation', element: <ETFSimulation /> },
       { path: 'screener', element: <Screener /> },
       { path: 'backtest', element: <Backtest /> },
       { path: 'factors', element: <Factors /> },
+      { path: 'commodity', element: <Commodity /> },
       { path: 'mining', element: <MiningRedirect /> },
       { path: 'financials', element: <Financials /> },
       { path: 'data', element: <Data /> },
+      { path: 'exchange-rate', element: <ExchangeRates /> },
       { path: 'monitor', element: <Monitor /> },
       { path: 'lots', element: <Lots /> },
       { path: 'signals', element: <Signals /> },

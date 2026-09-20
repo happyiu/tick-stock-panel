@@ -112,8 +112,6 @@ def test_sync_and_persist_minute_extend_backward_window_is_beijing_wall_clock(mo
     assert datetime.fromtimestamp(
         kline_sync._datetime_to_ms(end) / 1000, tz=CN_TZ
     ) == local_earliest.replace(tzinfo=CN_TZ)
-
-
 def _capture_tickflow_minute_batch(monkeypatch) -> tuple[list[tuple[datetime, datetime]], list]:
     """桩掉 TickFlow 客户端, 截获 sync_minute_batch 发出的窗口 (换算回北京时间)。
 

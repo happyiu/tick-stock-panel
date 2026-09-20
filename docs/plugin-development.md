@@ -28,7 +28,7 @@ display_name: "我的数据源"                 # 设置页显示名
 runtime: none                            # 运行时类型: node | python | none
 entry: app.plugins.my_source.provider:MyProvider   # provider 类的导入路径
 check: app.plugins.my_source.bridge:availability   # 可用性检测函数(可选)
-datasets: [realtime]                     # 支持: daily/adj_factor/minute/realtime/depth5/financial
+datasets: [realtime]                     # 支持: daily/adj_factor/minute/realtime/depth5/financial/commodity
 api_key_env: MY_SOURCE_API_KEY           # (可选)声明后设置页提供 Key 输入框
 hidden: false                            # (可选)true = 已加载但对设置页隐藏,不注册不展示
 description: "数据源描述"
@@ -52,6 +52,17 @@ TickFlow 的「先探后存」语义:
 4. 插件取 Key 用 `secrets_store.get_env_backed_secret("{name}_api_key", api_key_env)`,
    保证 secrets.json 与 .env 两条配置路径一致
 
+汇率 provider 还需明确当前快照与历史范围的边界：当前参考值可接入带 App ID
+的 latest 接口，返回值必须保留供应商时间戳和来源；历史日期范围继续走日频
+Frankfurter/CFETS，不能把当前快照伪装成历史日线。普通 latest 计划按供应商发布
+频率更新，不等同于交易级实时行情。
+
+商品历史 provider 采用独立的 'commodity' 数据集，不进入单一能力路由矩阵。
+provider 实现 'get_commodity_series(start, end, symbols)'，返回包含
+'symbol'、'name'、'category'、'kind'、'date'、'value'、'unit'、'frequency'、
+'source'、'source_series_id'、'retrieved_at' 的记录。provider 必须在边界完成
+供应商字段、单位和日期标准化；缺失值返回空记录，不补频率、不前向填充。
+
 ### runtime 字段说明
 
 | runtime | 含义 | 典型场景 |
@@ -60,9 +71,19 @@ TickFlow 的「先探后存」语义:
 | `node` | 需要 Node.js 运行时, `npm install` | stock-sdk |
 | `none` | 无额外依赖 | 纯 HTTP API 源 |
 
-> ⚠️ stock-sdk 在 Docker 中默认不打包(合规考虑:它抓取第三方财经网站接口,存在版权与
-> 反爬风险)。如需启用,构建时传 `--build-arg INCLUDE_STOCKSDK=1`,使用风险自负。
+> ⚠️ stock-sdk 默认随 Docker 镜像与 `dev.sh` 安装(它抓取第三方财经网站接口,存在版权与
+> 反爬风险)。如需关闭 Docker 内置依赖,传 `--build-arg INCLUDE_STOCKSDK=0`；使用风险自负。
 > 详见 [deployment.md](./deployment.md)。
+
+仓库还提供 `backend/app/plugins/astockdata/` 作为 Python 型可选插件：当前适配
+[a-stock-data](https://github.com/simonlin1212/a-stock-data) `v3.8.0`
+（commit `2012ce7cd0e75d379c5e6cbd3115514f300f3bc8`）的行情层，接入 mootdx
+日K/分钟K/沪深五档盘口（7709 不可达时分钟K降级腾讯）、新浪复权因子和腾讯实时行情，当前声明 `daily`、`adj_factor`、`minute`、
+`realtime`、`depth5` 五个标准数据集。上游 v3.8.0 新增的官方指数成分/权重、指数估值、交易日历、
+沪深两融和北交所备胎没有对应的系统 service/API，因此暂不随 provider 暴露；研报、资金流、
+新闻、公告等既有端点同理。标的维表也继续走系统现有 TickFlow/本地 instruments 路径。它随基础环境默认安装；
+由于 mootdx 的上游元数据包含过时的 httpx/py-mini-racer 约束，安装入口对 mootdx 本体使用 `--no-deps`，
+其 `quotes` 路径所需的兼容依赖由后端基础环境锁定。
 
 `runtime` 字段当前仅用于 UI 展示, 实际依赖检测由 `check` 函数负责。
 
@@ -188,6 +209,9 @@ class MyProvider:
 `get_depth_batch` 返回结构如下。价格和数量数组均按一档到五档排列;数量单位为“手”,
 `timestamp` 为毫秒 Unix 时间戳。服务层按 capability 的 `batch` / `rpm` 统一分片限速,
 provider 不应自行切换或回退到其他数据源。
+
+`astockdata` 插件的 `depth5` 当前优先通过 `mootdx.quotes()` 提供盘口；北交所代码会从
+mootdx 请求中隔离，mootdx 不可达或单票无结果时降级到已有腾讯实时接口的五档字段。
 
 ```python
 {

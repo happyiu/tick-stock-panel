@@ -9,6 +9,18 @@ import { SignalPicker } from './SignalPicker'
 import { SignalTriggerActions } from '@/components/signals/SignalTriggerActions'
 import { Modal } from '@/components/Modal'
 import { ScoringEditor } from '@/components/ScoringEditor'
+import {
+  AssetTypePicker,
+  DEFAULT_ASSET_TYPES,
+  normalizeAssetTypes,
+  type StrategyAssetType,
+} from './StrategyAssetTypePicker'
+import {
+  DEFAULT_STRATEGY_TIMEFRAMES,
+  normalizeStrategyTimeframes,
+  StrategyTimeframePicker,
+  type StrategyTimeframe,
+} from './StrategyTimeframePicker'
 
 // 内置列名 → 中文标签
 const FIELD_LABEL: Record<string, string> = {}
@@ -184,6 +196,8 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
   // 编辑状态
   const [strategyName, setStrategyName] = useState('')
   const [strategyDesc, setStrategyDesc] = useState('')
+  const [assetTypes, setAssetTypes] = useState<StrategyAssetType[]>([...DEFAULT_ASSET_TYPES])
+  const [timeframes, setTimeframes] = useState<StrategyTimeframe[]>([...DEFAULT_STRATEGY_TIMEFRAMES])
   const [basicFilter, setBasicFilter] = useState<Record<string, any>>({})
   const [params, setParams] = useState<Record<string, any>>({})
   const [scoring, setScoring] = useState<Record<string, number>>({})
@@ -220,6 +234,8 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
         setDetail(d)
         setStrategyName(d.name ?? '')
         setStrategyDesc(d.description ?? '')
+        setAssetTypes(normalizeAssetTypes(d.asset_types))
+        setTimeframes(normalizeStrategyTimeframes(d.timeframes))
         // 确保 boards 有默认值
         const bf = { ...d.basic_filter }
         if (!bf.boards) bf.boards = ALL_BOARDS
@@ -266,6 +282,26 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
     if (!strategyId) return
     setSaving(true)
     try {
+      const sourceEditable = detail?.source === 'ai' || detail?.source === 'custom'
+      const originalAssetTypes = normalizeAssetTypes(detail?.asset_types)
+      const assetTypesChanged = sourceEditable
+        && assetTypes.join(',') !== originalAssetTypes.join(',')
+      const originalTimeframes = normalizeStrategyTimeframes(detail?.timeframes)
+      const timeframesChanged = sourceEditable
+        && timeframes.join(',') !== originalTimeframes.join(',')
+      if (assetTypesChanged || timeframesChanged) {
+        const source = await api.strategyGetSource(strategyId)
+        await api.strategySaveCodeV2({
+          strategy_id: strategyId,
+          code: source.code,
+          target_source: detail.source === 'ai' ? 'ai' : 'custom',
+          mode: 'update',
+          name: strategyName,
+          description: strategyDesc,
+          asset_types: assetTypes,
+          timeframes,
+        })
+      }
       await api.strategySaveConfig(strategyId, {
         name: strategyName,
         description: strategyDesc,
@@ -308,6 +344,8 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
       setDetail(d)
       setStrategyName(d.name ?? '')
       setStrategyDesc(d.description ?? '')
+      setAssetTypes(normalizeAssetTypes(d.asset_types))
+      setTimeframes(normalizeStrategyTimeframes(d.timeframes))
       const bf = { ...d.basic_filter }
       if (!bf.boards) bf.boards = ALL_BOARDS
       setBasicFilter(bf)
@@ -412,6 +450,16 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
                       <input type="text" value={strategyDesc} onChange={e => setStrategyDesc(e.target.value)}
                         className="flex-1 h-8 px-3 rounded-lg bg-base border-0 ring-1 ring-border/30 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-accent/30 transition-shadow" />
                     </div>
+                    <AssetTypePicker
+                      assetTypes={assetTypes}
+                      disabled={detail.source !== 'ai' && detail.source !== 'custom'}
+                      onChange={next => setAssetTypes(next)}
+                    />
+                    <StrategyTimeframePicker
+                      timeframes={timeframes}
+                      disabled={detail.source !== 'ai' && detail.source !== 'custom'}
+                      onChange={next => setTimeframes(next)}
+                    />
                   </div>
                   <div className="flex items-center gap-1.5 pb-0.5 shrink-0">
                     <span className="text-[10px] text-muted/50">显示上限</span>

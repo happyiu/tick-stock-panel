@@ -2,7 +2,7 @@
 
 P1 收口范围: 目录元数据 (id/label/group/公式)、虚拟因子依赖声明、评分预热窗口。
 三处历史清单在此合一:
-  - backtest/factor.py FACTOR_COLUMNS (由 factor_columns_view() 生成兼容别名)
+  - backtest/factor.py FACTOR_COLUMNS (内置目录静态兼容快照; 动态因子走 factor_columns_view())
   - strategy/scoring.py VIRTUAL_SCORING_DEPENDENCIES (由 virtual_dependencies() 生成)
   - strategy/scoring.py _ROLLING_SCORING_WARMUP (由 scoring_warmups() 生成)
 
@@ -335,7 +335,7 @@ def _ordered_specs() -> list[FactorSpec]:
 
 
 def _ensure_ext_factors() -> None:
-    """扩展表字段惰性同步 (配置目录签名幂等); 失败不阻断注册表读取。"""
+    """扩展表字段与独立外部因子惰性同步; 失败不阻断注册表读取。"""
     try:
         from app.factors.ext_factors import ensure_synced
 
@@ -344,6 +344,14 @@ def _ensure_ext_factors() -> None:
         import logging
 
         logging.getLogger(__name__).debug("ext factor sync skipped", exc_info=True)
+    try:
+        from app.external_factors.engine import ensure_synced
+
+        ensure_synced()
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).debug("external factor sync skipped", exc_info=True)
 
 
 def all_factors(
@@ -352,8 +360,7 @@ def all_factors(
 ) -> list[FactorSpec]:
     """按目录顺序返回因子; asset_type 过滤适用资产, stable_only 过滤实验/废弃因子。
 
-    返回前惰性同步扩展表因子 (ext_ 前缀 base 条目), 使信号字段白名单、
-    因子库列表和 AI 提示词看到同一份扩展字段清单。
+    返回前惰性同步扩展表字段与独立外部因子, 确保因子库和回测看到同一份清单。
     """
     _ensure_ext_factors()
     return [
@@ -379,6 +386,7 @@ def factor_dependencies(fids) -> frozenset[str]:
 
 def factor_columns_view() -> list[dict]:
     """历史 FACTOR_COLUMNS 兼容视图 (顺序、键一致; 动态注册因子追加在末尾)。"""
+    _ensure_ext_factors()
     return [spec.column_view() for spec in _ordered_specs()]
 
 

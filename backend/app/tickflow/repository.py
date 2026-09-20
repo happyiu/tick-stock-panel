@@ -134,6 +134,8 @@ class DataStore:
             "ai_cache",
             "user_data",
             "depth5",
+            "exchange_rate",
+            "commodity",
         ):
             (self.data_dir / sub).mkdir(parents=True, exist_ok=True)
 
@@ -251,6 +253,10 @@ class DataStore:
             # 五档盘口 sealed 真假涨停(独立旁路存储,不进 enriched)
             f"""CREATE OR REPLACE VIEW depth5 AS
                 SELECT * FROM read_parquet('{d}/depth5/**/*.parquet', union_by_name=true)""",
+            f"""CREATE OR REPLACE VIEW exchange_rate AS
+                SELECT * FROM read_parquet('{d}/exchange_rate/**/*.parquet', union_by_name=true)""",
+            f"""CREATE OR REPLACE VIEW commodity AS
+                SELECT * FROM read_parquet('{d}/commodity/**/*.parquet', union_by_name=true)""",
         ]
         for sql in statements:
             try:
@@ -945,6 +951,8 @@ class KlineRepository:
                 # 60 日极值为收盘价口径 (与 compute_indicators / 回测矩阵 high_60d 一致)
                 pl.col("close").tail(59).max().alias("_high_59d"),
                 pl.col("close").tail(59).min().alias("_low_59d"),
+                pl.col("close").tail(19).max().alias("_high_19d"),
+                pl.col("close").tail(19).min().alias("_low_19d"),
 
                 # 异动偏离 deviate_3d 用 (与 5d/10d/30d 同语义: 尾部第 N 个收盘)
                 pl.col("close").tail(3).first().alias("_close_3d_ago"),
@@ -1928,11 +1936,18 @@ class KlineRepository:
         except Exception:  # noqa: BLE001
             return None
 
-    def earliest_daily_date(self) -> date | None:
-        """本地日K数据的最早日期。"""
+    def earliest_daily_date(self, asset_type: str = "stock") -> date | None:
+        """本地指定资产日K数据的最早日期。"""
+        table = {
+            "stock": "kline_daily",
+            "index": "kline_index_daily",
+            "etf": "kline_etf_daily",
+        }.get(asset_type)
+        if table is None:
+            return None
         try:
             res = self.execute_one(
-                "SELECT min(date) FROM kline_daily",
+                f"SELECT min(date) FROM {table}",
             )
             if res and res[0]:
                 d = res[0]
@@ -2163,11 +2178,11 @@ class KlineRepository:
             self.store._register_unified_views()
 
     def rebuild_views(self) -> None:
-        """重建全部 13 张 parquet 视图并重挂 unified 视图 —— 唯一权威实现。
+        """重建全部 parquet 视图并重挂 unified 视图 —— 唯一权威实现。
 
         原先 daily_pipeline._refresh_views(盘后管道) 与 /api/data/clear(清库) 各自
         内联了同一份视图重建 SQL, 清库那份还漏了几张视图导致漂移。此处收敛为单一入口:
-        覆盖全部 13 张视图 (二者的超集), 空目录 (清库后) 也能安全重挂。
+        覆盖全部 parquet 视图 (二者的超集), 空目录 (清库后) 也能安全重挂。
         """
         d = self.store.data_dir.as_posix()
         views = {
@@ -2184,6 +2199,8 @@ class KlineRepository:
             "instruments": f"{d}/instruments/**/*.parquet",
             "instruments_index": f"{d}/instruments_index/**/*.parquet",
             "instruments_etf": f"{d}/instruments_etf/**/*.parquet",
+            "exchange_rate": f"{d}/exchange_rate/**/*.parquet",
+            "commodity": f"{d}/commodity/**/*.parquet",
         }
         for name, path in views.items():
             try:

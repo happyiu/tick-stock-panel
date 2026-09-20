@@ -4,6 +4,7 @@
 // Prod:同源(FastAPI 托管前端 dist)
 
 import { toast } from '@/components/Toast'
+import type { ElliottAssessmentRequest, ElliottAssessmentResponse, ElliottExplanationResponse } from '@/lib/elliott'
 
 const BASE = ''
 
@@ -227,6 +228,7 @@ export interface StockLevels {
   close: number | null
   summary: string
   symbol: string
+  asset_type?: 'stock' | 'etf' | 'index'
   /** dates 与 series 对齐;前端按自身 rows 的日期映射,缺失填 null */
   dates?: string[]
   series?: LevelSeries
@@ -245,6 +247,8 @@ export interface AiStockReport {
 }
 
 // ===== Kline =====
+export type KlinePeriod = '30m' | '1d' | '1w' | '1mo'
+
 export interface MinuteKlineRow {
   datetime: string
   /** 分钟开盘价; 部分数据源(stock-sdk 历史日)无真实分钟 open, 为 null */
@@ -274,31 +278,353 @@ export interface PriceLimitInfo {
 export interface KlineRow {
   symbol?: string
   date: string
+  period_start?: string
+  period_end?: string
+  /** 服务端按北京时间与请求截面判定；缺失时结构分析保守视为未闭合。 */
+  is_closed?: boolean
   open: number
   high: number
   low: number
   close: number
   volume?: number
+  amount?: number | null
   change_pct?: number
   ma5?: number | null
+  ma10?: number | null
   ma20?: number | null
   ma60?: number | null
   macd_dif?: number | null
   macd_dea?: number | null
   macd_hist?: number | null
+  rsi_6?: number | null
   rsi_14?: number | null
+  rsi_24?: number | null
+  kdj_k?: number | null
+  kdj_d?: number | null
+  kdj_j?: number | null
+  boll_upper?: number | null
+  boll_lower?: number | null
+  vol_ma5?: number | null
+  vol_ma10?: number | null
   vol_ratio_5d?: number | null
+  momentum_5d?: number | null
+  momentum_10d?: number | null
+  momentum_20d?: number | null
+  momentum_30d?: number | null
+  momentum_60d?: number | null
+  atr_14?: number | null
   [key: string]: any
 }
 
-export interface KlineDailyResponse {
-  symbol: string
-  name?: string
-  stock_info?: { name?: string; total_shares?: number; float_shares?: number; ext?: Record<string, unknown> }
-  rows: KlineRow[]
-  source?: string
+export type TechnicalScoreKind = 'direction' | 'risk' | 'activity' | 'position'
+
+export type TechnicalMacdState =
+  | 'STRONG_BULL'
+  | 'TURNING_BULLISH'
+  | 'RECOVERY'
+  | 'RANGE'
+  | 'TURNING_BEARISH'
+  | 'STRONG_BEAR'
+  | 'INSUFFICIENT'
+
+export type TechnicalMacdEvent =
+  | 'GOLDEN_CROSS'
+  | 'DEATH_CROSS'
+  | 'DIF_CROSS_ZERO_UP'
+  | 'DIF_CROSS_ZERO_DOWN'
+  | 'DEA_CROSS_ZERO_UP'
+  | 'DEA_CROSS_ZERO_DOWN'
+
+export type TechnicalMacdZeroAxis = 'ABOVE' | 'BELOW' | 'NEAR' | 'CROSSING' | 'UNKNOWN'
+
+export type TechnicalMacdMomentum =
+  | 'BULL_EXPANDING'
+  | 'BULL_SHRINKING'
+  | 'BEAR_EXPANDING'
+  | 'BEAR_SHRINKING'
+  | 'FLAT'
+  | 'INSUFFICIENT'
+
+export type TechnicalMacdDivergence = 'BOTTOM_DIVERGENCE' | 'TOP_DIVERGENCE'
+
+export type TechnicalRsiState =
+  | 'EXTREME_OVERBOUGHT'
+  | 'OVERBOUGHT'
+  | 'BULLISH'
+  | 'NEUTRAL_BULL'
+  | 'NEUTRAL_BEAR'
+  | 'BEARISH'
+  | 'OVERSOLD'
+  | 'EXTREME_OVERSOLD'
+  | 'INSUFFICIENT'
+
+export type TechnicalRsiEvent =
+  | 'RSI_CROSS_50_UP'
+  | 'RSI_CROSS_50_DOWN'
+  | 'RSI_CROSS_30_UP'
+  | 'RSI_CROSS_70_DOWN'
+
+export type TechnicalRsiDirection = 'RISING' | 'FALLING' | 'FLAT' | 'INSUFFICIENT'
+export type TechnicalRsiZone = 'STRONG' | 'WEAK' | 'NORMAL' | 'INSUFFICIENT'
+export type TechnicalRsiDivergence =
+  | 'BOTTOM_DIVERGENCE'
+  | 'TOP_DIVERGENCE'
+  | 'HIDDEN_BOTTOM_DIVERGENCE'
+  | 'HIDDEN_TOP_DIVERGENCE'
+export type TechnicalRsiFailureSwing = 'BULLISH_FAILURE_SWING' | 'BEARISH_FAILURE_SWING'
+export type TechnicalRsiStagnation = 'HIGH_STAGNATION' | 'LOW_STAGNATION'
+
+export type TechnicalKdjState =
+  | 'OVERSOLD_REVERSAL'
+  | 'LOW_GOLDEN_CROSS'
+  | 'MOMENTUM_STRENGTHENING'
+  | 'WEAK_RECOVERY'
+  | 'NEUTRAL_OSCILLATION'
+  | 'HIGH_STRENGTH'
+  | 'HIGH_STAGNATION'
+  | 'HIGH_DEATH_CROSS'
+  | 'MOMENTUM_WEAKENING'
+  | 'LOW_STAGNATION'
+  | 'OVERBOUGHT'
+  | 'OVERSOLD'
+  | 'INSUFFICIENT'
+export type TechnicalKdjEvent =
+  | 'LOW_GOLDEN_CROSS'
+  | 'MIDDLE_GOLDEN_CROSS'
+  | 'HIGH_GOLDEN_CROSS'
+  | 'LOW_DEATH_CROSS'
+  | 'MIDDLE_DEATH_CROSS'
+  | 'HIGH_DEATH_CROSS'
+  | 'J_TURN_UP'
+  | 'J_TURN_DOWN'
+export type TechnicalKdjZone = 'OVERSOLD' | 'MID_LOW' | 'MID_HIGH' | 'OVERBOUGHT' | 'INSUFFICIENT'
+export type TechnicalKdjTurn = 'UP' | 'DOWN'
+export type TechnicalKdjDivergence = 'BOTTOM_DIVERGENCE' | 'TOP_DIVERGENCE'
+
+export type TechnicalRocState =
+  | 'STRONG_BULL_ACCEL'
+  | 'BULL_RUN'
+  | 'BULL_DECAY'
+  | 'TURNING_BEARISH'
+  | 'STRONG_BEAR_ACCEL'
+  | 'BEAR_RUN'
+  | 'BEAR_DECAY'
+  | 'TURNING_BULLISH'
+  | 'NEUTRAL'
+  | 'MIXED'
+  | 'INSUFFICIENT'
+export type TechnicalRocEvent = 'ROC_CROSS_ZERO_UP' | 'ROC_CROSS_ZERO_DOWN'
+export type TechnicalRocDirection = 'POSITIVE' | 'NEGATIVE' | 'MIXED' | 'NEUTRAL' | 'INSUFFICIENT'
+export type TechnicalRocExtreme = 'EXTREME_OVERBOUGHT' | 'EXTREME_OVERSOLD'
+export type TechnicalRocDivergence = 'BOTTOM_DIVERGENCE' | 'TOP_DIVERGENCE'
+export type TechnicalObvState =
+  | 'STRONG_INFLOW'
+  | 'INFLOW'
+  | 'INFLOW_IMPROVING'
+  | 'DIVERGING'
+  | 'RANGE'
+  | 'OUTFLOW_WORSENING'
+  | 'OUTFLOW'
+  | 'STRONG_OUTFLOW'
+  | 'INSUFFICIENT'
+
+export interface TechnicalRocPeriod {
+  period: 5 | 20 | 60
+  weight: number
+  value: number | null
+  previous_value: number | null
+  change: number | null
+  value_pct: number | null
+  previous_value_pct: number | null
+  change_pct_points: number | null
+  state: TechnicalRocState
+  status: string
+  event: TechnicalRocEvent | null
+  percentile: number | null
+  history_count: number
+  history_q05_pct: number | null
+  history_q95_pct: number | null
+  extreme: TechnicalRocExtreme | null
+  divergence: TechnicalRocDivergence | null
+  recent_divergence: TechnicalRocDivergence | null
+  recent_divergence_as_of: string | null
+  divergence_confirmation_index: number | null
+  recent_divergence_confirmation_index: number | null
+  divergence_price_change_pct: number | null
+  divergence_roc_change_pct_points: number | null
+  divergence_pivot_age: number | null
+  divergence_confirmation_lag: number | null
+  tags: string[]
+  score: number | null
+  summary: string
 }
 
+export interface TechnicalScoreIndicator {
+  id: string
+  name: string
+  score: number | null
+  group?: 'volatility' | 'downside' | 'extreme' | string
+  score_label?: string
+  value?: number | null
+  weight: number | null
+  status: string
+  detail: string
+  raw_values: Record<string, number | null>
+  state?: TechnicalMacdState | TechnicalRsiState | TechnicalKdjState | TechnicalRocState
+    | TechnicalObvState
+  event?: TechnicalMacdEvent | TechnicalRsiEvent | TechnicalKdjEvent | TechnicalRocEvent | null
+  events?: Array<TechnicalMacdEvent | TechnicalRsiEvent | TechnicalKdjEvent | TechnicalRocEvent>
+  crossover?: 'GOLDEN_CROSS' | 'DEATH_CROSS' | null
+  zero_axis?: TechnicalMacdZeroAxis
+  momentum?: TechnicalMacdMomentum
+  divergence?: TechnicalMacdDivergence | TechnicalRsiDivergence | TechnicalKdjDivergence | TechnicalRocDivergence | null
+  recent_divergence?: TechnicalMacdDivergence | TechnicalRsiDivergence | TechnicalKdjDivergence | TechnicalRocDivergence | null
+  recent_divergence_as_of?: string | null
+  direction?: TechnicalRsiDirection | TechnicalRocDirection
+  zone?: TechnicalRsiZone | TechnicalKdjZone
+  zone_label?: string
+  failure_swing?: TechnicalRsiFailureSwing | null
+  recent_failure_swing?: TechnicalRsiFailureSwing | null
+  recent_failure_swing_as_of?: string | null
+  stagnation?: TechnicalRsiStagnation | null
+  j_turn?: TechnicalKdjTurn | null
+  phase?: string
+  tags?: string[]
+  confidence?: number | null
+  summary?: string
+  direction_label?: string
+  event_period?: number | null
+  extreme?: TechnicalRocExtreme | null
+  extreme_periods?: number[]
+  divergence_period?: number | null
+  periods?: TechnicalRocPeriod[]
+  coverage?: number
+  breakout?: string | null
+  persistence?: string | null
+}
+
+export interface TechnicalScoreCategory {
+  id: string
+  name: string
+  kind: TechnicalScoreKind
+  weight: number | null
+  score: number | null
+  status?: string
+  coverage: number
+  available: boolean
+  direction_status?: string
+  phase?: string
+  alert?: string | null
+  conclusion?: string
+  oversold_score?: number | null
+  overheat_score?: number | null
+  volatility_score?: number | null
+  volatility_coverage?: number
+  downside_score?: number | null
+  downside_coverage?: number
+  volatility_weight?: number
+  downside_weight?: number
+  risk_change_5?: number | null
+  risk_trend?: string | null
+  indicators: TechnicalScoreIndicator[]
+}
+
+export interface TechnicalScoreRow {
+  as_of: string
+  direction_score: number | null
+  confidence: number
+  coverage: number
+  trend: number | null
+  momentum: number | null
+  volume_price: number | null
+  state_confirmation?: number | null
+  volatility_risk: number | null
+  activity: number | null
+  available: boolean
+  category_direction_score?: number | null
+  category_direction_coverage?: number
+  direction_available?: boolean
+  category_risk_score?: number | null
+  risk_available?: boolean
+  category_activity_score?: number | null
+  activity_available?: boolean
+  categories?: TechnicalScoreCategory[]
+}
+
+export interface TechnicalScores {
+  version: 'technical-score-v1' | 'technical-score-v2' | 'technical-score-v3' | 'technical-score-v4' | 'technical-score-v5' | 'technical-score-v6' | 'technical-score-v7' | 'technical-score-v8' | string
+  rows: TechnicalScoreRow[]
+}
+
+export interface ChartDataStatus {
+  data_through?: string | null
+  provider: string
+  fetched_at: string | null
+  stale: boolean
+  adjustment: string
+  amount_estimated: boolean
+}
+
+export interface KlineResponse {
+  data_status?: ChartDataStatus
+  symbol: string
+  name?: string
+  asset_type?: 'stock' | 'etf' | 'index'
+  stock_info?: {
+    name?: string
+    total_shares?: number
+    float_shares?: number
+    ext?: Record<string, unknown>
+  }
+  rows: KlineRow[]
+  source?: string
+  period?: KlinePeriod
+  requested_days?: number
+  available_days?: number
+  technical_scores?: TechnicalScores
+}
+
+/** 详情页 AI 对话首轮捕获的、固定到本次会话的页面快照。 */
+export interface StockChatSnapshotV1 {
+  version: 1
+  symbol: string
+  name?: string
+  asset_type?: 'stock' | 'etf' | 'index' | null
+  period: KlinePeriod
+  as_of?: string | null
+  captured_at?: string | null
+  source?: string | null
+  data_status?: ChartDataStatus | null
+  bars: Array<Record<string, any>>
+  technical_score?: Record<string, any> | null
+  structure: Record<string, any>
+  price_zones: Array<Record<string, any>>
+  signal_risk: Array<Record<string, any>>
+}
+
+export interface StockChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export type StockChatStreamEvent =
+  | {
+      type: 'meta'
+      provider?: string
+      model?: string
+      symbol?: string
+      period?: KlinePeriod
+      as_of?: string | null
+      history_truncated?: boolean
+      heartbeat_seconds?: number
+    }
+  | { type: 'delta'; content: string }
+  | { type: 'heartbeat'; ts?: number }
+  | { type: 'error'; message: string }
+  | { type: 'done' }
+
+/** 兼容日K增量刷新路径的别名；完整日K响应包含图表状态和技术评分字段。 */
+export type KlineDailyResponse = KlineResponse
 export interface KlineDailyLatestResponse {
   symbol: string
   row: KlineRow | null
@@ -391,9 +717,11 @@ export interface ScreenerStrategy {
   name: string
   description: string
   source?: string
-  /** 支持的周期, 如 ['1d'] / ['1m'] (分钟策略) */
+  /** 支持的周期: 1d(日线) / 1w(周线) / 30m(30F) / 1m(分钟策略) */
   timeframes?: string[]
 }
+
+export type StrategyTimeframe = '1d' | '1w' | '30m' | '1m'
 
 export interface StrategyLoadError {
   file: string
@@ -425,7 +753,7 @@ export interface ScreenerCachedSummary {
 /** run_all 渐进式返回: 快策略已算完, 慢策略后台继续算 */
 export interface ScreenerRunAllSummary {
   as_of: string | null
-  results: Record<string, ScreenerResultSummary>
+  results: Record<string, ScreenerResultSummary & { rows?: any[] }>
   /** 尚未算完的策略 (后台继续, 逐个写入缓存) */
   pending?: string[]
   /** 全部算完时为 true */
@@ -807,6 +1135,35 @@ export interface StrategyDetail {
   composite_children?: CompositeChildInfo[] | null
 }
 
+export interface StrategySignalMarker {
+  date: string
+  kind: 'entry' | 'exit'
+  signals: string[]
+}
+
+export interface StrategySignalResponse {
+  symbol: string
+  asset_type: 'stock' | 'etf'
+  timeframe: StrategyTimeframe
+  strategy_id: string
+  markers: StrategySignalMarker[]
+  count: number
+}
+
+export interface SignalChartMarker {
+  date: string
+  signals: string[]
+}
+
+export interface SignalChartResponse {
+  symbol: string
+  asset_type: 'stock' | 'etf'
+  timeframe: KlinePeriod
+  signal_ids: string[]
+  markers: SignalChartMarker[]
+  count: number
+}
+
 export type ScoringDirection = 'high' | 'low'
 
 export interface StrategyBuildResult {
@@ -861,6 +1218,8 @@ export interface CustomSignal {
   kind: 'entry' | 'exit' | 'both'
   conditions: CustomSignalCondition[]
   enabled: boolean
+  timeframe?: 'daily' | 'intraday'
+  min_bars?: number
 }
 
 export interface CustomSignalFieldGroup {
@@ -1067,6 +1426,7 @@ export interface AlertEvent {
   source: string
   type: string
   symbol?: string
+  asset_type?: 'stock' | 'etf' | 'index'
   name?: string | null
   message: string
   price?: number | null
@@ -1184,6 +1544,38 @@ export interface FactorLibraryItem {
   stability: FactorStability
   scale_free: boolean
   dependencies: string[]
+  tags?: string[]
+}
+
+export type ExternalFactorCategory =
+  | 'market' | 'industry' | 'constituents' | 'relative' | 'cross_market'
+  | 'flow' | 'liquidity' | 'sentiment' | 'valuation' | 'fundamental'
+  | 'commodity' | 'event'
+
+export interface ExternalFactorDefinition {
+  id: string
+  label: string
+  category: ExternalFactorCategory
+  operation: 'direct' | 'difference'
+  source_type: 'index_daily' | 'ext_timeseries' | 'factor_pair'
+  source_symbol?: string | null
+  source_config_id?: string | null
+  source_field?: string | null
+  transform: 'value' | 'return'
+  window: number
+  left_factor_id?: string | null
+  right_factor_id?: string | null
+  group: string
+  description?: string
+  direction: 'high' | 'low' | 'none'
+  unit: string
+  asset_types: string[]
+  pit: boolean
+  status: 'draft' | 'active' | 'watch' | 'retired'
+  version: number
+  alignment: 'date_broadcast'
+  created_at: string
+  updated_at: string
 }
 
 export interface FactorDslError {
@@ -1545,6 +1937,7 @@ export interface ResearchCandidateCreate {
 // ===== Strategy Backtest =====
 export interface StrategyBacktestTrade {
   symbol: string
+  asset_type?: 'stock' | 'etf'
   name?: string
   entry_date: string
   exit_date: string
@@ -1661,6 +2054,52 @@ export interface SettingsState {
   ai_user_agent: string
   ai_max_output_tokens?: number
   ai_context_window?: number
+  // Hermes Agent 独立配置(密钥只返回脱敏值)
+  hermes_gateway_url?: string
+  hermes_api_key_masked?: string
+  has_hermes_key?: boolean
+  hermes_configured?: boolean
+  hermes_model?: string
+}
+
+export interface HermesProbeResult {
+  ok: boolean
+  gateway_url?: string
+  mode?: 'enhanced' | 'compatible' | 'unavailable'
+  health?: boolean
+  capabilities?: boolean
+  models?: boolean
+  chat_completions?: boolean
+  runs?: boolean
+  sessions?: boolean
+  model_ids?: string[]
+  model?: string
+  error?: string | null
+}
+
+export interface HermesTestResult {
+  ok: boolean
+  model?: string
+  error?: string
+}
+
+export interface HermesSettingsResult extends HermesProbeResult {
+  error?: string
+  ai_provider?: string
+  ai_model?: string
+  ai_openai_model?: string
+  ai_reasoning_effort?: string
+  ai_codex_model?: string
+  ai_codex_command?: string
+  ai_codex_reasoning_effort?: string
+  ai_configured?: boolean
+  ai_max_output_tokens?: number
+  ai_context_window?: number
+  hermes_gateway_url?: string
+  hermes_api_key_masked?: string
+  has_hermes_key?: boolean
+  hermes_configured?: boolean
+  hermes_model?: string
 }
 
 /** 保存 TickFlow Key 的响应(先探后存) */
@@ -1700,6 +2139,7 @@ export interface PluginDataSourceItem {
 
 /** 数据源路由偏好字段 (每个能力一个, 与后端能力注册表一一对应) */
 export type ProviderField =
+  | 'chart_data_provider'
   | 'daily_data_provider'
   | 'adj_factor_provider'
   | 'minute_data_provider'
@@ -1707,6 +2147,7 @@ export type ProviderField =
   | 'depth5_data_provider'
   | 'realtime_data_provider'
   | 'financial_data_provider'
+  | 'exchange_rate_data_provider'
 
 /** 能力路由矩阵中的一个候选源 (candidates 只含当前确实可提供该能力的源) */
 export interface CapabilityCandidate {
@@ -1820,6 +2261,7 @@ export interface Preferences {
   minute_sync_segment_days: number
   minute_refresh_enabled: boolean
   minute_refresh_interval: number
+  chart_data_provider?: string
   daily_data_provider?: string
   adj_factor_provider?: string
   minute_data_provider?: string
@@ -1830,6 +2272,8 @@ export interface Preferences {
   depth5_data_provider?: string
   realtime_data_provider?: string
   financial_data_provider?: string
+  exchange_rate_data_provider?: string
+  exchange_rate_interval_hours: number
   data_source_job_timeout_s: number
   data_source_long_job_timeout_s: number
   minute_batch_compress: boolean
@@ -1907,6 +2351,178 @@ export interface StrategyAlertEvent {
   signals?: string[]
   /** ext 富化字段 (行业/概念等), 键为 "{configId}__{fieldName}" */
   [key: string]: unknown
+}
+
+// ===== ETF paper trading =====
+export interface PaperAccount {
+  id: string
+  mode: 'live' | 'replay'
+  name: string
+  initial_cash: number
+  cash: number
+  commission_rate: number
+  minimum_commission: number
+  slippage_bps: number
+  max_positions: number
+  max_exposure_pct: number
+  max_symbol_exposure_pct: number
+  revision: number
+  archived: number
+  runtime_status: string
+  runtime_message: string
+  created_at: string
+  updated_at: string
+  replay_start?: string | null
+  replay_end?: string | null
+  replay_cursor?: string | null
+  replay_status?: string | null
+  replay_speed: number
+}
+
+export interface EtfTradingRule {
+  symbol: string
+  settlement_cycle: 'T0' | 'T1' | 'unknown'
+  lot_size: number
+  price_tick: number
+  updated_at: string | null
+}
+
+export interface PaperOrder {
+  id: string
+  symbol: string
+  side: 'buy' | 'sell'
+  order_type: 'market' | 'limit'
+  quantity: number
+  limit_price: number | null
+  status: string
+  submitted_at: string
+  filled_at: string | null
+  filled_price: number | null
+  fee: number
+  reason: string
+}
+
+export interface ConditionalOrder {
+  id: string
+  symbol: string
+  side: 'buy' | 'sell'
+  direction: 'above' | 'below'
+  trigger_price: number
+  quantity: number
+  child_order_type: 'market' | 'limit'
+  status: string
+  oco_group: string | null
+  created_at: string
+  triggered_at: string | null
+  reason: string
+}
+
+export interface PaperFill {
+  id: string
+  symbol: string
+  side: 'buy' | 'sell'
+  quantity: number
+  price: number
+  gross: number
+  fee: number
+  realized_pnl: number
+  filled_at: string
+}
+
+export interface PaperPosition {
+  symbol: string
+  name: string
+  quantity: number
+  editable: boolean
+  available_quantity: number
+  reserved_quantity: number
+  average_cost: number
+  last_price: number
+  market_value: number
+  unrealized_pnl: number
+  unrealized_pnl_pct: number
+  price_time: string | null
+  description: string
+}
+
+export interface EquityPoint {
+  bar_time: string
+  equity: number
+  cash: number
+  market_value: number
+  realized_pnl: number
+  unrealized_pnl: number
+  drawdown: number
+}
+
+export interface PositionEquityPoint {
+  bar_time: string
+  equity: number
+  market_value: number
+  realized_pnl: number
+  unrealized_pnl: number
+  total_pnl: number
+  return_rate: number
+  drawdown: number
+}
+
+export interface PaperSnapshot {
+  account: PaperAccount
+  summary: {
+    equity: number
+    cash: number
+    market_value: number
+    realized_pnl: number
+    unrealized_pnl: number
+    total_pnl: number
+    daily_pnl: number
+    total_return: number
+    exposure_pct: number
+    max_drawdown: number
+  }
+  positions: PaperPosition[]
+  orders: PaperOrder[]
+  conditions: ConditionalOrder[]
+  fills: PaperFill[]
+  ledger: Array<Record<string, string | number | null>>
+  equity_curve: EquityPoint[]
+  position_equity_curves: Record<string, PositionEquityPoint[]>
+  clock: string
+}
+
+export interface PaperSetupRequired {
+  setup_required: true
+  message: string
+}
+
+export type PaperSnapshotResponse = PaperSnapshot | PaperSetupRequired
+
+export interface PaperAccountConfigPayload {
+  name?: string
+  initial_cash?: number
+  commission_rate?: number
+  minimum_commission?: number
+  slippage_bps?: number
+  max_positions?: number
+  max_exposure_pct?: number
+  max_symbol_exposure_pct?: number
+}
+
+export interface PaperLiveAccountSetupPayload extends PaperAccountConfigPayload {
+  name: string
+}
+
+export interface PaperManualPositionPayload {
+  account_id: string
+  symbol: string
+  quantity: number
+  average_cost: number
+}
+
+export interface PaperPositionDescriptionPayload {
+  account_id: string
+  symbol: string
+  description: string
 }
 
 // ===== 板块切换 (盘中轮动, 全量分钟聚合) =====
@@ -1988,6 +2604,75 @@ export interface SectorRotationUniverseItem {
 export const api = {
   health: () => request<{ status: string; version: string; mode: string }>('/health'),
 
+  paperSnapshot: (accountId?: string) => request<PaperSnapshotResponse>(
+    `/api/paper-trading/snapshot?mode=${accountId ? 'replay' : 'live'}`
+      + (accountId ? `&account_id=${encodeURIComponent(accountId)}` : ''),
+  ),
+  paperCreateLiveAccount: (payload: PaperLiveAccountSetupPayload) =>
+    request<PaperSnapshot>(`/api/paper-trading/live/setup`, {
+      method: 'POST', body: JSON.stringify(payload),
+    }),
+  paperRules: () => request<{ items: EtfTradingRule[] }>('/api/paper-trading/rules'),
+  paperSetRule: (symbol: string, payload: Omit<EtfTradingRule, 'symbol' | 'updated_at'>) =>
+    request<EtfTradingRule>(`/api/paper-trading/rules/${encodeURIComponent(symbol)}`, {
+      method: 'PUT', body: JSON.stringify(payload),
+    }),
+  paperUpdateConfig: (accountId: string, payload: PaperAccountConfigPayload) =>
+    request<PaperSnapshot>(`/api/paper-trading/accounts/${encodeURIComponent(accountId)}/config`, {
+      method: 'PUT', body: JSON.stringify(payload),
+    }),
+  paperRebuildLive: () => request<PaperSetupRequired>('/api/paper-trading/live/rebuild', { method: 'POST' }),
+  paperArchivedAccounts: () => request<{ items: PaperAccount[] }>('/api/paper-trading/accounts/archived'),
+  paperDeleteArchivedAccount: (accountId: string) => request<{ ok: boolean }>(
+    `/api/paper-trading/accounts/${encodeURIComponent(accountId)}`, { method: 'DELETE' },
+  ),
+  paperAddManualPosition: (payload: PaperManualPositionPayload) =>
+    request<PaperSnapshot>('/api/paper-trading/positions/manual', {
+      method: 'POST', body: JSON.stringify(payload),
+    }),
+  paperEditManualPosition: (payload: PaperManualPositionPayload) =>
+    request<PaperSnapshot>('/api/paper-trading/positions/manual', {
+      method: 'PUT', body: JSON.stringify(payload),
+    }),
+  paperUpdatePositionDescription: (payload: PaperPositionDescriptionPayload) =>
+    request<PaperSnapshot>('/api/paper-trading/positions/description', {
+      method: 'PUT', body: JSON.stringify(payload),
+    }),
+  paperDeleteManualPosition: (accountId: string, symbol: string) => request<PaperSnapshot>(
+    `/api/paper-trading/positions/manual/${encodeURIComponent(symbol)}?account_id=${encodeURIComponent(accountId)}`,
+    { method: 'DELETE' },
+  ),
+  paperCreateOrder: (payload: Record<string, unknown>) =>
+    request<PaperOrder>('/api/paper-trading/orders', { method: 'POST', body: JSON.stringify(payload) }),
+  paperCancelOrder: (accountId: string, orderId: string) => request<PaperOrder>(
+    `/api/paper-trading/orders/${encodeURIComponent(orderId)}/cancel?account_id=${encodeURIComponent(accountId)}`,
+    { method: 'POST' },
+  ),
+  paperCreateCondition: (payload: Record<string, unknown>) =>
+    request<{ items: ConditionalOrder[] }>('/api/paper-trading/conditions', {
+      method: 'POST', body: JSON.stringify(payload),
+    }),
+  paperCancelCondition: (accountId: string, conditionId: string) => request<{ ok: boolean }>(
+    `/api/paper-trading/conditions/${encodeURIComponent(conditionId)}/cancel?account_id=${encodeURIComponent(accountId)}`,
+    { method: 'POST' },
+  ),
+  paperReplays: () => request<{ items: PaperAccount[] }>('/api/paper-trading/replays'),
+  paperCreateReplay: (payload: { name: string; start: string; end: string; initial_cash: number }) =>
+    request<PaperSnapshot>('/api/paper-trading/replays', {
+      method: 'POST', body: JSON.stringify(payload),
+    }),
+  paperControlReplay: (accountId: string, action: 'play' | 'pause' | 'archive', speed?: number) =>
+    request<PaperAccount>(`/api/paper-trading/replays/${encodeURIComponent(accountId)}/control`, {
+      method: 'POST', body: JSON.stringify({ action, speed }),
+    }),
+  paperStepReplay: (accountId: string, bars = 1) => request<PaperSnapshot>(
+    `/api/paper-trading/replays/${encodeURIComponent(accountId)}/step?bars=${bars}`,
+    { method: 'POST' },
+  ),
+  paperReplayBars: (accountId: string, symbol: string) => request<{ items: MinuteKlineRow[] }>(
+    `/api/paper-trading/replays/${encodeURIComponent(accountId)}/bars?symbol=${encodeURIComponent(symbol)}`,
+  ),
+
   // ===== Auth (访问认证) =====
   authStatus: () =>
     request<{ configured: boolean; authenticated: boolean }>('/api/auth/status'),
@@ -2026,7 +2711,7 @@ export const api = {
 
   /** 保存 AI 配置 */
   saveAiSettings: (ai: { provider?: string; base_url?: string; api_key?: string; model?: string; reasoning_effort?: string; codex_command?: string; codex_reasoning_effort?: string; user_agent?: string; max_output_tokens?: number; context_window?: number }) =>
-    request<{ ok: boolean; ai_provider?: string; ai_model?: string; ai_openai_model?: string; ai_reasoning_effort?: string; ai_codex_model?: string; ai_codex_command?: string; ai_codex_reasoning_effort?: string; ai_configured?: boolean; ai_max_output_tokens?: number; ai_context_window?: number }>('/api/settings/ai', {
+    request<{ ok: boolean; error?: string; ai_provider?: string; ai_model?: string; ai_openai_model?: string; ai_reasoning_effort?: string; ai_codex_model?: string; ai_codex_command?: string; ai_codex_reasoning_effort?: string; ai_configured?: boolean; ai_max_output_tokens?: number; ai_context_window?: number }>('/api/settings/ai', {
       method: 'POST',
       body: JSON.stringify(ai),
     }),
@@ -2034,6 +2719,27 @@ export const api = {
   /** 一键清空 AI 配置(保留自定义 UA) */
   clearAiSettings: () =>
     request<{ ok: boolean }>('/api/settings/ai', { method: 'DELETE' }),
+
+  /** 探测 Hermes Gateway,不保存草稿或 API Server Key */
+  probeHermes: (config: { gateway_url: string; api_key?: string; model?: string }) =>
+    request<HermesProbeResult>('/api/settings/hermes/probe', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    }),
+  /** 使用草稿配置发起最小文本请求,不保存配置 */
+  testHermes: (config: { gateway_url: string; api_key?: string; model?: string }) =>
+    request<HermesTestResult>('/api/settings/hermes/test', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    }),
+  /** 探测成功后保存 Hermes 并启用 */
+  saveHermesSettings: (config: { gateway_url: string; api_key?: string; model?: string; max_output_tokens?: number; context_window?: number }) =>
+    request<HermesSettingsResult>('/api/settings/hermes', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    }),
+  clearHermesSettings: () =>
+    request<HermesSettingsResult>('/api/settings/hermes', { method: 'DELETE' }),
 
   preferences: () => request<Preferences>('/api/settings/preferences'),
   dataSources: () => request<DataSourcesResponse>('/api/settings/data-sources'),
@@ -2302,6 +3008,11 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ hour, minute }),
     }),
+  updateExchangeRateSchedule: (intervalHours: number) =>
+    request<{ interval_hours: number }>('/api/settings/preferences/exchange-rate-schedule', {
+      method: 'PUT',
+      body: JSON.stringify({ interval_hours: intervalHours }),
+    }),
   updateReviewSchedule: (enabled: boolean, hour: number, minute: number) =>
     request<{ enabled: boolean; hour: number; minute: number }>('/api/settings/preferences/review-schedule', {
       method: 'PUT',
@@ -2380,12 +3091,13 @@ export const api = {
   redetectCapabilities: () =>
     request<CapabilitiesResponse>('/api/capabilities/redetect', { method: 'POST' }),
 
-  klineDaily: (symbol: string, days = 120, dateRange?: { start: string; end: string }, extColumns?: string) =>
-    request<KlineDailyResponse>(
+  klineDaily: (symbol: string, days = 120, dateRange?: { start: string; end: string }, extColumns?: string, includeTechnicalScores = false) =>
+    request<KlineResponse>(
       (dateRange
         ? `/api/kline/daily?symbol=${encodeURIComponent(symbol)}&start_date=${dateRange.start}&end_date=${dateRange.end}`
         : `/api/kline/daily?symbol=${encodeURIComponent(symbol)}&days=${days}`)
-      + (extColumns ? `&ext_columns=${encodeURIComponent(extColumns)}` : ''),
+      + (extColumns ? `&ext_columns=${encodeURIComponent(extColumns)}` : '')
+      + (includeTechnicalScores ? '&include_technical_scores=true' : ''),
     ),
   klineDailyLatest: (symbol: string) =>
     request<KlineDailyLatestResponse>(
@@ -2396,6 +3108,18 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ symbols, days }),
     }),
+  klinePeriod: (
+    symbol: string,
+    period: Exclude<KlinePeriod, '1d'>,
+    dateRange: { start: string; end: string },
+    days = 20,
+    includeTechnicalScores = false,
+  ) =>
+    request<KlineResponse>(
+      `/api/kline/period?symbol=${encodeURIComponent(symbol)}&period=${period}`
+      + `&start_date=${dateRange.start}&end_date=${dateRange.end}&days=${days}`
+      + (includeTechnicalScores ? '&include_technical_scores=true' : ''),
+    ),
   klineMinuteBatch: (symbols: string[], date?: string, preferLocal?: boolean, since?: string) =>
     request<{ data: Record<string, MinuteKlineRow[]>; full_minute_local?: boolean; incremental?: boolean }>('/api/kline/minute-batch', {
       method: 'POST',
@@ -2419,7 +3143,8 @@ export const api = {
       stock_info?: { name?: string; total_shares?: number; float_shares?: number }
       date: string | null
       rows: MinuteKlineRow[]
-      source?: 'local' | 'live' | 'none'
+      source?: 'local' | 'live' | 'none' | 'chart'
+      data_status?: ChartDataStatus
       asset_type?: 'stock' | 'etf' | 'index'
       price_limit?: PriceLimitInfo | null
       prev_close?: number | null
@@ -2433,7 +3158,8 @@ export const api = {
       asset_type: 'stock' | 'etf' | 'index'
       requested_days: number
       sessions: MinuteKlineSession[]
-      source: 'local' | 'none'
+      source: 'local' | 'none' | 'chart'
+      data_status?: ChartDataStatus
     }>(
       `/api/kline/minute-range?symbol=${encodeURIComponent(symbol)}&days=${days}`,
     ),
@@ -2490,6 +3216,17 @@ export const api = {
     request<{ status: string; job_id: string }>('/api/kline/extend_history', {
       method: 'POST',
       body: JSON.stringify({ value, unit }),
+    }),
+  extendEtfHistory: (
+    value: number,
+    unit: 'day' | 'month' | 'year',
+    dateRange?: { start: string; end: string },
+  ) =>
+    request<{ status: string; job_id: string }>('/api/kline/extend_etf_history', {
+      method: 'POST',
+      body: JSON.stringify(dateRange
+        ? { start_date: dateRange.start, end_date: dateRange.end }
+        : { value, unit }),
     }),
   repairDaily: (startDate: string) =>
     request<{ status: string; job_id: string }>('/api/kline/repair_daily', {
@@ -2607,14 +3344,14 @@ export const api = {
         : '/api/watchlist/enriched',
     ),
 
-  // timeframe='all' 时不传参数 → 后端不过滤周期, 返回日线+分钟合并列表
-  screenerStrategies: async (assetType?: 'stock' | 'etf' | 'index', timeframe: '1d' | '1m' | 'all' = '1d') => {
+  // timeframe='all' 时不传参数 → 后端不过滤周期, 返回所有周期策略
+  screenerStrategies: async (assetType?: 'stock' | 'etf' | 'index', timeframe: '1d' | '1w' | '30m' | '1m' | 'all' = '1d') => {
     const data = await request<{ strategies: StrategyDetail[]; load_errors?: StrategyLoadError[] }>(
       `/api/strategies?${assetType ? `asset_type=${assetType}&` : ''}${timeframe !== 'all' ? `timeframe=${timeframe}` : ''}`,
     )
     return { presets: data.strategies, load_errors: data.load_errors }
   },
-  screenerRunPreset: (strategy_id: string, pool?: string[], asOf?: string, extColumns?: string, assetType: 'stock' | 'etf' = 'stock', timeframe: '1d' | '1m' = '1d') =>
+  screenerRunPreset: (strategy_id: string, pool?: string[], asOf?: string, extColumns?: string, assetType: 'stock' | 'etf' = 'stock', timeframe: '1d' | '1w' | '30m' | '1m' = '1d') =>
     request<ScreenerResult>('/api/screener/run_preset', {
       method: 'POST',
       timeoutMs: COMPUTE_REQUEST_TIMEOUT_MS,
@@ -2626,9 +3363,9 @@ export const api = {
       timeoutMs: COMPUTE_REQUEST_TIMEOUT_MS,
       body: JSON.stringify({ conditions, order_by: orderBy, limit, pool, ext_columns: extColumns || null, asset_type: assetType }),
     }),
-  screenerRunAll: (asOf?: string, strategyIds?: string[], assetType: 'stock' | 'etf' = 'stock') =>
+  screenerRunAll: (asOf?: string, strategyIds?: string[], assetType: 'stock' | 'etf' = 'stock', timeframe: '1d' | '1w' | '30m' | '1m' = '1d', summaryOnly = true) =>
     request<ScreenerRunAllSummary>(
-      '/api/screener/run_all', { method: 'POST', timeoutMs: COMPUTE_REQUEST_TIMEOUT_MS, body: JSON.stringify({ as_of: asOf ?? null, strategy_ids: strategyIds ?? null, asset_type: assetType, timeframe: '1d', summary_only: true }) },
+      '/api/screener/run_all', { method: 'POST', timeoutMs: COMPUTE_REQUEST_TIMEOUT_MS, body: JSON.stringify({ as_of: asOf ?? null, strategy_ids: strategyIds ?? null, asset_type: assetType, timeframe, summary_only: summaryOnly }) },
     ),
   screenerCachedSummary: () =>
     request<ScreenerCachedSummary>('/api/screener/cached-summary'),
@@ -2730,6 +3467,37 @@ export const api = {
     request<{ factors: FactorLibraryItem[] }>(
       `/api/factors${assetType ? `?asset_type=${assetType}` : ''}`,
     ),
+
+  externalFactorList: () =>
+    request<{ items: ExternalFactorDefinition[] }>('/api/external-factors'),
+
+  externalFactorCreate: (body: {
+    id: string
+    label: string
+    category: ExternalFactorCategory
+    operation: 'direct' | 'difference'
+    source_type: 'index_daily' | 'ext_timeseries' | 'factor_pair'
+    source_symbol?: string
+    source_config_id?: string
+    source_field?: string
+    transform: 'value' | 'return'
+    window: number
+    left_factor_id?: string
+    right_factor_id?: string
+    description?: string
+    direction?: 'high' | 'low' | 'none'
+    unit?: string
+    asset_types?: ('stock' | 'etf')[]
+    pit?: boolean
+    status?: 'draft' | 'active' | 'watch' | 'retired'
+  }) =>
+    request<{ ok: boolean; factor: ExternalFactorDefinition }>(
+      '/api/external-factors',
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
+
+  externalFactorDelete: (id: string) =>
+    request<{ ok: boolean; id: string }>(`/api/external-factors/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   factorValidate: (formula: string) =>
     request<FactorValidateResponse>('/api/factors/validate', {
@@ -2960,6 +3728,53 @@ export const api = {
     ),
 
   dataStatus: () => request<DataStatus>('/api/data/status'),
+  exchangeRate: (params?: { startDate?: string; endDate?: string; limit?: number }) => {
+    const query = new URLSearchParams()
+    if (params?.startDate) query.set('start_date', params.startDate)
+    if (params?.endDate) query.set('end_date', params.endDate)
+    if (params?.limit != null) query.set('limit', String(params.limit))
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    return request<{ items: ExchangeRateRow[]; count: number }>(`/api/exchange-rate${suffix}`)
+  },
+  exchangeRateSync: (startDate?: string, endDate?: string) =>
+    request<ExchangeRateSyncResult>('/api/exchange-rate/sync', {
+      method: 'POST',
+      body: JSON.stringify({
+        ...(startDate ? { start_date: startDate } : {}),
+        ...(endDate ? { end_date: endDate } : {}),
+      }),
+    }),
+  commodityCatalog: () => request<CommodityCatalog>('/api/commodity/catalog'),
+  commodity: (params?: {
+    startDate?: string
+    endDate?: string
+    symbol?: string
+    category?: string
+    limit?: number
+  }) => {
+    const query = new URLSearchParams()
+    if (params?.startDate) query.set('start_date', params.startDate)
+    if (params?.endDate) query.set('end_date', params.endDate)
+    if (params?.symbol) query.set('symbol', params.symbol)
+    if (params?.category) query.set('category', params.category)
+    if (params?.limit != null) query.set('limit', String(params.limit))
+    const suffix = query.toString() ? '?' + query.toString() : ''
+    return request<{ items: CommodityRow[]; count: number }>('/api/commodity' + suffix)
+  },
+  commoditySync: (payload?: {
+    startDate?: string
+    endDate?: string
+    symbols?: string[]
+  }) =>
+    request<CommoditySyncResult>('/api/commodity/sync', {
+      method: 'POST',
+      timeoutMs: 300_000,
+      body: JSON.stringify({
+        ...(payload?.startDate ? { start_date: payload.startDate } : {}),
+        ...(payload?.endDate ? { end_date: payload.endDate } : {}),
+        ...(payload?.symbols?.length ? { symbols: payload.symbols } : {}),
+      }),
+    }),
   dataClear: () => request<{ deleted_files: number }>('/api/data/clear', { method: 'POST' }),
   refreshCache: () => request<{ ok: boolean }>('/api/data/refresh-cache', { method: 'POST' }),
   enrichedSchema: (table: string) => request<EnrichedField[]>(`/api/data/schema/${table}`),
@@ -3294,6 +4109,20 @@ export const api = {
   stockAnalysisReportDelete: (reportId: string) =>
     request<{ ok: boolean }>(`/api/stock-analysis/reports/${encodeURIComponent(reportId)}`, { method: 'DELETE' }),
 
+  /** 艾略特波浪 AI 增强评估；本地 swing_proxy 由详情页先行计算。 */
+  elliottAnalyze: (body: ElliottAssessmentRequest) =>
+    request<ElliottAssessmentResponse>('/api/stock-analysis/elliott/analyze', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  /** 艾略特波浪 AI v2 只读解释；计数、排名、规则和价格边界以 local_analysis 为准。 */
+  elliottExplain: (body: ElliottAssessmentRequest) =>
+    request<ElliottExplanationResponse>('/api/stock-analysis/elliott/explain', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
   /**
    * AI 个股四维分析 — 流式调用(NDJSON,与财务分析同协议)。
    * meta 里额外带 levels(关键价位)供图表回放。
@@ -3338,6 +4167,59 @@ export const api = {
     }
     if (buf.trim()) {
       try { yield JSON.parse(buf.trim()) } catch { /* ignore */ }
+    }
+  },
+
+  /** Hermes 专用详情页多轮对话流；请求不设置浏览器超时，由 AbortSignal 控制。 */
+  async *stockChatStream(
+    symbol: string,
+    snapshot: StockChatSnapshotV1,
+    messages: StockChatMessage[],
+    signal?: AbortSignal,
+  ): AsyncGenerator<StockChatStreamEvent> {
+    let res: Response
+    try {
+      res = await fetch('/api/stock-analysis/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol, snapshot, messages }),
+        signal,
+      })
+    } catch (error) {
+      if (signal?.aborted) throw error
+      throw new Error(error instanceof Error ? error.message : 'AI 对话请求失败')
+    }
+    if (!res.ok) {
+      let detail = ''
+      try {
+        const j = JSON.parse(await res.text())
+        const raw = j.detail ?? j.message ?? ''
+        detail = Array.isArray(raw)
+          ? raw.map((item: any) => item?.msg || String(item)).join('; ')
+          : typeof raw === 'string' ? raw : JSON.stringify(raw)
+      } catch { /* ignore */ }
+      throw new ApiError(detail || `${res.status} ${res.statusText}`, res.status)
+    }
+    if (!res.body) throw new Error('响应无 body')
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buf = ''
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      const lines = buf.split('\n')
+      buf = lines.pop() ?? ''
+      for (const line of lines) {
+        const s = line.trim()
+        if (!s) continue
+        try { yield JSON.parse(s) as StockChatStreamEvent } catch { /* ignore malformed keepalive */ }
+      }
+    }
+    buf += decoder.decode()
+    if (buf.trim()) {
+      try { yield JSON.parse(buf.trim()) as StockChatStreamEvent } catch { /* ignore */ }
     }
   },
 
@@ -3459,7 +4341,7 @@ export const api = {
   },
 
   // ===== Strategy Engine =====
-  strategyList: (assetType?: 'stock' | 'etf', timeframe: '1d' | '1m' | 'all' = '1d', includeResearch = false) => {
+  strategyList: (assetType?: 'stock' | 'etf', timeframe: '1d' | '1w' | '30m' | '1m' | 'all' = '1d', includeResearch = false) => {
     const params = new URLSearchParams()
     if (assetType) params.set('asset_type', assetType)
     if (timeframe && timeframe !== 'all') params.set('timeframe', timeframe)
@@ -3472,6 +4354,47 @@ export const api = {
 
   strategyGet: (id: string) =>
     request<StrategyDetail>(`/api/strategies/${id}`),
+
+  strategySignals: (
+    strategyId: string,
+    symbol: string,
+    assetType: 'stock' | 'etf',
+    timeframe: '1d' | '1w' | '30m',
+    range: { start: string; end: string },
+    days = 20,
+  ) => {
+    const params = new URLSearchParams({
+      symbol,
+      asset_type: assetType,
+      timeframe,
+      start_date: range.start,
+      end_date: range.end,
+      days: String(days),
+    })
+    return request<StrategySignalResponse>(
+      `/api/strategy-chart/signals/${encodeURIComponent(strategyId)}?${params.toString()}`,
+    )
+  },
+
+  signalChartMarkers: (
+    signalIds: string[],
+    symbol: string,
+    assetType: 'stock' | 'etf',
+    timeframe: KlinePeriod,
+    range: { start: string; end: string },
+    days = 20,
+  ) => {
+    const params = new URLSearchParams({
+      symbol,
+      asset_type: assetType,
+      timeframe,
+      start_date: range.start,
+      end_date: range.end,
+      signal_ids: signalIds.join(','),
+      days: String(days),
+    })
+    return request<SignalChartResponse>(`/api/strategy-chart/signal-markers?${params.toString()}`)
+  },
 
   /** 发布 research_only 的 AI 草稿策略(翻转为公开) */
   strategyPublish: (strategyId: string) =>
@@ -3681,7 +4604,14 @@ export const api = {
     }
   },
 
-  strategyValidateCode: (payload: { code: string; strategy_id?: string; name?: string; description?: string }) =>
+  strategyValidateCode: (payload: {
+    code: string
+    strategy_id?: string
+    name?: string
+    description?: string
+    asset_types?: ('stock' | 'etf')[]
+    timeframes?: StrategyTimeframe[]
+  }) =>
     request<StrategyBuildResult>('/api/strategies/code/validate', {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -3694,6 +4624,8 @@ export const api = {
     mode: 'create' | 'update'
     name?: string
     description?: string
+    asset_types?: ('stock' | 'etf')[]
+    timeframes?: StrategyTimeframe[]
   }) =>
     request<StrategyCodeSaveResult>('/api/strategies/code/save', {
       method: 'POST',
@@ -3729,6 +4661,8 @@ export const api = {
     direction?: string
     rules?: string
     execution_backend?: 'polars_expr' | 'matrix_native'
+    asset_types?: ('stock' | 'etf')[]
+    timeframes?: StrategyTimeframe[]
     max_rounds?: number
   }) =>
     request<AiIterateResult>('/api/strategies/ai/iterate', {
@@ -3756,6 +4690,12 @@ export interface PipelineJob {
     enriched_days: number
     index_count?: number
     index_daily_rows?: number
+    asset_type?: 'etf'
+    etf_daily_rows?: number
+    etf_daily_days?: number
+    etf_enriched_days?: number
+    earliest_before?: string
+    earliest_after?: string
     minute_rows: number
     skipped_stages?: string[]
   } | null
@@ -3771,6 +4711,86 @@ interface TableStats {
   latest_date: string | null
   symbols_covered: number
   trading_days: number
+}
+
+export interface ExchangeRateRow {
+  symbol: string
+  date: string
+  base: string
+  quote: string
+  rate: number
+  source: string
+  frequency: string
+  retrieved_at: string
+}
+
+export interface ExchangeRateSyncResult {
+  provider: string
+  symbol: string
+  symbols: string[]
+  rows_fetched: number
+  rows_written: number
+  start_date: string | null
+  end_date: string | null
+  latest_rate: number | null
+  latest_rates: Record<string, number>
+}
+
+export interface CommodityDefinition {
+  symbol: string
+  name: string
+  category: 'precious_metal' | 'energy' | 'energy_fundamental'
+  kind: 'price' | 'inventory' | 'production' | 'utilization'
+  unit: string
+  frequency: string
+  source: 'goldapi' | 'fred' | 'eia'
+  source_series_id: string
+}
+
+export interface CommoditySourceStatus {
+  name: string
+  display_name: string
+  configured: boolean
+  available: boolean
+  status: string
+  api_key_env: string
+}
+
+export interface CommodityCatalog {
+  items: CommodityDefinition[]
+  sources: Record<string, CommoditySourceStatus>
+}
+
+export interface CommodityRow extends CommodityDefinition {
+  date: string
+  value: number
+  retrieved_at: string
+}
+
+export interface CommoditySyncProviderResult {
+  provider: string
+  ok: boolean
+  rows_fetched: number
+  rows_written: number
+  symbols: string[]
+  error: string | null
+}
+
+export interface CommoditySyncResult {
+  ok: boolean
+  start_date: string
+  end_date: string
+  providers: CommoditySyncProviderResult[]
+  rows_fetched: number
+  rows_written: number
+  symbols: string[]
+}
+
+interface ExchangeRateStats extends TableStats {
+  latest_rate: number | null
+  source: string | null
+  latest_rates: Record<string, number>
+  sources: Record<string, string>
 }
 
 interface InstrumentsStats {
@@ -3793,6 +4813,12 @@ export interface DataStatus {
   adj_factor: TableStats | null
   instruments: InstrumentsStats | null
   financials: { rows: number; tables: Record<string, { rows: number; symbols: number }> } | null
+  exchange_rate: ExchangeRateStats | null
+  commodity: (TableStats & {
+    latest_values: Record<string, number>
+    units: Record<string, string>
+    sources: Record<string, string>
+  }) | null
   storage: {
     daily_files: number
     daily_size_mb: number
@@ -3822,10 +4848,16 @@ export interface DataStatus {
     financials_size_mb?: number
     ext_data_files?: number
     ext_data_size_mb?: number
+    exchange_rate_files?: number
+    exchange_rate_size_mb?: number
+    commodity_files?: number
+    commodity_size_mb?: number
     total_size_mb: number
   }
   next_pipeline_run: string | null
   next_instruments_run: string | null
+  next_exchange_rate_run: string | null
+  next_commodity_run: string | null
   last_pipeline_run: string | null
   last_instruments_run: string | null
   checked_at: string

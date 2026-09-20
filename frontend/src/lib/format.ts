@@ -1,8 +1,18 @@
 // 数字 / 价格 / 涨跌幅 格式化(§6.0.2 等宽数字)
 
+export type AssetType = 'stock' | 'etf' | 'index'
+
+export function priceDigits(assetType?: string): number {
+  return assetType === 'etf' ? 3 : 2
+}
+
 export function fmtPrice(v: number | null | undefined, digits = 2): string {
   if (v == null || Number.isNaN(v)) return '—'
   return v.toFixed(digits)
+}
+
+export function fmtAssetPrice(v: number | null | undefined, assetType?: string): string {
+  return fmtPrice(v, priceDigits(assetType))
 }
 
 export function fmtPct(v: number | null | undefined, digits = 2): string {

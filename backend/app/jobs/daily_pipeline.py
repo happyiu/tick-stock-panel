@@ -610,7 +610,13 @@ def run_now(
                     d.name[5:] for d in etf_dir.glob("date=*")
                     if d.is_dir() and d.name.startswith("date=")
                 ) if etf_dir.exists() else []
-                etf_start = _date.fromisoformat(etf_dates[-1]) if etf_dates else today - _td(days=365)
+                desired_etf_start = today - _td(days=730)
+                if etf_dates:
+                    earliest_etf = _date.fromisoformat(etf_dates[0])
+                    latest_etf = _date.fromisoformat(etf_dates[-1])
+                    etf_start = desired_etf_start if earliest_etf > desired_etf_start else latest_etf
+                else:
+                    etf_start = desired_etf_start
                 # 同指数: 完整性修复时把 ETF 起点提前到最早坏日
                 if etf_stale_day is not None and etf_start > etf_stale_day:
                     etf_start = etf_stale_day
@@ -986,7 +992,7 @@ async def _run_scheduled_review(repo) -> None:
                 qs.push_review_event(_json.dumps(
                     {"type": "error", "message": "复盘生成异常,请稍后手动重试"},
                     ensure_ascii=False))
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
 
@@ -1145,6 +1151,50 @@ def _register_review_job(scheduler, repo, hour: int, minute: int) -> None:
     )
 
 
+EXCHANGE_RATE_JOB_ID = "exchange_rate_daily"
+COMMODITY_JOB_ID = "commodity_daily"
+
+
+def _register_exchange_rate_job(scheduler, repo, interval_hours: int) -> None:
+    """Register the current exchange-rate snapshot job at a fixed interval."""
+    def _exchange_rate_latest():
+        from app.services.exchange_rate_sync import sync_exchange_rates
+
+        try:
+            sync_exchange_rates(repo)
+        except Exception:
+            logger.exception("scheduled exchange rate sync failed")
+
+    scheduler.add_job(
+        _exchange_rate_latest,
+        trigger=IntervalTrigger(hours=max(1, int(interval_hours)), timezone="Asia/Shanghai"),
+        id=EXCHANGE_RATE_JOB_ID,
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
+
+
+def _register_commodity_job(scheduler, repo) -> None:
+    """Register the daily multi-source commodity history refresh."""
+    def _commodity_latest():
+        from app.services.commodity_sync import sync_commodities
+
+        try:
+            result = sync_commodities(repo)
+            if not result.get("ok"):
+                logger.warning("scheduled commodity sync had no successful provider")
+        except Exception:
+            logger.exception("scheduled commodity sync failed")
+
+    scheduler.add_job(
+        _commodity_latest,
+        trigger=IntervalTrigger(days=1, timezone="Asia/Shanghai"),
+        id=COMMODITY_JOB_ID,
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
+
+
 def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOScheduler:
     """启动调度器。
 
@@ -1227,6 +1277,12 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
         replace_existing=True,
     )
 
+    # 外部汇率不并入证券日K管道。当前参考快照按偏好定时拉取;
+    # 历史回补走 /api/exchange-rate/sync 的 Frankfurter/CFETS 路径。
+    exchange_rate_interval = preferences.get_exchange_rate_interval_hours()
+    _register_exchange_rate_job(scheduler, repo, exchange_rate_interval)
+    _register_commodity_job(scheduler, repo)
+
     # 周期性能力重探: 付费 Key 中途过期/续费无需重启即可被发现。
     # 只热更新 app.state.capabilities(API 端点、盘后管道 _pipeline_then_refresh 均读它);
     # 档位变化记 WARNING, 让「Key 失效」在日志/前端可见, 不再静默按旧档位打 403 端点。
@@ -1268,9 +1324,9 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
                     review_sched["hour"], review_sched["minute"])
 
     scheduler.start()
-    logger.info("scheduler started; instruments@%02d:%02d, pipeline@%02d:%02d, depth@%02d:%02d mon-fri",
+    logger.info("scheduler started; instruments@%02d:%02d, pipeline@%02d:%02d, depth@%02d:%02d, exchange_rate@every %dh, commodity@daily",
                 inst_sched["hour"], inst_sched["minute"], sched["hour"], sched["minute"],
-                depth_sched["hour"], depth_sched["minute"])
+                depth_sched["hour"], depth_sched["minute"], exchange_rate_interval)
     return scheduler
 
 

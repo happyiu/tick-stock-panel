@@ -6,6 +6,7 @@ import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 
 interface Props {
   pool: string[]
+  assetType: 'stock' | 'etf'
   onConfirm: (newPool: string[]) => void
   onClose: () => void
 }
@@ -29,6 +30,13 @@ const SOURCE_LABEL: Record<string, string> = {
 
 const TF_BADGE_CLS = 'text-[8px] px-1 py-px rounded border leading-tight shrink-0 border-sky-500/30 bg-sky-500/10 text-sky-400'
 
+function timeframeBadge(timeframes?: string[]): string | undefined {
+  if (timeframes?.includes('1m')) return '分钟'
+  if (timeframes?.includes('30m')) return '30F'
+  if (timeframes?.includes('1w')) return '周线'
+  return undefined
+}
+
 type SourceTab = 'all' | 'builtin' | 'custom' | 'ai'
 
 const TABS: { id: SourceTab; label: string }[] = [
@@ -47,8 +55,9 @@ function fileStem(name: string): string {
   return name.replace(/\.py$/i, '').replace(/[^A-Za-z0-9_-]/g, '_').replace(/^_+|_+$/g, '')
 }
 
-export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
+export function StrategyPoolDialog({ pool, assetType, onConfirm, onClose }: Props) {
   const backdrop = useDialogBackdrop(onClose)
+  const assetTypeLabel = assetType === 'etf' ? 'ETF' : '股票'
   // 草稿状态: 打开时从 pool 复制, 操作只改草稿, 点确定才提交
   const [draftPool, setDraftPool] = useState<string[]>(() => [...pool])
   const [allStrategies, setAllStrategies] = useState<StrategyDetail[]>([])
@@ -63,7 +72,7 @@ export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
   const loadStrategies = useCallback(async () => {
     setLoading(true)
     try {
-      // 不按周期过滤: 日线+分钟策略合并展示, 分钟策略以徽章区分
+      // 不按周期过滤: 各周期策略合并展示, 非日线策略以徽章区分
       // include_research=true 同时拉取 research_only 草稿, 供 AI 标签「草稿」分区展示/发布
       const d = await api.strategyList(undefined, 'all', true)
       setAllStrategies(d.strategies)
@@ -84,21 +93,39 @@ export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
     return m
   }, [allStrategies])
 
-  const validDraft = useMemo(
-    () => draftPool.filter(id => stratMap.has(id)),
-    [draftPool, stratMap]
+  // 策略池本身是股票/ETF共用的, 弹窗只展示当前外层资产类型;
+  // 未展示的另一资产类型仍保留在 draftPool, 确定时不会被覆盖清除。
+  const assetStrategies = useMemo(
+    () => allStrategies.filter(s => s.asset_types.includes(assetType)),
+    [allStrategies, assetType],
   )
-  const invalidPoolCount = draftPool.length - validDraft.length
+  const assetStrategyIds = useMemo(
+    () => new Set(assetStrategies.map(s => s.id)),
+    [assetStrategies],
+  )
+  const visibleDraftPool = useMemo(
+    () => draftPool.filter(id => assetStrategyIds.has(id)),
+    [draftPool, assetStrategyIds],
+  )
+  const validDraft = useMemo(
+    () => visibleDraftPool.filter(id => stratMap.has(id)),
+    [visibleDraftPool, stratMap]
+  )
+  const invalidPoolCount = draftPool.filter(id => !stratMap.has(id)).length
+  const hiddenAssetPoolCount = draftPool.filter(
+    id => stratMap.has(id) && !assetStrategyIds.has(id),
+  ).length
+  const selectableStrategyCount = assetStrategies.filter(s => !s.research_only).length
 
   const available = useMemo(
-    () => allStrategies.filter(s => !s.research_only && !draftPool.includes(s.id)),
-    [allStrategies, draftPool]
+    () => assetStrategies.filter(s => !s.research_only && !draftPool.includes(s.id)),
+    [assetStrategies, draftPool]
   )
 
   // research_only 草稿(AI 来源)单独列出, 供「发布」操作; 不进待选列表
   const drafts = useMemo(
-    () => allStrategies.filter(s => s.research_only),
-    [allStrategies]
+    () => assetStrategies.filter(s => s.research_only),
+    [assetStrategies]
   )
 
   // 按 Tab 分组过滤待选; 叠加策略(composite)并入「自定义」分组
@@ -119,13 +146,18 @@ export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
   }, [])
 
   const handleReorder = useCallback((newOrder: string[]) => {
-    setDraftPool(newOrder)
-  }, [])
+    setDraftPool(prev => {
+      const visibleIds = new Set(visibleDraftPool)
+      let nextVisibleIndex = 0
+      return prev.map(id => visibleIds.has(id) ? newOrder[nextVisibleIndex++] : id)
+    })
+  }, [visibleDraftPool])
 
   // 一键清空已选池 (草稿态, 误点可用「取消」恢复)
   const handleClearAll = useCallback(() => {
-    setDraftPool([])
-  }, [])
+    const visibleIds = new Set(visibleDraftPool)
+    setDraftPool(prev => prev.filter(id => !visibleIds.has(id)))
+  }, [visibleDraftPool])
 
   // 一键加入当前 Tab 分组的全部待选策略
   const handleAddGroup = useCallback(() => {
@@ -202,7 +234,8 @@ export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
           {/* 标题 */}
           <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">
             <span className="text-sm font-medium text-foreground">
-              策略池 <span className="text-muted font-normal text-xs">{validDraft.length} / {allStrategies.length}</span>
+              策略池 · {assetTypeLabel} <span className="text-muted font-normal text-xs">{validDraft.length} / {selectableStrategyCount}</span>
+              {hiddenAssetPoolCount > 0 && <span className="ml-2 text-[10px] text-muted">{hiddenAssetPoolCount} 个其他资产策略已隐藏</span>}
               {invalidPoolCount > 0 && <span className="ml-2 text-[10px] text-danger">{invalidPoolCount} 个失效</span>}
             </span>
             <div className="flex items-center gap-2">
@@ -332,8 +365,8 @@ export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
                         <span className={`text-[8px] px-1 py-px rounded border leading-tight shrink-0 ${SOURCE_CLS[s.source] ?? SOURCE_CLS.builtin}`}>
                           {SOURCE_LABEL[s.source] ?? '内置'}
                         </span>
-                        {s.timeframes?.includes('1m') && (
-                          <span className={TF_BADGE_CLS}>分钟</span>
+                        {timeframeBadge(s.timeframes) && (
+                          <span className={TF_BADGE_CLS}>{timeframeBadge(s.timeframes)}</span>
                         )}
                         <Plus className="h-3.5 w-3.5 text-muted/40 group-hover:text-accent shrink-0" />
                       </button>
@@ -346,11 +379,11 @@ export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
               <div className="flex flex-col min-h-0">
                 <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border/60 shrink-0">
                   <GripVertical className="h-3 w-3 text-muted/50" />
-                  <span className="text-[10px] text-muted">已选 · 上下拖拽排序</span>
+                  <span className="text-[10px] text-muted">已选 {assetTypeLabel} · 上下拖拽排序</span>
                   <button
                     onClick={handleClearAll}
-                    disabled={draftPool.length === 0}
-                    title="清空已选策略池 (未点确定前可用「取消」恢复)"
+                    disabled={visibleDraftPool.length === 0}
+                    title={`清空当前${assetTypeLabel}已选策略 (未点确定前可用「取消」恢复)`}
                     className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded-btn text-[10px] text-muted border border-border/60 hover:text-danger hover:border-danger/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer shrink-0"
                   >
                     <Trash2 className="h-3 w-3" />
@@ -358,18 +391,18 @@ export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
                   </button>
                 </div>
                 <div className="flex-1 overflow-y-auto px-2 py-2">
-                  {draftPool.length === 0 ? (
+                  {visibleDraftPool.length === 0 ? (
                     <div className="flex items-center justify-center h-full text-[11px] text-muted">
-                      从左侧点击策略添加
+                      从左侧点击{assetTypeLabel}策略添加
                     </div>
                   ) : (
                     <Reorder.Group
                       axis="y"
-                      values={draftPool}
+                      values={visibleDraftPool}
                       onReorder={handleReorder}
                       className="space-y-1"
                     >
-                      {draftPool.map(id => {
+                      {visibleDraftPool.map(id => {
                         const s = stratMap.get(id)
                         const src = s?.source ?? 'invalid'
                         return (
@@ -389,8 +422,8 @@ export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
                             <span className={`text-[8px] px-1 py-px rounded border leading-tight shrink-0 ${SOURCE_CLS[src] ?? SOURCE_CLS.builtin}`}>
                               {SOURCE_LABEL[src] ?? '内置'}
                             </span>
-                            {s?.timeframes?.includes('1m') && (
-                              <span className={TF_BADGE_CLS}>分钟</span>
+                            {timeframeBadge(s?.timeframes) && (
+                              <span className={TF_BADGE_CLS}>{timeframeBadge(s?.timeframes)}</span>
                             )}
                             <button
                               onClick={(e) => { e.stopPropagation(); handleRemove(id) }}

@@ -7,7 +7,7 @@ import type { ChartPriceLine, ChartRange } from '@/components/EChartsCandlestick
 import type { StrategyBacktestTrade } from '@/lib/api'
 import { useListNav } from '@/lib/useListNav'
 import { tradeNavKey, type TradeNavItem } from '../tradeNav'
-import { fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
+import { fmtAssetPrice, fmtPct, priceColorClass } from '@/lib/format'
 import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 
 /** 单笔回放来自哪个入口: 决定切交易时同步翻哪张表的页 */
@@ -21,6 +21,7 @@ interface Props {
   currentKey?: string | null
   /** 切交易回调: 收到目标项, 由调用方更新选中并同步分页 */
   onNavigate?: (item: TradeNavItem) => void
+  assetType?: 'stock' | 'etf'
   onClose: () => void
 }
 
@@ -45,7 +46,7 @@ function fmtSignedMoney(v: number | null | undefined): string {
   return `${prefix}${fmtMoney(v)}`
 }
 
-export function TradeKlineModal({ trade, navItems, currentKey, onNavigate, onClose }: Props) {
+export function TradeKlineModal({ trade, navItems, currentKey, onNavigate, assetType, onClose }: Props) {
   const [showIntraday, setShowIntraday] = useState(false)
   const backdrop = useDialogBackdrop(onClose)
 
@@ -104,20 +105,20 @@ export function TradeKlineModal({ trade, navItems, currentKey, onNavigate, onClo
     return [
       {
         value: Number(trade.entry_price),
-        label: `买入价 ${fmtPrice(trade.entry_price)}`,
+        label: `买入价 ${fmtAssetPrice(trade.entry_price, trade.asset_type ?? assetType)}`,
         color: '#C74040',
         start,
         end,
       },
       {
         value: Number(trade.exit_price),
-        label: `卖出价 ${fmtPrice(trade.exit_price)}`,
+        label: `卖出价 ${fmtAssetPrice(trade.exit_price, trade.asset_type ?? assetType)}`,
         color: '#2D9B65',
         start,
         end,
       },
     ]
-  }, [trade])
+  }, [assetType, trade])
 
   return (
     <AnimatePresence>
@@ -155,7 +156,7 @@ export function TradeKlineModal({ trade, navItems, currentKey, onNavigate, onClo
               <div className="flex shrink-0 items-center gap-3 text-xs">
                 <div className="text-right">
                   <div className="text-muted">买 / 卖</div>
-                  <div className="num text-foreground">{fmtPrice(trade.entry_price)} / {fmtPrice(trade.exit_price)}</div>
+                  <div className="num text-foreground">{fmtAssetPrice(trade.entry_price, trade.asset_type ?? assetType)} / {fmtAssetPrice(trade.exit_price, trade.asset_type ?? assetType)}</div>
                 </div>
                 <div className="text-right">
                   <div className="text-muted">盈亏</div>

@@ -3,6 +3,7 @@ import { chartTheme, getTheme, useTheme } from '@/lib/theme'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
 import type { KlineRow, LevelSeries } from '@/lib/api'
+import { fmtAssetPrice } from '@/lib/format'
 
 /**
  * 个股分析专用日 K 图表。
@@ -107,6 +108,7 @@ interface Props {
   onDateClick?: (date: string) => void
   height?: number
   className?: string
+  assetType?: string
 }
 
 const VOL_PANE_H = 90
@@ -122,6 +124,7 @@ export function AnalysisKChart({
   onDateClick,
   height = 460,
   className,
+  assetType,
 }: Props) {
   const chartRef = useRef<HTMLDivElement>(null)
   const chartInstRef = useRef<ECharts | null>(null)
@@ -245,7 +248,7 @@ export function AnalysisKChart({
     // hoveredKey 非空时:命中线加粗高亮,其它线淡化(opacity 0.15),形成聚焦效果。
     const dimming = hoveredKey != null
     for (const p of priceLines) {
-      const k = levelKey(p.type, p.value)
+      const k = levelKey(p.type, p.value, assetType)
       const hit = hoveredKey === k
       const opacity = dimming ? (hit ? 1 : 0.12) : 0.7
       const width = hit ? 2 : 1
@@ -260,7 +263,7 @@ export function AnalysisKChart({
         itemStyle: { color: p.color },
         endLabel: {
           show: true,
-          formatter: () => `${p.label} ${p.value.toFixed(2)}`,
+          formatter: () => `${p.label} ${fmtAssetPrice(p.value, assetType)}`,
           color: p.color, fontSize: hit ? 10 : 9, fontFamily: 'JetBrains Mono, monospace',
           fontWeight: hit ? 'bold' : 'normal',
           backgroundColor: hit ? CT().tooltipBg : CT().infoBarBg,
@@ -297,7 +300,7 @@ export function AnalysisKChart({
         // 右侧端点标签:显示该通道的最新数值,距绘图区右缘留 6px 间距
         endLabel: lastVal != null ? {
           show: true,
-          formatter: () => `${lastVal!.toFixed(2)}`,
+          formatter: () => `${fmtAssetPrice(lastVal, assetType)}`,
           color: def.color, fontSize: hit ? 10 : 9, fontFamily: 'JetBrains Mono, monospace',
           fontWeight: hit ? 'bold' : 'normal',
           backgroundColor: hit ? CT().tooltipBg : CT().infoBarBg,
@@ -314,7 +317,7 @@ export function AnalysisKChart({
     // series[0]=K线, series[1]=成交量, 之后是按 priceLines + CURVE_DEFS 顺序 push 的
     let si = 2
     for (const p of priceLines) {
-      keyMap.set(si++, levelKey(p.type, p.value))
+      keyMap.set(si++, levelKey(p.type, p.value, assetType))
     }
     for (const def of CURVE_DEFS) {
       if (!activeTypes.has(def.group)) continue
@@ -391,7 +394,7 @@ export function AnalysisKChart({
     }
     chartInstRef.current.setOption(buildOption(), true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, levels, series, seriesDates, activeTypes, pivotRank, markers, ranges, height, theme, hoveredKey])
+  }, [rows, levels, series, seriesDates, activeTypes, pivotRank, markers, ranges, height, theme, hoveredKey, assetType])
 
   // resize
   useEffect(() => {
@@ -476,6 +479,7 @@ export function AnalysisKChart({
           activeTypes={activeTypes}
           pivotRank={pivotRank}
           close={rows.length ? rows[rows.length - 1].close : undefined}
+          assetType={assetType}
           hoveredKey={hoveredKey}
           onHover={setHoveredKey}
         />
@@ -486,12 +490,13 @@ export function AnalysisKChart({
 
 // ===== 价位统计面板(图表下方,结构化文本展示) =====
 function LevelOverview({
-  levels, activeTypes, pivotRank, close, hoveredKey, onHover,
+  levels, activeTypes, pivotRank, close, assetType, hoveredKey, onHover,
 }: {
   levels: Record<LevelType, PriceLevel[]>
   activeTypes: Set<LevelType>
   pivotRank: 1 | 2 | 3
   close?: number
+  assetType?: string
   hoveredKey: string | null
   onHover: (k: string | null) => void
 }) {
@@ -525,7 +530,7 @@ function LevelOverview({
 
   const Row = ({ p }: { p: PriceLevel }) => {
     const color = LEVEL_GROUPS.find(g => g.key === p.type)?.color ?? CT().text
-    const k = levelKey(p.type, p.value)
+    const k = levelKey(p.type, p.value, assetType)
     const hit = hoveredKey === k
     const dim = hoveredKey != null && !hit
     return (
@@ -539,7 +544,7 @@ function LevelOverview({
       >
         <span className="h-1.5 w-1.5 rounded-full shrink-0 transition-transform" style={{ backgroundColor: color, transform: hit ? 'scale(1.5)' : 'scale(1)' }} />
         <span className={`text-[11px] w-24 shrink-0 truncate ${hit ? 'text-foreground font-medium' : 'text-secondary'}`}>{p.label}</span>
-        <span className={`text-[11px] font-mono ${hit ? 'text-foreground font-bold' : 'text-foreground'}`}>{p.value.toFixed(2)}</span>
+        <span className={`text-[11px] font-mono ${hit ? 'text-foreground font-bold' : 'text-foreground'}`}>{fmtAssetPrice(p.value, assetType)}</span>
         <span className="text-[9px] font-mono text-muted">{fmtPct(p.value)}</span>
       </div>
     )
@@ -550,7 +555,7 @@ function LevelOverview({
       {/* 当前价 */}
       <div className="sm:col-span-2 flex items-center gap-2 pb-1 border-b border-border/30 mb-0.5">
         <span className="text-[10px] text-muted">当前价</span>
-        <span className="text-xs font-mono font-medium text-foreground">{cur.toFixed(2)}</span>
+        <span className="text-xs font-mono font-medium text-foreground">{fmtAssetPrice(cur, assetType)}</span>
       </div>
       {/* 压力位(从近到远,即从低到高)倒序展示:最高的在最上 */}
       {resistances.length > 0 && (
@@ -610,8 +615,8 @@ function strengthColor(strength: string | undefined, base: string): string {
 }
 
 /** 价位唯一标识: 同类型同价格视为同一点位(用于联动高亮)。 */
-function levelKey(type: string, value: number): string {
-  return `${type}-${value.toFixed(2)}`
+function levelKey(type: string, value: number, assetType?: string): string {
+  return `${type}-${fmtAssetPrice(value, assetType)}`
 }
 
 function fmtVol(v: number): string {
