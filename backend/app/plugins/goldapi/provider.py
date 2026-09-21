@@ -1,4 +1,4 @@
-"""Gold API daily precious-metal history provider."""
+"""Gold API commodity history and current-price provider."""
 from __future__ import annotations
 
 import logging
@@ -14,6 +14,7 @@ from app.data_providers.commodity import definitions_for, get_json, parse_date, 
 API_KEY_ENV = "GOLD_API_KEY"
 SECRETS_FIELD = "goldapi_api_key"
 HISTORY_URL = "https://api.gold-api.com/history"
+PRICE_URL = "https://api.gold-api.com/price"
 SOURCE = "goldapi"
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,18 @@ def _fetch(
         raise ValueError(f"Gold API: {payload.get('message') or payload.get('error') or 'API 返回错误'}")
     if not isinstance(payload, list):
         raise ValueError("Gold API 返回格式不是数组")
+    return payload
+
+
+def _fetch_current(client: httpx.Client, symbol: str) -> Any:
+    payload = get_json(
+        client,
+        f"{PRICE_URL}/{symbol}",
+        params={},
+        source="Gold API",
+    )
+    if not isinstance(payload, dict):
+        raise ValueError("Gold API 当前价格返回格式不是对象")
     return payload
 
 
@@ -143,3 +156,31 @@ class GoldApiProvider:
         if not rows and errors:
             raise ValueError("Gold API: " + "; ".join(errors))
         return sorted(rows, key=lambda row: (row["date"], row["symbol"]))
+
+    def get_current_prices(
+        self,
+        *,
+        symbols: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        definitions = [item for item in definitions_for(symbols) if item.source == SOURCE]
+        retrieved_at = utc_now()
+        rows: list[dict[str, Any]] = []
+        errors: list[str] = []
+        for definition in definitions:
+            try:
+                payload = _fetch_current(self._client, definition.source_series_id)
+                value = parse_value(payload.get("price"), field=f"{definition.symbol} price")
+                if value is None:
+                    raise ValueError(f"{definition.symbol} 当前价格为空")
+                rows.append({
+                    **definition.__dict__,
+                    "value": value,
+                    "updated_at": str(payload.get("updatedAt") or retrieved_at),
+                    "retrieved_at": retrieved_at,
+                })
+            except (httpx.HTTPError, OSError, ValueError) as exc:
+                errors.append(f"{definition.symbol}: {exc}")
+                logger.warning("Gold API current %s failed: %s", definition.symbol, exc)
+        if not rows and errors:
+            raise ValueError("Gold API: " + "; ".join(errors))
+        return sorted(rows, key=lambda row: row["symbol"])

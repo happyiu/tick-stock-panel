@@ -32,6 +32,15 @@ COMMODITY_DEFINITIONS: tuple[CommodityDefinition, ...] = (
         "XAG/USD", "白银", "precious_metal", "price", "USD/oz", "1d", "goldapi", "XAG",
     ),
     CommodityDefinition(
+        "HG", "铜", "precious_metal", "price", "USD/lb", "1d", "goldapi", "HG",
+    ),
+    CommodityDefinition(
+        "BTC", "比特币", "crypto", "price", "USD", "1d", "goldapi", "BTC",
+    ),
+    CommodityDefinition(
+        "ETH", "以太坊", "crypto", "price", "USD", "1d", "goldapi", "ETH",
+    ),
+    CommodityDefinition(
         "WTI", "WTI 原油", "energy", "price", "USD/bbl", "1d", "fred", "DCOILWTICO",
     ),
     CommodityDefinition(

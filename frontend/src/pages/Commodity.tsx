@@ -9,12 +9,14 @@ import { QK } from '@/lib/queryKeys'
 import { useDataStatus } from '@/lib/useSharedQueries'
 
 const CATEGORY_META = {
-  precious_metal: { label: '贵金属', description: '国际现货贵金属', source: 'Gold API' },
+  precious_metal: { label: '贵金属', description: '黄金、白银与铜价格', source: 'Gold API' },
+  crypto: { label: '加密币', description: '加密资产价格', source: 'Gold API' },
   energy: { label: '能源', description: '原油与天然气价格', source: 'FRED / EIA' },
   energy_fundamental: { label: '能源基本面', description: '库存、产量与炼厂利用率', source: 'EIA' },
 } as const
 
-const CATEGORY_ORDER = ['precious_metal', 'energy', 'energy_fundamental'] as const
+const CATEGORY_ORDER = ['precious_metal', 'crypto', 'energy', 'energy_fundamental'] as const
+const CURRENT_QUOTES_REFRESH_MS = 3 * 60 * 60 * 1000
 
 function localDate(date = new Date()) {
   return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0')
@@ -135,9 +137,15 @@ export function Commodity() {
     queryFn: api.commodityCatalog,
     staleTime: 300_000,
   })
+  const currentQuotes = useQuery({
+    queryKey: [...QK.commodity, 'quotes'],
+    queryFn: api.commodityQuotes,
+    staleTime: CURRENT_QUOTES_REFRESH_MS,
+    refetchInterval: CURRENT_QUOTES_REFRESH_MS,
+  })
   const items = catalog.data?.items ?? []
   const categoryItems = useMemo(() => items.filter(item => item.category === selectedCategory), [items, selectedCategory])
-  const selectedItem = items.find(item => item.symbol === selectedSymbol) ?? categoryItems[0]
+  const selectedItem = categoryItems.find(item => item.symbol === selectedSymbol) ?? categoryItems[0]
   const rangeValid = startDate <= endDate
 
   useEffect(() => {
@@ -174,6 +182,10 @@ export function Commodity() {
   })
 
   const latestRows = useMemo(() => latestRowsBySymbol(categoryHistory.data?.items ?? []), [categoryHistory.data?.items])
+  const quoteBySymbol = useMemo(
+    () => new Map((currentQuotes.data?.items ?? []).map(item => [item.symbol, item])),
+    [currentQuotes.data?.items],
+  )
   const stats = status.data?.commodity
   const sources = catalog.data?.sources ?? {}
 
@@ -188,7 +200,6 @@ export function Commodity() {
                 <Package className="h-4 w-4 text-accent" />
                 <h2 className="text-sm font-semibold text-foreground">商品行情</h2>
               </div>
-              <p className="mt-1 text-xs text-muted">价格与能源基本面按各数据源原始频率保存，不跨源替代。</p>
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs">
               <span className="text-muted">已落盘 {stats?.rows?.toLocaleString() ?? 0} 行</span>
@@ -197,9 +208,9 @@ export function Commodity() {
                 type="button"
                 onClick={() => sync.mutate()}
                 disabled={!rangeValid || sync.isPending}
-                className="inline-flex items-center gap-1.5 rounded-btn bg-accent px-3 py-1.5 font-medium text-base transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex items-center gap-1 rounded-btn bg-accent px-2 py-1 text-[11px] font-medium text-base transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <RefreshCw className={sync.isPending ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
+                <RefreshCw className={sync.isPending ? 'h-3 w-3 animate-spin' : 'h-3 w-3'} />
                 {sync.isPending ? '同步中…' : '同步当前区间'}
               </button>
             </div>
@@ -218,47 +229,15 @@ export function Commodity() {
                 </button>
               )
             })}
-            <label className="space-y-1">
-              <span className="block text-[10px] text-muted">开始日期</span>
-              <input type="date" value={startDate} onChange={event => setStartDate(event.target.value)} className="rounded-btn border border-border bg-base px-2 py-1.5 font-mono text-xs text-foreground outline-none focus:border-accent" />
+            <label>
+              <input aria-label="开始日期" type="date" value={startDate} onChange={event => setStartDate(event.target.value)} className="rounded-btn border border-border bg-base px-2 py-1.5 font-mono text-xs text-foreground outline-none focus:border-accent" />
             </label>
             <span className="pb-2 text-muted">至</span>
-            <label className="space-y-1">
-              <span className="block text-[10px] text-muted">结束日期</span>
-              <input type="date" value={endDate} onChange={event => setEndDate(event.target.value)} className="rounded-btn border border-border bg-base px-2 py-1.5 font-mono text-xs text-foreground outline-none focus:border-accent" />
+            <label>
+              <input aria-label="结束日期" type="date" value={endDate} onChange={event => setEndDate(event.target.value)} className="rounded-btn border border-border bg-base px-2 py-1.5 font-mono text-xs text-foreground outline-none focus:border-accent" />
             </label>
             {!rangeValid && <span className="pb-2 text-danger">开始日期不能晚于结束日期</span>}
           </div>
-        </section>
-
-        <section className="grid gap-3 lg:grid-cols-3">
-          {CATEGORY_ORDER.map(category => {
-            const meta = CATEGORY_META[category]
-            const categorySourceNames = [...new Set(items.filter(item => item.category === category).map(item => sourceLabel(item.source)))]
-            const active = selectedCategory === category
-            return (
-              <button
-                key={category}
-                type="button"
-                onClick={() => setSelectedCategory(category)}
-                className={active ? 'rounded-card border border-accent/60 bg-accent/10 p-4 text-left' : 'rounded-card border border-border bg-surface p-4 text-left transition-colors hover:border-accent/40'}
-                aria-pressed={active}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-semibold text-foreground">{meta.label}</div>
-                    <div className="mt-1 text-[11px] text-muted">{meta.description}</div>
-                  </div>
-                  <span className="rounded bg-elevated px-2 py-1 text-[10px] text-secondary">{categorySourceNames.join(' / ') || meta.source}</span>
-                </div>
-                <div className="mt-3 flex flex-wrap gap-1.5">
-                  {items.filter(item => item.category === category).map(item => (
-                    <span key={item.symbol} className="rounded bg-elevated/70 px-2 py-1 font-mono text-[10px] text-secondary">{item.symbol}</span>
-                  ))}
-                </div>
-              </button>
-            )
-          })}
         </section>
 
         {catalog.isError && (
@@ -275,6 +254,30 @@ export function Commodity() {
             </div>
             <span className="text-[11px] text-muted">数据源状态见下方</span>
           </div>
+          <div className="mb-4 grid gap-2 lg:grid-cols-4">
+            {CATEGORY_ORDER.map(category => {
+              const meta = CATEGORY_META[category]
+              const categorySourceNames = [...new Set(items.filter(item => item.category === category).map(item => sourceLabel(item.source)))]
+              const active = selectedCategory === category
+              return (
+                <button
+                  key={category}
+                  type="button"
+                  onClick={() => setSelectedCategory(category)}
+                  className={active ? 'rounded-card border border-accent/60 bg-accent/10 p-3 text-left' : 'rounded-card border border-border bg-surface p-3 text-left transition-colors hover:border-accent/40'}
+                  aria-pressed={active}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-foreground">{meta.label}</div>
+                      <div className="mt-0.5 text-[11px] text-muted">{meta.description}</div>
+                    </div>
+                    <span className="rounded bg-elevated px-2 py-1 text-[10px] text-secondary">{categorySourceNames.join(' / ') || meta.source}</span>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
           {catalog.isLoading ? (
             <div className="rounded-card bg-elevated/30 px-4 py-8 text-center text-sm text-muted">商品目录加载中…</div>
           ) : catalog.isError ? (
@@ -285,6 +288,7 @@ export function Commodity() {
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
               {categoryItems.map(item => {
                 const row = latestRows.get(item.symbol)
+                const quote = quoteBySymbol.get(item.symbol)
                 return (
                   <button
                     key={item.symbol}
@@ -294,10 +298,10 @@ export function Commodity() {
                     aria-pressed={selectedItem?.symbol === item.symbol}
                   >
                     <div className="truncate text-[11px] text-muted">{item.name}</div>
-                    <div className="mt-1 font-mono text-lg font-semibold tabular-nums text-foreground">{formatValue(row?.value ?? stats?.latest_values?.[item.symbol], item.unit)}</div>
+                    <div className="mt-1 font-mono text-lg font-semibold tabular-nums text-foreground">{formatValue(quote?.value ?? row?.value ?? stats?.latest_values?.[item.symbol], item.unit)}</div>
                     <div className="mt-1 flex items-center justify-between gap-1 text-[10px] text-muted">
-                      <span>{item.unit} · {frequencyLabel(item.frequency)}</span>
-                      <span>{row?.date ?? stats?.latest_date ?? '—'}</span>
+                      <span>{item.unit} · {quote ? '当前价' : frequencyLabel(item.frequency)}</span>
+                      <span>{quote ? formatRetrievedAt(quote.updated_at) : row?.date ?? stats?.latest_date ?? '—'}</span>
                     </div>
                   </button>
                 )
@@ -310,19 +314,6 @@ export function Commodity() {
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
               <h2 className="text-sm font-semibold text-foreground">历史走势</h2>
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {categoryItems.map(item => (
-                  <button
-                    key={item.symbol}
-                    type="button"
-                    onClick={() => setSelectedSymbol(item.symbol)}
-                    className={selectedItem?.symbol === item.symbol ? 'rounded-btn bg-accent px-2.5 py-1 text-[11px] text-base' : 'rounded-btn bg-elevated px-2.5 py-1 text-[11px] text-secondary hover:text-foreground'}
-                    aria-pressed={selectedItem?.symbol === item.symbol}
-                  >
-                    {item.symbol}
-                  </button>
-                ))}
-              </div>
             </div>
             {selectedItem && <span className="text-[11px] text-muted">{selectedItem.unit} · {frequencyLabel(selectedItem.frequency)} · {sourceLabel(selectedItem.source)}</span>}
           </div>
@@ -390,7 +381,7 @@ export function Commodity() {
                   <Database className="h-3.5 w-3.5 shrink-0 text-secondary" />
                   <span className="truncate text-xs text-foreground">{source.display_name}</span>
                 </div>
-                <span className={source.available ? 'shrink-0 text-[10px] text-bull' : 'shrink-0 text-[10px] text-warning'}>
+                <span className={source.available ? 'shrink-0 text-[10px] text-emerald-500' : 'shrink-0 text-[10px] text-danger'}>
                   {source.available ? '已就绪' : source.configured ? '不可用' : '未配置'}
                 </span>
               </div>

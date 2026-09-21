@@ -14,6 +14,7 @@ from app.plugins.eia.provider import _rows as eia_rows
 from app.plugins.fred.provider import _rows as fred_rows
 from app.plugins.goldapi import provider as goldapi_provider
 from app.plugins.goldapi.provider import _fetch as gold_fetch
+from app.plugins.goldapi.provider import _fetch_current as gold_current_fetch
 from app.plugins.goldapi.provider import _rows as gold_rows
 from app.services.commodity_sync import _SYNC_LOCK, CommoditySyncBusyError, sync_commodities
 from app.tickflow.repository import DataStore, KlineRepository
@@ -122,6 +123,60 @@ def test_goldapi_fetch_uses_daily_history_average_and_header():
     assert request.url.params["groupBy"] == "day"
     assert request.url.params["aggregation"] == "avg"
     assert request.headers["x-api-key"] == "test-key"
+
+
+def test_goldapi_fetches_current_price():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, request=request, json={"price": 2501.5, "updatedAt": "2026-09-21T09:37:33Z"})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        payload = gold_current_fetch(client, "XAU")
+
+    assert payload["price"] == 2501.5
+    assert requests[0].url.path == "/price/XAU"
+
+
+def test_goldapi_provider_maps_copper_and_crypto_symbols(monkeypatch):
+    monkeypatch.setattr(goldapi_provider, "get_api_key", lambda: "test-key")
+    requested: list[str] = []
+
+    def fetch(_client, _api_key, symbol, *, start, end):
+        requested.append(symbol)
+        return [{"day": "2026-09-17", "avg_price": "1.25"}]
+
+    monkeypatch.setattr(goldapi_provider, "_fetch", fetch)
+    provider = goldapi_provider.GoldApiProvider()
+    try:
+        rows = provider.get_commodity_series(symbols=["HG", "BTC", "ETH"])
+    finally:
+        provider.close()
+
+    assert requested == ["HG", "BTC", "ETH"]
+    assert {row["symbol"] for row in rows} == {"HG", "BTC", "ETH"}
+    assert {row["category"] for row in rows if row["symbol"] == "HG"} == {"precious_metal"}
+    assert {row["category"] for row in rows if row["symbol"] in {"BTC", "ETH"}} == {"crypto"}
+
+
+def test_goldapi_provider_reads_current_prices(monkeypatch):
+    requested: list[str] = []
+
+    def fetch(_client, symbol):
+        requested.append(symbol)
+        return {"price": "2501.5", "updatedAt": "2026-09-21T09:37:33Z"}
+
+    monkeypatch.setattr(goldapi_provider, "_fetch_current", fetch)
+    provider = goldapi_provider.GoldApiProvider()
+    try:
+        rows = provider.get_current_prices(symbols=["HG", "BTC"])
+    finally:
+        provider.close()
+
+    assert requested == ["HG", "BTC"]
+    assert {row["symbol"] for row in rows} == {"HG", "BTC"}
+    assert rows[0]["updated_at"] == "2026-09-21T09:37:33Z"
 
 
 class _Source:
@@ -273,8 +328,10 @@ def test_commodity_api_category_filter_and_empty_view():
     )
     result = commodity_api.list_commodities(request, category="energy", limit=5)
     assert result == {"items": [], "count": 0}
-    assert "category = ?" in str(seen["sql"])
     assert "energy" in seen["params"]
+    assert commodity_api.list_commodities(request, category="crypto", limit=5) == {"items": [], "count": 0}
+    assert "category = ?" in str(seen["sql"])
+    assert "crypto" in seen["params"]
 
     failing_request = SimpleNamespace(
         app=SimpleNamespace(

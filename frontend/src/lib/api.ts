@@ -3745,6 +3745,7 @@ export const api = {
       }),
     }),
   commodityCatalog: () => request<CommodityCatalog>('/api/commodity/catalog'),
+  commodityQuotes: () => request<CommodityQuotesResult>('/api/commodity/quotes'),
   commodity: (params?: {
     startDate?: string
     endDate?: string
@@ -4739,7 +4740,7 @@ export interface ExchangeRateSyncResult {
 export interface CommodityDefinition {
   symbol: string
   name: string
-  category: 'precious_metal' | 'energy' | 'energy_fundamental'
+  category: 'precious_metal' | 'crypto' | 'energy' | 'energy_fundamental'
   kind: 'price' | 'inventory' | 'production' | 'utilization'
   unit: string
   frequency: string
@@ -4765,6 +4766,17 @@ export interface CommodityRow extends CommodityDefinition {
   date: string
   value: number
   retrieved_at: string
+}
+
+export interface CommodityQuote extends CommodityDefinition {
+  value: number
+  updated_at: string
+  retrieved_at: string
+}
+
+export interface CommodityQuotesResult {
+  source: 'goldapi'
+  items: CommodityQuote[]
 }
 
 export interface CommoditySyncProviderResult {

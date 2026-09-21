@@ -44,7 +44,7 @@ export const DATA_CARD_DEFS: CardDef[] = [
   { key: 'minute',      label: '分钟 K',   desc: '分钟级K线(依赖分钟K批量数据)',  defaultHiddenIfNoCap: true },
   { key: 'financials',  label: '财务数据', desc: '财报数据(依赖财务数据)',    defaultHiddenIfNoCap: true },
   { key: 'exchange_rate', label: '汇率', desc: '当前参考 + 历史日频货币对 / DXY', defaultHiddenIfNoCap: false },
-  { key: 'commodity', label: '商品', desc: '贵金属、能源与能源基本面', defaultHiddenIfNoCap: false },
+  { key: 'commodity', label: '商品', desc: '贵金属、加密币、能源与能源基本面', defaultHiddenIfNoCap: false },
   { key: 'regime',      label: '市场环境', desc: '每日环境状态(本地计算)', defaultHiddenIfNoCap: false },
 ]
 

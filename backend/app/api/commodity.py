@@ -59,6 +59,23 @@ def get_catalog() -> dict[str, Any]:
     }
 
 
+@router.get("/quotes")
+def get_current_quotes() -> dict[str, Any]:
+    from app.data_providers import custom as custom_sources
+
+    try:
+        provider = custom_sources.get_provider("goldapi")
+        fetch = getattr(provider, "get_current_prices", None)
+        if fetch is None:
+            raise ValueError("Gold API 未实现当前价格能力")
+        return {"source": "goldapi", "items": fetch()}
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("commodity current quotes failed")
+        raise HTTPException(status_code=502, detail=f"Gold API 当前价格请求失败: {exc}") from exc
+
+
 @router.get("")
 def list_commodities(
     request: Request,
@@ -75,7 +92,7 @@ def list_commodities(
             definitions_for([symbol])
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-    valid_categories = {"precious_metal", "energy", "energy_fundamental"}
+    valid_categories = {"precious_metal", "crypto", "energy", "energy_fundamental"}
     if category and category not in valid_categories:
         raise HTTPException(status_code=400, detail=f"不支持的商品分类: {category}")
 

@@ -5,6 +5,6 @@ entry: app.plugins.goldapi.provider:GoldApiProvider
 check: app.plugins.goldapi.provider:availability
 datasets: [commodity]
 api_key_env: GOLD_API_KEY
-description: "XAU/XAG 日频历史聚合数据；支持贵金属实时价格接口。"
+description: "黄金、白银、铜与加密币日频历史及当前价格数据。"
 install_hint: "输入 Gold API Key，或在 .env 中配置 GOLD_API_KEY"
 homepage: "https://gold-api.com/"
