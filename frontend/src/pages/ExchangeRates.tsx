@@ -444,19 +444,6 @@ export function ExchangeRates() {
             <div className="flex flex-wrap items-end justify-between gap-3">
               <div>
                 <h2 className="text-sm font-semibold text-foreground">历史走势</h2>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {RATE_ITEMS.map(item => (
-                    <button
-                      key={item.symbol}
-                      type="button"
-                      onClick={() => setSelectedSymbol(item.symbol)}
-                      className={`rounded-btn px-2.5 py-1 text-[11px] transition-colors ${selectedSymbol === item.symbol ? 'bg-accent text-base' : 'bg-elevated text-secondary hover:text-foreground'}`}
-                      aria-pressed={selectedSymbol === item.symbol}
-                    >
-                      {item.symbol}
-                    </button>
-                  ))}
-                </div>
               </div>
               <div className="flex flex-wrap items-end gap-2 text-xs">
                 <div className="flex flex-wrap items-center gap-1">

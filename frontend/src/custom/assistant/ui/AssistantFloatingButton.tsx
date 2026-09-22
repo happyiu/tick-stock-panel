@@ -126,7 +126,7 @@ export function AssistantFloatingButton() {
       aria-label="AI 助手"
       style={{ left: pos.x, top: pos.y, width: SIZE, height: SIZE }}
       className={cn(
-        'fixed z-[59] flex touch-none cursor-pointer items-center justify-center',
+        'fixed z-[49] flex touch-none cursor-pointer items-center justify-center',
         'rounded-full border border-white/15 bg-gradient-to-br from-accent to-accent/80',
         'text-white shadow-[0_8px_24px_rgba(59,130,246,0.45)] backdrop-blur-sm',
         'transition-shadow duration-150 ease-smooth',

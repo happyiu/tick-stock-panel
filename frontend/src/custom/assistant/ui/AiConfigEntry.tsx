@@ -93,7 +93,7 @@ export function AiConfigEntry() {
       aria-label="打开 AI 助手"
       style={{ left: spot.left, top: spot.top, width: BTN, height: BTN }}
       className={cn(
-        'fixed z-[55] flex cursor-pointer items-center justify-center rounded-md',
+        'fixed z-[49] flex cursor-pointer items-center justify-center rounded-md',
         'transition-colors duration-150 ease-smooth',
         open
           ? 'bg-purple-400/15 text-purple-400'

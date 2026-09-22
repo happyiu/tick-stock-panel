@@ -920,7 +920,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
             })()}
 
             {/* 图表内容 */}
-            <div className={cn('relative flex-1 min-h-0 p-4', view === 'daily' ? 'overflow-hidden' : 'overflow-auto')}>
+            <div className={cn('relative flex-1 min-h-0 px-4 pb-4 pt-2', view === 'daily' ? 'overflow-hidden' : 'overflow-auto')}>
               {view === 'daily' ? (
                 <div className={cn(
                   'flex h-full min-h-0 min-w-0 gap-3',
