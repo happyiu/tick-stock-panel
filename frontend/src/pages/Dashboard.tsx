@@ -4,7 +4,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Activity, ArrowDownRight, ArrowUpRight, BarChart3, BellRing, Database, Gauge, Info, LineChart, Loader2, Play, RefreshCw, Sparkles, Target, Timer } from 'lucide-react'
 import { DatePicker } from '@/components/DatePicker'
+import { loadPaperTradingTimelineSettings, PaperTradingTimeline } from '@/components/PaperTradingTimeline'
 import { api, type DataStatus, type OverviewMarket, type AlertEvent } from '@/lib/api'
+import { getBeijingPaperClock, getPaperTradingSystemTimelinePoints } from '@/lib/paper-trading-time'
 import { QK } from '@/lib/queryKeys'
 import { fmtAssetPrice, fmtBigNum, fmtPct } from '@/lib/format'
 import { useDataStatus, useCapabilities, useSettings, usePreferences } from '@/lib/useSharedQueries'
@@ -452,6 +454,8 @@ export function Dashboard() {
   const qc = useQueryClient()
   const [selectedDate, setSelectedDate] = useState<string | undefined>()
   const [manualFetching, setManualFetching] = useState(false)
+  const [paperNow, setPaperNow] = useState(() => new Date())
+  const [paperTimelineSettings] = useState(() => loadPaperTradingTimelineSettings())
   const [previewStock, setPreviewStock] = useState<{
     symbol: string
     name?: string
@@ -479,6 +483,12 @@ export function Dashboard() {
   // 空态引导文案按当前数据源分流: TickFlow 源提"免费服务器", 其他源提"当前数据源",
   // 弱化与默认 TickFlow 的隐式绑定 (None 档/免费 Key 等 TickFlow 概念仅在其被选中时出现)
   const prefs = usePreferences()
+  const paperClock = getBeijingPaperClock(paperNow)
+  const paperSystemTimelinePoints = getPaperTradingSystemTimelinePoints(prefs.data?.review_schedule)
+  useEffect(() => {
+    const timer = window.setInterval(() => setPaperNow(new Date()), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
   const dataSourceList = useQuery({
     queryKey: QK.dataSources,
     queryFn: api.dataSources,
@@ -702,6 +712,16 @@ export function Dashboard() {
         providerName={prefs.data?.exchange_rate_data_provider}
         intervalHours={prefs.data?.exchange_rate_interval_hours}
       />
+
+      <section className="mb-1.5 rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm">
+        <div className="flex items-center justify-between gap-2">
+          <SectionTitle icon={Activity} title="ETF 模拟交易时间轴" hint={`${paperClock.display} · ${paperClock.tradingDay ? '交易日' : '非交易日'}`} />
+          <Link to="/etf-simulation" className="-mt-2 inline-flex shrink-0 items-center gap-0.5 text-[10px] text-accent hover:text-accent/80">
+            模拟交易 <ArrowUpRight className="h-3 w-3" />
+          </Link>
+        </div>
+        <PaperTradingTimeline clock={paperClock} settings={paperTimelineSettings} systemPoints={paperSystemTimelinePoints} />
+      </section>
 
       <div className="grid grid-cols-1 gap-1.5 xl:grid-cols-[minmax(0,1fr)_20rem]">
         <main className="min-w-0 space-y-1.5">

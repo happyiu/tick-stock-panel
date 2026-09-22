@@ -1,26 +1,26 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as echarts from 'echarts'
 import { Archive, ChevronDown, ChevronUp, Pause, Play, Plus, RotateCcw, Save, Settings, StepForward, Trash2, X } from 'lucide-react'
 import { Modal } from '@/components/Modal'
 import { PageHeader } from '@/components/PageHeader'
 import { PaperTradingControls, PaperTradingSymbolField } from '@/components/PaperTradingControls'
+import {
+  clonePaperTradingTimelineSettings,
+  loadPaperTradingTimelineSettings,
+  PaperTradingTimeline,
+  type PaperTradingTimelineCustomPoint,
+  type PaperTradingTimelineSettings,
+} from '@/components/PaperTradingTimeline'
 import { StockPreviewDialog, toNavItems } from '@/components/StockPreviewDialog'
 import { api, type PaperPosition, type PaperSnapshot, type PositionEquityPoint } from '@/lib/api'
 import {
-  buildPaperTradingTimelineState,
-  createPaperTradingSessions,
   getBeijingPaperClock,
   getPaperTradingSystemTimelinePoints,
   PAPER_TRADING_STEP_OPTIONS,
-  PAPER_TRADING_STEP_MINUTES,
   parsePaperClockMinutes,
   type PaperTradingClock,
-  type PaperTradingSystemTimelinePoint,
   type PaperTradingStepMinutes,
-  type PaperTradingSession,
-  type PaperTradingTimelineState,
 } from '@/lib/paper-trading-time'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
@@ -45,57 +45,10 @@ type AccountFormState = {
   max_exposure_pct: number
   max_symbol_exposure_pct: number
 }
-type TimelineCustomPoint = {
-  id: number
-  time: string
-  description: string
-  timerMethod: string
-}
-type TimelineSettings = {
-  stepMinutes: PaperTradingStepMinutes
-  timerMethod: string
-  customPoints: TimelineCustomPoint[]
-}
 
-const DEFAULT_TIMELINE_SETTINGS: TimelineSettings = {
-  stepMinutes: PAPER_TRADING_STEP_MINUTES,
-  timerMethod: '',
-  customPoints: [],
-}
-const cloneTimelineSettings = (settings: TimelineSettings): TimelineSettings => ({
-  ...settings,
-  customPoints: settings.customPoints.map(point => ({ ...point })),
-})
-const isTimelineStepMinutes = (value: unknown): value is PaperTradingStepMinutes => PAPER_TRADING_STEP_OPTIONS.some(step => step === value)
-const loadTimelineSettings = (): TimelineSettings => {
-  const saved = storage.paperTimelineSettings.get(null)
-  if (!saved || typeof saved !== 'object') return cloneTimelineSettings(DEFAULT_TIMELINE_SETTINGS)
-  const raw = saved as Partial<TimelineSettings>
-  const customPoints = Array.isArray(raw.customPoints) ? raw.customPoints.flatMap(point => {
-    if (!point || typeof point !== 'object') return []
-    const value = point as Partial<TimelineCustomPoint>
-    return typeof value.id === 'number' && Number.isInteger(value.id) && typeof value.time === 'string' && typeof value.description === 'string' && typeof value.timerMethod === 'string'
-      ? [{ id: value.id, time: value.time, description: value.description, timerMethod: value.timerMethod }]
-      : []
-  }) : []
-  return {
-    stepMinutes: isTimelineStepMinutes(raw.stepMinutes) ? raw.stepMinutes : PAPER_TRADING_STEP_MINUTES,
-    timerMethod: typeof raw.timerMethod === 'string' ? raw.timerMethod : '',
-    customPoints,
-  }
-}
-const parseTimelinePointMinutes = (value: string) => {
-  const match = value.match(/^(\d{2}):(\d{2})$/)
-  if (!match) return null
-  const hours = Number(match[1])
-  const minutes = Number(match[2])
-  return hours <= 23 && minutes <= 59 ? hours * 60 + minutes : null
-}
 const input = 'h-9 w-full rounded-btn border border-border bg-base px-2.5 text-sm outline-none focus:border-accent'
 const button = 'inline-flex h-9 items-center justify-center gap-1.5 rounded-btn border border-border bg-surface px-3 text-sm font-medium transition-colors hover:border-accent/50 disabled:cursor-not-allowed disabled:opacity-40'
 const primary = `${button} border-accent bg-accent text-white hover:bg-accent/90`
-const TIMELINE_PRE_POST_WIDTH = 144
-const TIMELINE_LUNCH_WIDTH = 96
 
 const money = (v?: number | null, digits = 2) => v == null || !Number.isFinite(v) ? '—' : v.toLocaleString('zh-CN', { minimumFractionDigits: digits, maximumFractionDigits: digits })
 const price = (v?: number | null) => v == null || !Number.isFinite(v) ? '—' : v.toLocaleString('zh-CN', { minimumFractionDigits: 3, maximumFractionDigits: 3 })
@@ -110,215 +63,6 @@ function Panel({ title, children }: { title: React.ReactNode; children: React.Re
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return <label className="block space-y-1"><span className="text-xs text-secondary">{label}</span>{children}</label>
-}
-
-type ParsedTimelineCustomPoint = TimelineCustomPoint & { minutes: number }
-
-const parseTimelineCustomPoints = (points: TimelineCustomPoint[]): ParsedTimelineCustomPoint[] => points.flatMap(point => {
-  const minutes = parseTimelinePointMinutes(point.time)
-  return minutes == null ? [] : [{ ...point, minutes }]
-})
-
-type TimelineTooltipAlign = 'left' | 'center' | 'right'
-
-function TimelineMarkerPopover({ content, align = 'center', className, children }: { content: string; align?: TimelineTooltipAlign; className?: string; children: React.ReactNode }) {
-  const [open, setOpen] = useState(false)
-  const [position, setPosition] = useState<{ top: number; left: number; flipUp: boolean } | null>(null)
-  const anchorRef = useRef<HTMLButtonElement>(null)
-  const popoverRef = useRef<HTMLDivElement>(null)
-  const popoverId = `timeline-popover-${useId().replace(/:/g, '')}`
-  const arrowPosition = align === 'left' ? 'left-3' : align === 'right' ? 'right-3' : 'left-1/2 -translate-x-1/2'
-
-  const togglePopover = () => {
-    if (open) {
-      setOpen(false)
-      return
-    }
-    const rect = anchorRef.current?.getBoundingClientRect()
-    if (!rect) return
-    const estimatedWidth = 288
-    const anchorX = align === 'left' ? rect.left : align === 'right' ? rect.right - estimatedWidth : rect.left + (rect.width - estimatedWidth) / 2
-    setPosition({
-      top: rect.bottom + 8,
-      left: Math.max(8, Math.min(anchorX, Math.max(8, window.innerWidth - estimatedWidth - 8))),
-      flipUp: false,
-    })
-    setOpen(true)
-  }
-
-  useLayoutEffect(() => {
-    if (!open || !anchorRef.current || !popoverRef.current) return
-    const updatePosition = () => {
-      const anchor = anchorRef.current
-      const popover = popoverRef.current
-      if (!anchor || !popover) return
-      const anchorRect = anchor.getBoundingClientRect()
-      const popoverRect = popover.getBoundingClientRect()
-      const width = Math.min(popoverRect.width, Math.max(0, window.innerWidth - 16))
-      const anchorX = align === 'left' ? anchorRect.left : align === 'right' ? anchorRect.right - width : anchorRect.left + (anchorRect.width - width) / 2
-      const left = Math.max(8, Math.min(anchorX, Math.max(8, window.innerWidth - width - 8)))
-      const belowTop = anchorRect.bottom + 8
-      const flipUp = belowTop + popoverRect.height > window.innerHeight - 8 && anchorRect.top - popoverRect.height - 8 >= 8
-      const top = flipUp ? anchorRect.top - popoverRect.height - 8 : belowTop
-      setPosition(previous => previous && previous.top === top && previous.left === left && previous.flipUp === flipUp ? previous : { top, left, flipUp })
-    }
-    updatePosition()
-    window.addEventListener('resize', updatePosition)
-    window.addEventListener('scroll', updatePosition, true)
-    return () => {
-      window.removeEventListener('resize', updatePosition)
-      window.removeEventListener('scroll', updatePosition, true)
-    }
-  }, [align, content, open])
-
-  useEffect(() => {
-    if (!open) return
-    const closeOnOutsideClick = (event: MouseEvent) => {
-      const target = event.target as Node
-      if (anchorRef.current?.contains(target) || popoverRef.current?.contains(target)) return
-      setOpen(false)
-    }
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false)
-    }
-    document.addEventListener('mousedown', closeOnOutsideClick)
-    document.addEventListener('keydown', closeOnEscape)
-    return () => {
-      document.removeEventListener('mousedown', closeOnOutsideClick)
-      document.removeEventListener('keydown', closeOnEscape)
-    }
-  }, [open])
-
-  return <>
-    <button
-      ref={anchorRef}
-      type="button"
-      className={`relative cursor-pointer border-0 bg-transparent p-0 text-inherit transition-colors hover:brightness-125 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${className ?? ''}`}
-      aria-expanded={open}
-      aria-describedby={open ? popoverId : undefined}
-      onClick={event => { event.stopPropagation(); togglePopover() }}
-    >
-      {children}
-    </button>
-    {open && position && createPortal(
-      <div
-        ref={popoverRef}
-        id={popoverId}
-        role="tooltip"
-        data-timeline-popover
-        style={{ position: 'fixed', top: position.top, left: position.left, maxWidth: 'calc(100vw - 16px)' }}
-        className="z-[70] w-max max-w-[18rem] rounded-lg border border-border/80 bg-elevated px-3 py-2 text-left text-[10px] font-normal leading-4 text-foreground shadow-xl ring-1 ring-black/10"
-        onMouseDown={event => event.stopPropagation()}
-      >
-        <span aria-hidden="true" className={`absolute ${arrowPosition} ${position.flipUp ? '-bottom-1 border-r border-b' : '-top-1 border-l border-t'} h-2 w-2 rotate-45 border-border/80 bg-elevated`} />
-        {content}
-      </div>,
-      document.body,
-    )}
-  </>
-}
-
-function TimelineCustomMarker({ point, left, reached, tooltipAlign = 'center' }: { point: ParsedTimelineCustomPoint; left: string; reached: boolean; tooltipAlign?: TimelineTooltipAlign }) {
-  const description = point.description.trim()
-  const timerMethod = point.timerMethod.trim()
-  const tooltip = [description && `工作：${description}`, timerMethod && `定时器：${timerMethod}`].filter(Boolean).join(' · ')
-  return <div
-    className="absolute top-0 z-20 -translate-x-1/2 text-purple-400"
-    style={{ left }}
-    aria-label={`自定义时间点 ${point.time}${tooltip ? `，${tooltip}` : ''}`}
-  >
-    {tooltip ? <TimelineMarkerPopover content={tooltip} align={tooltipAlign} className="block h-4 whitespace-nowrap text-center text-[10px] font-medium leading-4 tabular-nums">{point.time}</TimelineMarkerPopover> : <span className="block h-4 whitespace-nowrap text-center text-[10px] font-medium leading-4 tabular-nums">{point.time}</span>}
-    <span className={`mx-auto mt-1 block h-2.5 w-2.5 rounded-full border transition-colors ${reached ? 'border-purple-300 bg-purple-500 ring-4 ring-purple-400/20' : 'border-purple-400 bg-base'}`} />
-  </div>
-}
-
-function TimelineSystemMarker({ point, left, tooltipAlign = 'center' }: { point: PaperTradingSystemTimelinePoint; left: string; tooltipAlign?: TimelineTooltipAlign }) {
-  return <div
-    className="absolute top-5 z-20 -translate-x-1/2 text-yellow-400"
-    style={{ left }}
-    aria-label={`系统时间点 ${point.time} ${point.description}`}
-  >
-    <span className="mx-auto block h-2.5 w-2.5 rounded-full border border-yellow-300 bg-yellow-400" />
-    <TimelineMarkerPopover content={`工作：${point.description}`} align={tooltipAlign} className="mt-2 block whitespace-nowrap text-center text-[10px] font-medium leading-4 tabular-nums">{point.time}</TimelineMarkerPopover>
-  </div>
-}
-
-function timelineSessionMarkerLeft(minutes: number, session: PaperTradingSession) {
-  const start = session.points[0]?.minutes ?? minutes
-  const end = session.points[session.points.length - 1]?.minutes ?? start
-  const ratio = end === start ? 0 : Math.max(0, Math.min(1, (minutes - start) / (end - start)))
-  return `${ratio * 100}%`
-}
-
-function TimelineCustomSegment({ label, width, customPoints, systemPoints, clock }: { label: string; width: number; customPoints: ParsedTimelineCustomPoint[]; systemPoints: readonly PaperTradingSystemTimelinePoint[]; clock: PaperTradingClock | null }) {
-  return <div className="relative h-[4.5rem] shrink-0 pt-5" style={{ width, minWidth: width }}>
-    <div className="relative flex flex-col items-center">
-      <span className="z-10 h-2.5 w-2.5 rounded-full border border-border bg-base" />
-      <span className="absolute left-1/2 top-14 -translate-x-1/2 whitespace-nowrap text-[10px] text-muted">{label}</span>
-    </div>
-    {systemPoints.map((point, index) => <TimelineSystemMarker
-      key={`${point.time}-${point.description}`}
-      point={point}
-      left={`${((index + 0.5) / systemPoints.length) * 100}%`}
-      tooltipAlign={label === '盘前' && index === 0 ? 'left' : label === '盘后' && index === systemPoints.length - 1 ? 'right' : 'center'}
-    />)}
-    {customPoints.map((point, index) => <TimelineCustomMarker
-      key={point.id}
-      point={point}
-      left={`${((index + 0.5) / customPoints.length) * 100}%`}
-      reached={Boolean(clock?.tradingDay) && (clock?.minutes ?? -1) >= point.minutes}
-      tooltipAlign={label === '盘前' && index === 0 ? 'left' : label === '盘后' && index === customPoints.length - 1 ? 'right' : 'center'}
-    />)}
-  </div>
-}
-
-function TimelineSegment({ session, offset, state, customPoints, clock }: { session: PaperTradingSession; offset: number; state: PaperTradingTimelineState; customPoints: ParsedTimelineCustomPoint[]; clock: PaperTradingClock | null }) {
-  const start = session.points[0]?.minutes ?? 0
-  const end = session.points[session.points.length - 1]?.minutes ?? start
-  const markers = customPoints.filter(point => point.minutes >= start && point.minutes <= end)
-  return <div className="flex-1" style={{ minWidth: Math.max(340, session.points.length * 32) }}>
-    <div className="relative h-[4.5rem]">
-      <div className="relative h-full">
-        {session.points.map((point, index) => {
-          const globalIndex = offset + index
-          const active = state.activeIndex === globalIndex
-          const complete = globalIndex <= state.completedIndex
-          return <div
-            key={point.label}
-            className="absolute top-5 flex -translate-x-1/2 flex-col items-center"
-            style={{ left: `${(index / Math.max(session.points.length - 1, 1)) * 100}%` }}
-          >
-            <span className={`z-10 h-2.5 w-2.5 rounded-full border transition-colors ${active ? 'border-blue-300 bg-blue-500 ring-4 ring-blue-400/20' : complete ? 'border-blue-400 bg-blue-500' : 'border-blue-400 bg-base'}`} />
-            <span className={`mt-2 whitespace-nowrap text-center text-[10px] tabular-nums text-blue-400 ${active ? 'font-semibold' : ''}`}>{point.label}</span>
-          </div>
-        })}
-      </div>
-      {markers.map(point => <TimelineCustomMarker
-        key={point.id}
-        point={point}
-        left={timelineSessionMarkerLeft(point.minutes, session)}
-        reached={Boolean(clock?.tradingDay) && (clock?.minutes ?? -1) >= point.minutes}
-        tooltipAlign={point.minutes === start ? 'left' : point.minutes === end ? 'right' : 'center'}
-      />)}
-    </div>
-  </div>
-}
-
-function TradingSessionTimeline({ clock, settings, systemPoints }: { clock: PaperTradingClock | null; settings: TimelineSettings; systemPoints: readonly PaperTradingSystemTimelinePoint[] }) {
-  const sessions = createPaperTradingSessions(settings.stepMinutes)
-  const state = buildPaperTradingTimelineState(clock?.minutes ?? null, clock?.tradingDay ?? false, settings.stepMinutes)
-  const afternoonOffset = sessions[0].points.length
-  const customPoints = parseTimelineCustomPoints(settings.customPoints).sort((left, right) => left.minutes - right.minutes || left.id - right.id)
-  const morningStart = 9 * 60 + 30
-  const morningEnd = 11 * 60 + 30
-  const afternoonStart = 13 * 60
-  const afternoonEnd = 15 * 60
-  const preopenPoints = customPoints.filter(point => point.minutes < morningStart)
-  const lunchPoints = customPoints.filter(point => point.minutes > morningEnd && point.minutes < afternoonStart)
-  const postclosePoints = customPoints.filter(point => point.minutes > afternoonEnd)
-  const preopenSystemPoints = systemPoints.filter(point => point.minutes < morningStart)
-  const postcloseSystemPoints = systemPoints.filter(point => point.minutes >= afternoonEnd)
-  return <div className="basis-full border-t border-border/70 pt-3"><div className="overflow-x-auto pb-1"><div className="relative flex min-w-[736px] items-start gap-0"><div className="pointer-events-none absolute inset-x-0 top-[25px] h-px bg-border" /><TimelineCustomSegment label="盘前" width={TIMELINE_PRE_POST_WIDTH} customPoints={preopenPoints} systemPoints={preopenSystemPoints} clock={clock} /><TimelineSegment session={sessions[0]} offset={0} state={state} customPoints={customPoints} clock={clock} /><TimelineCustomSegment label="午休" width={TIMELINE_LUNCH_WIDTH} customPoints={lunchPoints} systemPoints={[]} clock={clock} /><TimelineSegment session={sessions[1]} offset={afternoonOffset} state={state} customPoints={customPoints} clock={clock} /><TimelineCustomSegment label="盘后" width={TIMELINE_PRE_POST_WIDTH} customPoints={postclosePoints} systemPoints={postcloseSystemPoints} clock={clock} /></div></div></div>
 }
 
 function EquityChart({ rows, emptyMessage = '成交后将按分钟形成权益曲线' }: { rows: EquityChartPoint[]; emptyMessage?: string }) {
@@ -672,8 +416,8 @@ export function ETFSimulation() {
   const [symbol, setSymbol] = useState('')
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false)
   const [timelineSettingsOpen, setTimelineSettingsOpen] = useState(false)
-  const [timelineSettings, setTimelineSettings] = useState<TimelineSettings>(() => loadTimelineSettings())
-  const [timelineSettingsDraft, setTimelineSettingsDraft] = useState<TimelineSettings>(() => loadTimelineSettings())
+  const [timelineSettings, setTimelineSettings] = useState<PaperTradingTimelineSettings>(() => loadPaperTradingTimelineSettings())
+  const [timelineSettingsDraft, setTimelineSettingsDraft] = useState<PaperTradingTimelineSettings>(() => loadPaperTradingTimelineSettings())
   const nextTimelinePointId = useRef(Math.max(0, ...timelineSettings.customPoints.map(point => point.id)) + 1)
   const [manualPositionOpen, setManualPositionOpen] = useState(false)
   const [editingPosition, setEditingPosition] = useState<PaperPosition | null>(null)
@@ -713,13 +457,13 @@ export function ETFSimulation() {
     setEditingPosition(null)
   }
   const openTimelineSettings = () => {
-    setTimelineSettingsDraft(cloneTimelineSettings(timelineSettings))
+    setTimelineSettingsDraft(clonePaperTradingTimelineSettings(timelineSettings))
     setTimelineSettingsOpen(true)
   }
-  const updateTimelineDraft = (patch: Partial<TimelineSettings>) => {
+  const updateTimelineDraft = (patch: Partial<PaperTradingTimelineSettings>) => {
     setTimelineSettingsDraft(current => ({ ...current, ...patch }))
   }
-  const updateTimelinePoint = (id: number, patch: Partial<Omit<TimelineCustomPoint, 'id'>>) => {
+  const updateTimelinePoint = (id: number, patch: Partial<Omit<PaperTradingTimelineCustomPoint, 'id'>>) => {
     setTimelineSettingsDraft(current => ({
       ...current,
       customPoints: current.customPoints.map(point => point.id === id ? { ...point, ...patch } : point),
@@ -736,7 +480,7 @@ export function ETFSimulation() {
     setTimelineSettingsDraft(current => ({ ...current, customPoints: current.customPoints.filter(point => point.id !== id) }))
   }
   const saveTimelineSettings = () => {
-    const next = cloneTimelineSettings(timelineSettingsDraft)
+    const next = clonePaperTradingTimelineSettings(timelineSettingsDraft)
     setTimelineSettings(next)
     storage.paperTimelineSettings.set(next)
     setTimelineSettingsOpen(false)
@@ -811,7 +555,7 @@ export function ETFSimulation() {
           >
             <Settings className="h-3.5 w-3.5" aria-hidden="true" />
           </button>
-          <TradingSessionTimeline clock={paperClock} settings={timelineSettings} systemPoints={systemTimelinePoints} />
+          <PaperTradingTimeline clock={paperClock} settings={timelineSettings} systemPoints={systemTimelinePoints} />
         </div>
         <div className="grid items-start gap-3 xl:grid-cols-[280px_minmax(0,1fr)]">
           <div className="space-y-3 xl:sticky xl:top-3">
