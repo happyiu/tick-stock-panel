@@ -76,6 +76,14 @@ html.dark {
   background: hsl(var(--accent) / 0.75);
   background-clip: content-box;
 }
+.timeline-scrollbar-hidden {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  overflow-y: clip;
+}
+.timeline-scrollbar-hidden::-webkit-scrollbar {
+  display: none;
+}
 .tabular { font-variant-numeric: tabular-nums; }
 .num { font-family: theme('fontFamily.mono'); font-variant-numeric: tabular-nums; }
 

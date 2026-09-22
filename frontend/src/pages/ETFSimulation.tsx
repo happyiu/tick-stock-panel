@@ -1,15 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as echarts from 'echarts'
-import { Archive, ChevronDown, ChevronUp, Pause, Play, Plus, RotateCcw, Save, Settings, StepForward, Trash2, X } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { Archive, ChevronDown, ChevronUp, Pause, Play, RotateCcw, Settings, StepForward, X } from 'lucide-react'
 import { Modal } from '@/components/Modal'
 import { PageHeader } from '@/components/PageHeader'
 import { PaperTradingControls, PaperTradingSymbolField } from '@/components/PaperTradingControls'
 import {
-  clonePaperTradingTimelineSettings,
   loadPaperTradingTimelineSettings,
   PaperTradingTimeline,
-  type PaperTradingTimelineCustomPoint,
   type PaperTradingTimelineSettings,
 } from '@/components/PaperTradingTimeline'
 import { StockPreviewDialog, toNavItems } from '@/components/StockPreviewDialog'
@@ -17,13 +16,10 @@ import { api, type PaperPosition, type PaperSnapshot, type PositionEquityPoint }
 import {
   getBeijingPaperClock,
   getPaperTradingSystemTimelinePoints,
-  PAPER_TRADING_STEP_OPTIONS,
   parsePaperClockMinutes,
   type PaperTradingClock,
-  type PaperTradingStepMinutes,
 } from '@/lib/paper-trading-time'
 import { QK } from '@/lib/queryKeys'
-import { storage } from '@/lib/storage'
 import { useChartTheme } from '@/lib/theme'
 import { usePreferences } from '@/lib/useSharedQueries'
 
@@ -415,10 +411,7 @@ export function ETFSimulation() {
   const [replayId, setReplayId] = useState('')
   const [symbol, setSymbol] = useState('')
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false)
-  const [timelineSettingsOpen, setTimelineSettingsOpen] = useState(false)
-  const [timelineSettings, setTimelineSettings] = useState<PaperTradingTimelineSettings>(() => loadPaperTradingTimelineSettings())
-  const [timelineSettingsDraft, setTimelineSettingsDraft] = useState<PaperTradingTimelineSettings>(() => loadPaperTradingTimelineSettings())
-  const nextTimelinePointId = useRef(Math.max(0, ...timelineSettings.customPoints.map(point => point.id)) + 1)
+  const [timelineSettings] = useState<PaperTradingTimelineSettings>(() => loadPaperTradingTimelineSettings())
   const [manualPositionOpen, setManualPositionOpen] = useState(false)
   const [editingPosition, setEditingPosition] = useState<PaperPosition | null>(null)
   const [previewPosition, setPreviewPosition] = useState<{ symbol: string; name: string } | null>(null)
@@ -455,35 +448,6 @@ export function ETFSimulation() {
   const closeManualPosition = () => {
     setManualPositionOpen(false)
     setEditingPosition(null)
-  }
-  const openTimelineSettings = () => {
-    setTimelineSettingsDraft(clonePaperTradingTimelineSettings(timelineSettings))
-    setTimelineSettingsOpen(true)
-  }
-  const updateTimelineDraft = (patch: Partial<PaperTradingTimelineSettings>) => {
-    setTimelineSettingsDraft(current => ({ ...current, ...patch }))
-  }
-  const updateTimelinePoint = (id: number, patch: Partial<Omit<PaperTradingTimelineCustomPoint, 'id'>>) => {
-    setTimelineSettingsDraft(current => ({
-      ...current,
-      customPoints: current.customPoints.map(point => point.id === id ? { ...point, ...patch } : point),
-    }))
-  }
-  const addTimelinePoint = () => {
-    const id = nextTimelinePointId.current++
-    setTimelineSettingsDraft(current => ({
-      ...current,
-      customPoints: [...current.customPoints, { id, time: '09:30', description: '', timerMethod: '' }],
-    }))
-  }
-  const removeTimelinePoint = (id: number) => {
-    setTimelineSettingsDraft(current => ({ ...current, customPoints: current.customPoints.filter(point => point.id !== id) }))
-  }
-  const saveTimelineSettings = () => {
-    const next = clonePaperTradingTimelineSettings(timelineSettingsDraft)
-    setTimelineSettings(next)
-    storage.paperTimelineSettings.set(next)
-    setTimelineSettingsOpen(false)
   }
   const openPositionPreview = (position: PaperPosition) => {
     setSymbol(position.symbol)
@@ -546,15 +510,14 @@ export function ETFSimulation() {
           <span className="font-medium">北京时间 / {mode === 'live' ? '实时钟' : '回放时钟'}：{paperClock?.display ?? '—'}</span>
           <span className="text-secondary">状态：{setupRequired ? '待设置' : data ? statusName(data.account.runtime_status) : '加载中'}</span>
           <span className="text-muted">{setupRequired ? '请先命名并保存模拟账户' : data?.account.runtime_message || (mode === 'live' ? '实时按已完成 1 分钟 K 撮合' : `回放按 ${timelineSettings.stepMinutes} 分钟步长推进`)}</span>
-          <button
-            type="button"
-            onClick={openTimelineSettings}
+          <Link
+            to="/settings?tab=schedules"
             aria-label="打开时间轴设置"
             title="时间轴设置"
             className="ml-auto inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-btn text-muted transition-colors hover:bg-elevated/70 hover:text-foreground"
           >
             <Settings className="h-3.5 w-3.5" aria-hidden="true" />
-          </button>
+          </Link>
           <PaperTradingTimeline clock={paperClock} settings={timelineSettings} systemPoints={systemTimelinePoints} />
         </div>
         <div className="grid items-start gap-3 xl:grid-cols-[280px_minmax(0,1fr)]">
@@ -755,122 +718,6 @@ export function ETFSimulation() {
           </div>
           <div className="p-4">
             <ManualPositionForm key={editingPosition?.symbol ?? 'new'} data={data} position={editingPosition} done={finishManualPosition} />
-          </div>
-        </Modal>
-      )}
-      {timelineSettingsOpen && (
-        <Modal
-          onClose={() => setTimelineSettingsOpen(false)}
-          labelledBy="paper-timeline-settings-title"
-          panelClassName="w-[96vw] max-h-[90vh] max-w-4xl rounded-xl border border-border bg-surface shadow-xl"
-        >
-          <div className="flex items-center justify-between border-b border-border px-4 py-3">
-            <h2 id="paper-timeline-settings-title" className="flex items-center gap-2 text-sm font-semibold">
-              <Settings className="h-4 w-4 text-accent" aria-hidden="true" />
-              时间轴设置
-            </h2>
-            <button
-              type="button"
-              onClick={() => setTimelineSettingsOpen(false)}
-              className="rounded-btn p-1 text-muted transition-colors hover:bg-elevated hover:text-foreground"
-              aria-label="关闭时间轴设置"
-              title="关闭"
-            >
-              <X className="h-4 w-4" aria-hidden="true" />
-            </button>
-          </div>
-          <div className="max-h-[calc(90vh-7rem)] overflow-y-auto p-4">
-            <div className="grid gap-4 lg:grid-cols-[minmax(260px,0.8fr)_minmax(0,1.5fr)]">
-              <section className="rounded-lg border border-border/70 bg-base/30 p-3">
-                <h3 className="text-sm font-semibold">定时任务</h3>
-                <div className="mt-3 space-y-3">
-                  <label className="block space-y-1">
-                    <span className="text-xs text-secondary">时间轴步长</span>
-                    <select
-                      className={input}
-                      value={timelineSettingsDraft.stepMinutes}
-                      onChange={event => updateTimelineDraft({ stepMinutes: Number(event.target.value) as PaperTradingStepMinutes })}
-                    >
-                      {PAPER_TRADING_STEP_OPTIONS.map(stepMinutes => <option key={stepMinutes} value={stepMinutes}>{stepMinutes} 分钟</option>)}
-                    </select>
-                  </label>
-                  <label className="block space-y-1">
-                    <span className="text-xs text-secondary">定时器方法</span>
-                    <input type="text" className={input} value={timelineSettingsDraft.timerMethod} readOnly placeholder="由后端返回可执行方法" aria-label="步长定时器方法" />
-                  </label>
-                </div>
-              </section>
-
-              <section className="rounded-lg border border-border/70 bg-base/30 p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <div>
-                    <h3 className="text-sm font-semibold">自定义时间点</h3>
-                    <p className="mt-1 text-xs text-muted">可配置多个时间点、说明和触发方法。</p>
-                  </div>
-                  <button type="button" className={button + ' shrink-0'} onClick={addTimelinePoint}>
-                    <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                    新增时间点
-                  </button>
-                </div>
-                <div className="mt-3 space-y-2">
-                  {timelineSettingsDraft.customPoints.length > 0 && (
-                    <div className="hidden grid-cols-[7rem_minmax(0,1fr)_minmax(0,1fr)_2.25rem] gap-2 px-1 text-[11px] text-muted sm:grid">
-                      <span>时间点</span><span>说明</span><span>定时器方法</span><span />
-                    </div>
-                  )}
-                  {timelineSettingsDraft.customPoints.map((point, index) => (
-                    <div key={point.id} className="grid gap-2 rounded-btn border border-border/70 bg-surface p-2 sm:grid-cols-[7rem_minmax(0,1fr)_minmax(0,1fr)_2.25rem] sm:items-center sm:border-0 sm:bg-transparent sm:p-0">
-                      <label className="space-y-1 sm:space-y-0">
-                        <span className="text-[11px] text-muted sm:hidden">时间点</span>
-                        <input type="time" className={input} value={point.time} aria-label={`第 ${index + 1} 个自定义时间点`} onChange={event => updateTimelinePoint(point.id, { time: event.target.value })} />
-                      </label>
-                      <label className="space-y-1 sm:space-y-0">
-                        <span className="text-[11px] text-muted sm:hidden">说明</span>
-                        <input type="text" className={input} placeholder="例如：开盘检查" value={point.description} aria-label={`第 ${index + 1} 个时间点说明`} onChange={event => updateTimelinePoint(point.id, { description: event.target.value })} />
-                      </label>
-                      <label className="space-y-1 sm:space-y-0">
-                        <span className="text-[11px] text-muted sm:hidden">定时器方法</span>
-                        <input type="text" className={input} value={point.timerMethod} readOnly placeholder="由后端返回可执行方法" aria-label={`第 ${index + 1} 个时间点定时器方法`} />
-                      </label>
-                      <button type="button" className="inline-flex h-9 w-9 items-center justify-center rounded-btn text-muted transition-colors hover:bg-elevated hover:text-bear" aria-label={`删除第 ${index + 1} 个自定义时间点`} title="删除时间点" onClick={() => removeTimelinePoint(point.id)}>
-                        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                      </button>
-                    </div>
-                  ))}
-                  {!timelineSettingsDraft.customPoints.length && <div className="rounded-btn border border-dashed border-border px-3 py-6 text-center text-xs text-muted">暂无自定义时间点，点击“新增时间点”开始配置。</div>}
-                </div>
-              </section>
-
-              <section className="rounded-lg border border-border/70 bg-base/30 p-3 lg:col-span-2">
-                <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-semibold">系统时间点</h3>
-                  <span className="rounded border border-yellow-400/30 px-1.5 py-0.5 text-[10px] text-yellow-400">只读</span>
-                </div>
-                <p className="mt-1 text-xs text-muted">每日复盘时间来自“复盘”页面的“定时复盘”设置。</p>
-                <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                  {systemTimelinePoints.map(point => (
-                    <div key={`${point.time}-${point.description}`} className="flex items-center gap-3 rounded-btn border border-border/70 bg-surface px-3 py-2">
-                      <span className="shrink-0 font-medium tabular-nums text-yellow-400">{point.time}</span>
-                      <span className="min-w-0 truncate text-xs text-secondary">{point.description}</span>
-                    </div>
-                  ))}
-                  {!preferences.isLoading && !reviewSchedule?.enabled && (
-                    <div className="flex items-center gap-3 rounded-btn border border-dashed border-border/70 px-3 py-2 text-muted">
-                      <span className="shrink-0 font-medium">每日复盘</span>
-                      <span className="min-w-0 truncate text-xs">未启用，请到“复盘”页面开启“定时复盘”</span>
-                    </div>
-                  )}
-                </div>
-              </section>
-            </div>
-            <p className="mt-4 text-xs leading-5 text-muted">步长任务默认循环执行；自定义时间点的定时器方法由后端返回，前端只保存后端提供的方法标识，不执行任意输入代码。</p>
-          </div>
-          <div className="flex justify-end gap-2 border-t border-border px-4 py-3">
-            <button type="button" className={button} onClick={() => setTimelineSettingsOpen(false)}>取消</button>
-            <button type="button" className={primary} onClick={saveTimelineSettings}>
-              <Save className="h-3.5 w-3.5" aria-hidden="true" />
-              保存并生效
-            </button>
           </div>
         </Modal>
       )}

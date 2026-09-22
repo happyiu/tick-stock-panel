@@ -22,8 +22,12 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from app.config import settings
 from app.indicators.pipeline import filter_halt_days, run_pipeline
+from app.market_time import cn_now, cn_today
 from app.services import index_sync, instrument_sync, kline_sync
 from app.services import preferences as _prefs
+from app.services.hermes_studio import run_chat as hermes_studio_run_chat
+from app.services.hermes_studio import studio_configured
+from app.services.timeline_execution import timeline_execution_store
 from app.tickflow.capabilities import Cap, CapabilitySet
 from app.tickflow.pools import DEMO_SYMBOLS, get_pool
 from app.tickflow.repository import KlineRepository
@@ -31,6 +35,49 @@ from app.tickflow.repository import KlineRepository
 logger = logging.getLogger(__name__)
 
 ProgressCb = Callable[..., None]
+
+
+def _timeline_start(
+    task_name: str,
+    method: str,
+    scheduled_time: str | None = None,
+    *,
+    timeline_date: str | None = None,
+    session_id: str | None = None,
+) -> str | None:
+    try:
+        return timeline_execution_store.start(
+            task_name=task_name,
+            method=method,
+            timeline_date=timeline_date,
+            scheduled_time=scheduled_time,
+            session_id=session_id,
+        )
+    except Exception:
+        logger.exception("timeline execution start record failed: method=%s", method)
+        return None
+
+
+def _timeline_finish(
+    run_id: str | None,
+    *,
+    status: str,
+    result=None,
+    error: str | None = None,
+    session_id: str | None = None,
+) -> None:
+    if not run_id:
+        return
+    try:
+        timeline_execution_store.finish(
+            run_id,
+            status=status,
+            result=result,
+            error=error,
+            session_id=session_id,
+        )
+    except Exception:
+        logger.exception("timeline execution finish record failed: run_id=%s", run_id)
 
 
 def _prune_partial_enriched_partitions(daily_dir: Path, enriched_dir: Path) -> list[str]:
@@ -867,7 +914,14 @@ def _push_phase_change_alert(data_dir) -> None:
     logger.info("phase change alert: %s (severity=%s)", msg, severity)
 
 
-def _run_tracked(fn, job_label: str) -> bool:
+def _run_tracked(
+    fn,
+    job_label: str,
+    *,
+    timeline_time: str | None = None,
+    timeline_name: str | None = None,
+    timeline_run_id: str | None = None,
+) -> bool:
     """调度触发时包装 JobStore 跟踪，确保同步历史有记录。
 
     单飞: 若已有活跃(pending∨running)任务(手动同步中), 本次调度直接跳过, 不并发。
@@ -876,13 +930,33 @@ def _run_tracked(fn, job_label: str) -> bool:
     """
     from app.services.pipeline_jobs import JobCancelledError, job_store, release_run_slot, run_with_capacity, try_acquire_run_slot
 
+    timeline_run_id = timeline_run_id or (
+        _timeline_start(
+            timeline_name or job_label,
+            job_label,
+            timeline_time,
+        ) if timeline_time else None
+    )
     job_id, is_new = job_store.create()
     if not is_new:
         logger.info("scheduled %s 跳过: 已有活跃任务在运行 (job_id=%s)", job_label, job_id)
+        _timeline_finish(
+            timeline_run_id,
+            status="skipped",
+            result={"status": "skipped", "reason": "已有活跃任务在运行", "job_id": job_id},
+            error="已有活跃任务在运行",
+        )
         return False
     if not try_acquire_run_slot(job_id):
         logger.warning("scheduled %s 跳过: 重任务执行槽被占用(疑似上次任务卡死)", job_label)
-        job_store.fail(job_id, f"scheduled {job_label} skipped: 已有数据任务在运行")
+        error = f"scheduled {job_label} skipped: 已有数据任务在运行"
+        job_store.fail(job_id, error)
+        _timeline_finish(
+            timeline_run_id,
+            status="skipped",
+            result={"status": "skipped", "job_id": job_id},
+            error=error,
+        )
         return False
 
     def progress(stage: str, pct: int, msg: str, stage_pct: int | None = None,
@@ -893,12 +967,23 @@ def _run_tracked(fn, job_label: str) -> bool:
     try:
         result = run_with_capacity(job_id, lambda: fn(on_progress=progress))
         job_store.succeed(job_id, result)
+        _timeline_finish(timeline_run_id, status="succeeded", result=result)
         succeeded = True
         logger.info("scheduled %s completed: job_id=%s", job_label, job_id)
     except JobCancelledError:
         # 已由 terminate() 标记失败(卡死/手动取消), 拉取线程在分块回调处自行退出
+        _timeline_finish(
+            timeline_run_id,
+            status="failed",
+            error="任务已取消",
+        )
         logger.warning("scheduled %s cancelled: job_id=%s", job_label, job_id)
-    except Exception:
+    except Exception as exc:
+        _timeline_finish(
+            timeline_run_id,
+            status="failed",
+            error=str(exc),
+        )
         logger.exception("scheduled %s failed: job_id=%s", job_label, job_id)
         job_store.fail(job_id, f"scheduled {job_label} failed")
     finally:
@@ -906,9 +991,19 @@ def _run_tracked(fn, job_label: str) -> bool:
     return succeeded
 
 
-def _scheduled_pipeline_task(pipeline_fn) -> None:
+def _scheduled_pipeline_task(pipeline_fn, *, timeline_time: str | None = None) -> None:
     """Run weekly mining only after the tracked daily pipeline has fully succeeded."""
-    if not _run_tracked(pipeline_fn, "daily_pipeline"):
+    tracked = (
+        _run_tracked(pipeline_fn, "daily_pipeline")
+        if timeline_time is None
+        else _run_tracked(
+            pipeline_fn,
+            "daily_pipeline",
+            timeline_time=timeline_time,
+            timeline_name="盘后 · 全量管道",
+        )
+    )
+    if not tracked:
         return
     try:
         from app.services.mining_schedule import run_weekly_mining
@@ -923,10 +1018,112 @@ def _scheduled_pipeline_task(pipeline_fn) -> None:
 # 定时复盘 (AI 大盘复盘报告)
 # ================================================================
 
+SEEKHUB_DAILY_JOB_ID = "seekhub_daily_start"
 REVIEW_JOB_ID = "scheduled_review"
 
 
-async def _run_scheduled_review(repo) -> None:
+async def _run_seekhub_daily_method(
+    method: str,
+    prompt_template: str,
+    *,
+    task_name: str | None = None,
+    scheduled_time: str | None = None,
+    timeline_run_id: str | None = None,
+) -> dict[str, str]:
+    """执行任一 seekhub_daily 方法,同日复用会话并在跨日后新建会话。"""
+    analysis_date = cn_today().isoformat()
+    session_id = _prefs.get_seekhub_daily_session_id(analysis_date)
+    timeline_run_id = timeline_run_id or _timeline_start(
+        task_name or method,
+        method,
+        scheduled_time or cn_now().strftime("%H:%M"),
+        timeline_date=analysis_date,
+        session_id=session_id,
+    )
+    if not studio_configured():
+        logger.info("%s skipped: Hermes Studio not configured", method)
+        _timeline_finish(
+            timeline_run_id,
+            status="skipped",
+            result={"status": "skipped", "date": analysis_date},
+            error="Hermes Studio not configured",
+            session_id=session_id,
+        )
+        return {"status": "skipped", "date": analysis_date}
+
+    try:
+        prompt = prompt_template.replace("YYYY-MM-DD", analysis_date)
+        result = await hermes_studio_run_chat(
+            prompt,
+            session_id=session_id,
+        )
+        session_id = str(result.get("session_id") or "").strip()
+        if not session_id:
+            raise RuntimeError("Hermes Studio 未返回 session_id")
+        _prefs.set_seekhub_daily_session_id(analysis_date, session_id)
+        timeline_result = {
+            "status": "completed",
+            "date": analysis_date,
+            "run_id": result.get("run_id"),
+            "output": result.get("output", ""),
+            "reasoning": result.get("reasoning"),
+        }
+        _timeline_finish(
+            timeline_run_id,
+            status="succeeded",
+            result=timeline_result,
+            session_id=session_id,
+        )
+        logger.info("%s completed: date=%s", method, analysis_date)
+        return {"status": "completed", "date": analysis_date}
+    except Exception as exc:
+        _timeline_finish(
+            timeline_run_id,
+            status="failed",
+            result={"status": "failed", "date": analysis_date},
+            error=str(exc),
+            session_id=session_id,
+        )
+        logger.exception("%s failed: date=%s", method, analysis_date)
+        return {"status": "failed", "date": analysis_date}
+
+
+async def seekhub_daily_start(scheduled_time: str = "08:00", timeline_run_id: str | None = None) -> dict[str, str]:
+    """每天 08:00 以同一个 Hermes Studio 会话启动当天分析。"""
+    return await _run_seekhub_daily_method(
+        "seekhub_daily_start",
+        _prefs.get_seekhub_daily_prompt("seekhub_daily_start"),
+        task_name="ai追踪分析启动",
+        scheduled_time=scheduled_time,
+        timeline_run_id=timeline_run_id,
+    )
+
+
+async def seekhub_daily_decision(scheduled_time: str | None = None, timeline_run_id: str | None = None) -> dict[str, str]:
+    """启动盘中分析,复用当天 seekhub_daily 会话。"""
+    return await _run_seekhub_daily_method(
+        "seekhub_daily_decision",
+        _prefs.get_seekhub_daily_prompt("seekhub_daily_decision"),
+        task_name="ai追踪分析监控",
+        scheduled_time=scheduled_time,
+        timeline_run_id=timeline_run_id,
+    )
+
+
+def _register_h_analysis_job(scheduler) -> None:
+    """注册每天 08:00 的 Hermes 连续分析任务。"""
+    scheduler.add_job(
+        seekhub_daily_start,
+        args=["08:00"],
+        trigger=CronTrigger(hour=8, minute=0, timezone="Asia/Shanghai"),
+        id=SEEKHUB_DAILY_JOB_ID,
+        misfire_grace_time=3600,
+        coalesce=True,
+        replace_existing=True,
+    )
+
+
+async def _run_scheduled_review(repo) -> dict:
     """定时复盘 job: 流式生成复盘 → 实时推 SSE(开着页面可见) → 落盘归档 → 推飞书。
 
     与手动「生成复盘」体验一致: 流式事件经 quote_service.push_review_event →
@@ -944,7 +1141,7 @@ async def _run_scheduled_review(repo) -> None:
         # AI Key 未配置时跳过(避免每日报错刷日志)
         if not ss.get_ai_key():
             logger.info("scheduled review skipped: AI key not configured")
-            return
+            return {"status": "skipped", "reason": "AI key not configured"}
 
         app_state = _get_app_state()
         quote_service = getattr(app_state, "quote_service", None) if app_state else None
@@ -958,10 +1155,10 @@ async def _run_scheduled_review(repo) -> None:
                 quote_service.push_review_event(json.dumps(
                     {"type": "error", "message": "复盘生成失败,请稍后手动重试"},
                     ensure_ascii=False))
-            return
+            return {"status": "failed", "error": "复盘生成失败", "meta": meta}
 
         # 落盘: 与手动生成完全相同的归档格式
-        market_recap_reports.save_report({
+        saved = market_recap_reports.save_report({
             "as_of": meta.get("as_of"),
             "focus": "",
             "content": content,
@@ -981,6 +1178,12 @@ async def _run_scheduled_review(repo) -> None:
         # 失败静默降级, 不影响已归档的报告。
         if _prefs.get_review_push_mode() == "auto":
             _maybe_push_review(content, meta)
+        return {
+            "status": "succeeded",
+            "report_id": saved.get("id"),
+            "as_of": meta.get("as_of"),
+            "summary": meta.get("summary", ""),
+        }
     except Exception as e:  # noqa: BLE001
         logger.exception("scheduled review failed: %s", e)
         # 兜底: 异常时通知前端停止「生成中」状态, 避免页面卡在 streaming
@@ -994,6 +1197,34 @@ async def _run_scheduled_review(repo) -> None:
                     ensure_ascii=False))
         except Exception:
             pass
+        return {"status": "failed", "error": str(e)}
+
+
+async def _run_scheduled_review_tracked(repo, scheduled_time: str, timeline_run_id: str | None = None) -> dict:
+    timeline_run_id = timeline_run_id or _timeline_start(
+        "每日复盘 · 生成并归档 AI 复盘报告",
+        "scheduled_review",
+        scheduled_time,
+    )
+    result = await _run_scheduled_review(repo)
+    status = result.get("status")
+    if status == "succeeded":
+        _timeline_finish(timeline_run_id, status="succeeded", result=result)
+    elif status == "skipped":
+        _timeline_finish(
+            timeline_run_id,
+            status="skipped",
+            result=result,
+            error=str(result.get("reason") or "任务跳过"),
+        )
+    else:
+        _timeline_finish(
+            timeline_run_id,
+            status="failed",
+            result=result,
+            error=str(result.get("error") or "任务失败"),
+        )
+    return result
 
 
 async def _stream_review_with_retry(repo, quote_service, depth_service) -> tuple[str, dict]:
@@ -1135,13 +1366,13 @@ def _register_review_job(scheduler, repo, hour: int, minute: int) -> None:
     供 start_scheduler(启动时) 和 settings API(改时间时) 共用。
     用 replace_existing=True, 重复注册只更新 trigger。
 
-    注意: _run_scheduled_review 是协程函数, 必须把函数对象本身(配合 args)传给
+    注意: _run_scheduled_review_tracked 是协程函数, 必须把函数对象本身(配合 args)传给
     add_job, 而非用 lambda 包裹 —— 否则 APScheduler 会把 lambda 当同步函数在线程池
     执行, 仅得到一个未 await 的协程对象, 复盘实际不会运行。
     """
     scheduler.add_job(
-        _run_scheduled_review,
-        args=[repo],
+        _run_scheduled_review_tracked,
+        args=[repo, f"{hour:02d}:{minute:02d}"],
         trigger=CronTrigger(day_of_week="mon-fri",
                             hour=hour, minute=minute,
                             timezone="Asia/Shanghai"),
@@ -1198,6 +1429,7 @@ def _register_commodity_job(scheduler, repo) -> None:
 def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOScheduler:
     """启动调度器。
 
+    每日 08:00 — Hermes 连续分析
     工作日 09:10 — 同步个股维表
     工作日 HH:MM — 盘后管道（时间由用户偏好决定，默认 15:35）
     """
@@ -1206,6 +1438,7 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
     inst_sched = preferences.get_instruments_schedule()
 
     scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
+    _register_h_analysis_job(scheduler)
 
     # 盘前: 同步 instruments（时间由偏好决定）
     def _instruments_task(on_progress=None):
@@ -1216,7 +1449,12 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
         return result
 
     scheduler.add_job(
-        lambda: _run_tracked(_instruments_task, "instruments_sync"),
+        lambda: _run_tracked(
+            _instruments_task,
+            "instruments_sync",
+            timeline_time=f"{inst_sched['hour']:02d}:{inst_sched['minute']:02d}",
+            timeline_name="数据-自动调度-盘前 · 个股维表",
+        ),
         trigger=CronTrigger(day_of_week="mon-fri",
                             hour=inst_sched["hour"], minute=inst_sched["minute"],
                             timezone="Asia/Shanghai"),
@@ -1250,7 +1488,10 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
         return result
 
     scheduler.add_job(
-        lambda: _scheduled_pipeline_task(_pipeline_then_refresh),
+        lambda: _scheduled_pipeline_task(
+            _pipeline_then_refresh,
+            timeline_time=f"{sched['hour']:02d}:{sched['minute']:02d}",
+        ),
         trigger=CronTrigger(day_of_week="mon-fri",
                             hour=sched["hour"], minute=sched["minute"],
                             timezone="Asia/Shanghai"),
@@ -1324,7 +1565,7 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
                     review_sched["hour"], review_sched["minute"])
 
     scheduler.start()
-    logger.info("scheduler started; instruments@%02d:%02d, pipeline@%02d:%02d, depth@%02d:%02d, exchange_rate@every %dh, commodity@daily",
+    logger.info("scheduler started; seekhub_daily_start@08:00, instruments@%02d:%02d, pipeline@%02d:%02d, depth@%02d:%02d, exchange_rate@every %dh, commodity@daily",
                 inst_sched["hour"], inst_sched["minute"], sched["hour"], sched["minute"],
                 depth_sched["hour"], depth_sched["minute"], exchange_rate_interval)
     return scheduler

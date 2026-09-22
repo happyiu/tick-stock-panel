@@ -795,6 +795,8 @@ def get_preferences() -> dict:
         "limit_ladder_monitor_enabled": preferences.get_limit_ladder_monitor_enabled(),
         "depth_polling_interval": preferences.get_depth_polling_interval(),
         "depth_finalize_time": preferences.get_depth_finalize_time(),
+        "seekhub_daily_prompt": preferences.get_seekhub_daily_prompt(),
+        "seekhub_daily_prompts": preferences.get_seekhub_daily_prompts(),
         "review_schedule": preferences.get_review_schedule(),
         "review_push_channels": preferences.get_review_push_channels(),
         "review_push_mode": preferences.get_review_push_mode(),
@@ -1957,6 +1959,11 @@ class PipelineScheduleIn(BaseModel):
     minute: int
 
 
+class SeekhubDailyPromptIn(BaseModel):
+    method: str = "seekhub_daily_start"
+    prompt: str = Field(min_length=1, max_length=2000)
+
+
 class ExchangeRateScheduleIn(BaseModel):
     interval_hours: int = Field(ge=1)
 
@@ -2025,6 +2032,18 @@ def update_instruments_schedule(req: PipelineScheduleIn, request: Request) -> di
             ),
         )
         return sched
+
+
+@router.put("/preferences/seekhub-daily-prompt")
+def update_seekhub_daily_prompt(req: SeekhubDailyPromptIn) -> dict:
+    """保存 SeekHub 每日分析提示词模板。"""
+    from app.services import preferences
+
+    try:
+        prompt = preferences.set_seekhub_daily_prompt(req.method, req.prompt)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"method": req.method, "prompt": prompt}
 
 
 class EnrichedBatchSizeIn(BaseModel):

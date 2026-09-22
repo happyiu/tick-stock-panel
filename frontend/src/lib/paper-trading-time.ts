@@ -34,6 +34,8 @@ export interface PaperTradingSystemTimelinePoint {
   time: string
   minutes: number
   description: string
+  name?: string
+  method?: string
 }
 
 export interface PaperTradingReviewSchedule {
@@ -52,8 +54,9 @@ const pad = (value: number) => String(value).padStart(2, '0')
 const formatTimelineTime = (minutes: number) => `${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}`
 
 const SYSTEM_TIMELINE_POINTS: readonly PaperTradingSystemTimelinePoint[] = [
-  { time: '09:10', minutes: 9 * 60 + 10, description: '数据-自动调度-盘前 · 个股维表' },
-  { time: '15:35', minutes: 15 * 60 + 35, description: '盘后 · 全量管道' },
+  { time: '08:00', minutes: 8 * 60, name: 'ai追踪分析启动', description: 'ai追踪分析启动', method: 'seekhub_daily_start' },
+  { time: '09:10', minutes: 9 * 60 + 10, description: '数据-自动调度-盘前 · 个股维表', method: 'instruments_sync' },
+  { time: '15:35', minutes: 15 * 60 + 35, description: '盘后 · 全量管道', method: 'daily_pipeline' },
 ]
 
 /** 系统时间点只展示真实启用的后台工作, 未启用的调度保持不可见。 */
@@ -68,7 +71,7 @@ export function getPaperTradingSystemTimelinePoints(
     && typeof minute === 'number' && Number.isInteger(minute) && minute >= 0 && minute <= 59
   ) {
     const minutes = hour * 60 + minute
-    points.push({ time: formatTimelineTime(minutes), minutes, description: '每日复盘 · 生成并归档 AI 复盘报告' })
+    points.push({ time: formatTimelineTime(minutes), minutes, description: '每日复盘 · 生成并归档 AI 复盘报告', method: 'scheduled_review' })
   }
   return points.sort((left, right) => left.minutes - right.minutes)
 }

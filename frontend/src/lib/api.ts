@@ -2311,6 +2311,8 @@ export interface Preferences {
   limit_ladder_monitor_enabled: boolean
   depth_polling_interval: number
   depth_finalize_time: { hour: number; minute: number }
+  seekhub_daily_prompt: string
+  seekhub_daily_prompts: Record<string, string>
   review_schedule: { enabled: boolean; hour: number; minute: number }
   review_push_channels: string[]
   review_push_mode?: 'auto' | 'manual'
@@ -2617,9 +2619,41 @@ export interface SectorRotationUniverseItem {
   excluded?: boolean
 }
 
+export interface TimelineExecution {
+  id: string
+  timeline_date: string
+  scheduled_time: string
+  task_name: string
+  method: string
+  status: 'running' | 'succeeded' | 'failed' | 'skipped'
+  started_at: string
+  finished_at: string | null
+  session_id: string | null
+  result: unknown
+  error: string | null
+}
+
+export interface TimelineExecutionsResponse {
+  date: string
+  items: TimelineExecution[]
+}
+
 // ===== API surface =====
 export const api = {
   health: () => request<{ status: string; version: string; mode: string }>('/health'),
+
+  timelineExecutions: (date?: string, limit = 500) => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    if (date) params.set('date', date)
+    return request<TimelineExecutionsResponse>(`/api/timeline/executions?${params.toString()}`)
+  },
+  timelineExecutionRetry: (runId: string) => request<{ accepted: boolean; run_id: string; method: string; scheduled_time: string }>(
+    `/api/timeline/executions/${encodeURIComponent(runId)}/retry`, { method: 'POST' },
+  ),
+  timelineMethodRetry: (payload: { method: string; task_name: string; scheduled_time: string }) =>
+    request<{ accepted: boolean; run_id: string; method: string; scheduled_time: string }>(
+      '/api/timeline/executions/retry', { method: 'POST', body: JSON.stringify(payload) },
+    ),
 
   paperSnapshot: (accountId?: string) => request<PaperSnapshotResponse>(
     `/api/paper-trading/snapshot?mode=${accountId ? 'replay' : 'live'}`
@@ -3073,6 +3107,11 @@ export const api = {
     request<{ hour: number; minute: number }>('/api/settings/preferences/instruments-schedule', {
       method: 'PUT',
       body: JSON.stringify({ hour, minute }),
+    }),
+  updateSeekhubDailyPrompt: (method: string, prompt: string) =>
+    request<{ method: string; prompt: string }>('/api/settings/preferences/seekhub-daily-prompt', {
+      method: 'PUT',
+      body: JSON.stringify({ method, prompt }),
     }),
   updateEnrichedBatchSize: (size: number) =>
     request<{ enriched_batch_size: number }>('/api/settings/preferences/enriched-batch-size', {

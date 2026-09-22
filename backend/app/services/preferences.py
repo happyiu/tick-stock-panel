@@ -555,6 +555,97 @@ def set_instruments_schedule(hour: int, minute: int) -> dict:
     return {"hour": h, "minute": m}
 
 
+def get_h_analysis_session_id() -> str | None:
+    """返回 Hermes 每日连续分析会话 ID。"""
+    value = load().get("h_analysis_session_id")
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def set_h_analysis_session_id(session_id: str) -> str:
+    """保存 Hermes 每日连续分析会话 ID。"""
+    value = str(session_id).strip()
+    if not value:
+        raise ValueError("h_analysis session_id 不能为空")
+    save({"h_analysis_session_id": value})
+    return value
+
+
+SEEKHUB_DAILY_PROMPT_DEFAULTS = {
+    "seekhub_daily_start": "YYYY-MM-DD 分析",
+    "seekhub_daily_decision": "开始盘中分析吧",
+}
+
+
+def get_seekhub_daily_prompts() -> dict[str, str]:
+    """返回 SeekHub 每日方法的提示词模板。"""
+    data = load()
+    saved = data.get("seekhub_daily_prompts")
+    prompts = {
+        str(method): value.strip()
+        for method, value in (saved.items() if isinstance(saved, dict) else [])
+        if str(method).startswith("seekhub_daily_")
+        and isinstance(value, str)
+        and value.strip()
+    }
+    legacy = data.get("seekhub_daily_prompt")
+    if "seekhub_daily_start" not in prompts and isinstance(legacy, str) and legacy.strip():
+        prompts["seekhub_daily_start"] = legacy.strip()
+    for method, default in SEEKHUB_DAILY_PROMPT_DEFAULTS.items():
+        prompts.setdefault(method, default)
+    return prompts
+
+
+def get_seekhub_daily_prompt(method: str = "seekhub_daily_start") -> str:
+    """返回指定 SeekHub 每日方法的提示词模板。"""
+    return get_seekhub_daily_prompts().get(method, "")
+
+
+def set_seekhub_daily_prompt(method: str, prompt: str) -> str:
+    """保存指定 SeekHub 每日方法的提示词模板。"""
+    method = str(method).strip()
+    if not method.startswith("seekhub_daily_"):
+        raise ValueError("只允许保存 seekhub_daily_ 开头的方法提示词")
+    value = str(prompt).strip()
+    if not value:
+        raise ValueError("seekhub_daily_prompt 不能为空")
+    if len(value) > 2000:
+        raise ValueError("seekhub_daily_prompt 不能超过 2000 个字符")
+    saved = load().get("seekhub_daily_prompts")
+    prompts = dict(saved) if isinstance(saved, dict) else {}
+    prompts[method] = value
+    updates = {"seekhub_daily_prompts": prompts}
+    if method == "seekhub_daily_start":
+        updates["seekhub_daily_prompt"] = value
+    save(updates)
+    return value
+
+
+def get_seekhub_daily_session_id(session_date: str) -> str | None:
+    """返回指定日期的 SeekHub 连续会话 ID,跨日自动失效。"""
+    data = load()
+    if data.get("seekhub_daily_session_date") != session_date:
+        return None
+    value = data.get("seekhub_daily_session_id")
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def set_seekhub_daily_session_id(session_date: str, session_id: str) -> str:
+    """保存指定日期的 SeekHub 连续会话 ID。"""
+    session_date = str(session_date).strip()
+    value = str(session_id).strip()
+    if not session_date:
+        raise ValueError("seekhub_daily session_date 不能为空")
+    if not value:
+        raise ValueError("seekhub_daily session_id 不能为空")
+    save({
+        "seekhub_daily_session_date": session_date,
+        "seekhub_daily_session_id": value,
+        # 保留旧键,便于已有诊断/兼容代码读取,新逻辑以日期键为准。
+        "h_analysis_session_id": value,
+    })
+    return value
+
+
 def get_enriched_batch_size() -> int:
     """返回 enriched 全量计算每批 symbol 数量。"""
     return max(1, min(10000, load().get("enriched_batch_size", 1000)))

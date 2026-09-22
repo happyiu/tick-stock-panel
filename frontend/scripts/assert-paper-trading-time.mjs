@@ -50,10 +50,13 @@ assert.deepEqual(getBeijingPaperClock(new Date('2026-09-14T01:30:00Z')), {
   tradingDay: true,
 })
 
-assert.deepEqual(getPaperTradingSystemTimelinePoints({ enabled: false, hour: 15, minute: 40 }).map(point => point.time), ['09:10', '15:35'])
+assert.deepEqual(getPaperTradingSystemTimelinePoints({ enabled: false, hour: 15, minute: 40 }).map(point => point.time), ['08:00', '09:10', '15:35'])
+assert.equal(getPaperTradingSystemTimelinePoints({ enabled: false })[0]?.name, 'ai追踪分析启动')
+assert.equal(getPaperTradingSystemTimelinePoints({ enabled: false })[0]?.description, 'ai追踪分析启动')
+assert.equal(getPaperTradingSystemTimelinePoints({ enabled: false })[0]?.method, 'seekhub_daily_start')
 const enabledReviewPoints = getPaperTradingSystemTimelinePoints({ enabled: true, hour: 15, minute: 40 })
-assert.deepEqual(enabledReviewPoints.map(point => point.time), ['09:10', '15:35', '15:40'])
+assert.deepEqual(enabledReviewPoints.map(point => point.time), ['08:00', '09:10', '15:35', '15:40'])
 assert.equal(enabledReviewPoints.at(-1).description, '每日复盘 · 生成并归档 AI 复盘报告')
-assert.deepEqual(getPaperTradingSystemTimelinePoints({ enabled: true, hour: 15, minute: 0 }).map(point => point.time), ['09:10', '15:00', '15:35'])
+assert.deepEqual(getPaperTradingSystemTimelinePoints({ enabled: true, hour: 15, minute: 0 }).map(point => point.time), ['08:00', '09:10', '15:00', '15:35'])
 
 console.log('paper trading time assertions passed')
