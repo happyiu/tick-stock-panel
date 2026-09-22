@@ -70,6 +70,14 @@ def get_settings() -> dict:
         current_openai_model,
         current_openai_reasoning_effort,
     )
+    from app.services.hermes_studio import (
+        current_studio_password,
+        current_studio_profile,
+        current_studio_token,
+        current_studio_url,
+        current_studio_username,
+        studio_configured,
+    )
 
     key = secrets_store.get_tickflow_key()
     ai_provider = secrets_store.get_ai_config("ai_provider", settings.ai_provider)
@@ -105,6 +113,13 @@ def get_settings() -> dict:
         "has_hermes_key": bool(current_hermes_key()),
         "hermes_configured": ai_configured(HERMES_AGENT_PROVIDER),
         "hermes_model": current_hermes_model(),
+        "hermes_studio_url": current_studio_url(),
+        "hermes_studio_profile": current_studio_profile(),
+        "hermes_studio_token_masked": secrets_store.mask(current_studio_token()),
+        "has_hermes_studio_token": bool(current_studio_token()),
+        "hermes_studio_username": current_studio_username(),
+        "has_hermes_studio_password": bool(current_studio_password()),
+        "hermes_studio_configured": studio_configured(),
     }
 
 
@@ -261,6 +276,11 @@ class HermesSettingsIn(BaseModel):
     # None = 沿用已保存 Key; 空字符串 = 明确清空(但保存接口会拒绝未配置状态)
     api_key: str | None = Field(default=None, max_length=4096)
     model: str = Field(default="", max_length=256)
+    studio_url: str | None = Field(default=None, max_length=2048)
+    studio_profile: str | None = Field(default=None, max_length=128)
+    studio_token: str | None = Field(default=None, max_length=8192)
+    studio_username: str | None = Field(default=None, max_length=256)
+    studio_password: str | None = Field(default=None, max_length=8192)
     max_output_tokens: int | None = None
     context_window: int | None = None
 
@@ -282,6 +302,14 @@ def _hermes_result(result: dict | None = None) -> dict:
         current_hermes_key,
         current_hermes_model,
     )
+    from app.services.hermes_studio import (
+        current_studio_password,
+        current_studio_profile,
+        current_studio_token,
+        current_studio_url,
+        current_studio_username,
+        studio_configured,
+    )
 
     payload = dict(result or {})
     payload.update(
@@ -293,6 +321,13 @@ def _hermes_result(result: dict | None = None) -> dict:
             "has_hermes_key": bool(current_hermes_key()),
             "hermes_configured": ai_configured(HERMES_AGENT_PROVIDER),
             "hermes_model": current_hermes_model(),
+            "hermes_studio_url": current_studio_url(),
+            "hermes_studio_profile": current_studio_profile(),
+            "hermes_studio_token_masked": secrets_store.mask(current_studio_token()),
+            "has_hermes_studio_token": bool(current_studio_token()),
+            "hermes_studio_username": current_studio_username(),
+            "has_hermes_studio_password": bool(current_studio_password()),
+            "hermes_studio_configured": studio_configured(),
         }
     )
     return payload
@@ -345,6 +380,7 @@ async def save_hermes_settings(req: HermesSettingsIn) -> dict:
         current_ai_provider,
     )
     from app.services.hermes_gateway import normalize_hermes_gateway_url, probe_gateway
+    from app.services.hermes_studio import normalize_studio_url
 
     gateway_url, api_key, model = _hermes_request_values(req)
     if not api_key:
@@ -379,6 +415,21 @@ async def save_hermes_settings(req: HermesSettingsIn) -> dict:
         updates["ai_context_window"] = req.context_window
         settings.ai_context_window = req.context_window
 
+    if req.studio_url is not None:
+        studio_url = req.studio_url.strip()
+        try:
+            updates["hermes_studio_url"] = normalize_studio_url(studio_url) if studio_url else ""
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+    if req.studio_profile is not None:
+        updates["hermes_studio_profile"] = req.studio_profile.strip()
+    if req.studio_token is not None:
+        updates["hermes_studio_token"] = req.studio_token.strip()
+    if req.studio_username is not None:
+        updates["hermes_studio_username"] = req.studio_username.strip()
+    if req.studio_password is not None:
+        updates["hermes_studio_password"] = req.studio_password
+
     secrets_store.save(updates)
     settings.ai_provider = HERMES_AGENT_PROVIDER
     return _hermes_result(
@@ -410,7 +461,16 @@ def clear_hermes_settings() -> dict:
     )
 
     was_active = current_ai_provider() == HERMES_AGENT_PROVIDER
-    secrets_store.clear("hermes_gateway_url", "hermes_api_key", "hermes_model")
+    secrets_store.clear(
+        "hermes_gateway_url",
+        "hermes_api_key",
+        "hermes_model",
+        "hermes_studio_url",
+        "hermes_studio_profile",
+        "hermes_studio_token",
+        "hermes_studio_username",
+        "hermes_studio_password",
+    )
     if was_active:
         secrets_store.save({"ai_provider": OPENAI_COMPAT_PROVIDER})
         settings.ai_provider = OPENAI_COMPAT_PROVIDER

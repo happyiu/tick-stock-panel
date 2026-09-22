@@ -280,16 +280,29 @@ async def test_save_and_clear_hermes_preserves_generic_provider_config(monkeypat
                 gateway_url="http://hermes.example/v1",
                 api_key="hermes-key",
                 model="hermes-agent",
+                studio_url="http://studio.example/",
+                studio_profile="seekhub",
+                studio_token="studio-secret",
+                studio_username="seekhub-app",
+                studio_password="studio-password",
             )
         )
         assert result["ok"] is True
         assert stored["ai_provider"] == hermes_gateway.HERMES_AGENT_PROVIDER
         assert stored["hermes_gateway_url"] == "http://hermes.example"
         assert stored["hermes_api_key"] == "hermes-key"
+        assert stored["hermes_studio_url"] == "http://studio.example"
+        assert stored["hermes_studio_profile"] == "seekhub"
+        assert stored["hermes_studio_token"] == "studio-secret"
+        assert stored["hermes_studio_username"] == "seekhub-app"
+        assert stored["hermes_studio_password"] == "studio-password"
+        assert "studio-secret" not in json.dumps(result)
         assert stored["ai_api_key"] == "openai-key"
 
         settings_api.clear_hermes_settings()
         assert "hermes_api_key" not in stored
+        assert "hermes_studio_token" not in stored
+        assert "hermes_studio_password" not in stored
         assert stored["ai_provider"] == ai_provider.OPENAI_COMPAT_PROVIDER
         assert stored["ai_api_key"] == "openai-key"
     finally:

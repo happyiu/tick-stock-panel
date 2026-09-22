@@ -94,7 +94,13 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
   const [hermesGatewayUrl, setHermesGatewayUrl] = useState('')
   const [hermesApiKey, setHermesApiKey] = useState('')
   const [hermesModel, setHermesModel] = useState('')
+  const [hermesStudioUrl, setHermesStudioUrl] = useState('')
+  const [hermesStudioProfile, setHermesStudioProfile] = useState('seekhub')
+  const [hermesStudioToken, setHermesStudioToken] = useState('')
+  const [hermesStudioUsername, setHermesStudioUsername] = useState('')
+  const [hermesStudioPassword, setHermesStudioPassword] = useState('')
   const [showHermesKey, setShowHermesKey] = useState(false)
+  const [showHermesStudioToken, setShowHermesStudioToken] = useState(false)
   const [hermesProbe, setHermesProbe] = useState<HermesProbeResult | null>(null)
   const [hermesAcknowledged, setHermesAcknowledged] = useState(false)
   const [customUa, setCustomUa] = useState(false)
@@ -189,6 +195,11 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
     setHermesGatewayUrl(s.hermes_gateway_url ?? '')
     setHermesApiKey('')
     setHermesModel(s.hermes_model ?? '')
+    setHermesStudioUrl(s.hermes_studio_url ?? '')
+    setHermesStudioProfile(s.hermes_studio_profile ?? 'seekhub')
+    setHermesStudioToken('')
+    setHermesStudioUsername(s.hermes_studio_username ?? '')
+    setHermesStudioPassword('')
     setHermesProbe(null)
     setHermesAcknowledged(savedProvider === HERMES_AGENT_PROVIDER && !!s.hermes_configured)
     const ua = s.ai_user_agent ?? ''
@@ -215,6 +226,11 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
     gateway_url: hermesGatewayUrl.trim(),
     api_key: hermesApiKey.trim() || undefined,
     model: hermesModel.trim(),
+    studio_url: hermesStudioUrl.trim(),
+    studio_profile: hermesStudioProfile.trim(),
+    studio_token: hermesStudioToken.trim() || undefined,
+    studio_username: hermesStudioUsername.trim() || undefined,
+    studio_password: hermesStudioPassword || undefined,
     max_output_tokens: toPositiveInt(maxOutputTokens),
     context_window: toPositiveInt(contextWindow),
   })
@@ -232,6 +248,8 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
       if (isHermesProvider) {
         const hermesResult = result as HermesSettingsResult
         setHermesApiKey('')
+        setHermesStudioToken('')
+        setHermesStudioPassword('')
         setHermesProbe(hermesResult)
         qc.setQueryData<SettingsState>(QK.settings, prev => prev ? {
           ...prev,
@@ -247,6 +265,13 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
           hermes_api_key_masked: hermesResult.hermes_api_key_masked ?? (hermesApiKey
             ? `${hermesApiKey.slice(0, 4)}......${hermesApiKey.slice(-4)}`
             : prev.hermes_api_key_masked),
+          hermes_studio_url: hermesResult.hermes_studio_url ?? hermesStudioUrl,
+          hermes_studio_profile: hermesResult.hermes_studio_profile ?? hermesStudioProfile,
+          hermes_studio_username: hermesResult.hermes_studio_username ?? hermesStudioUsername,
+          hermes_studio_configured: hermesResult.hermes_studio_configured ?? prev.hermes_studio_configured,
+          has_hermes_studio_token: hermesResult.has_hermes_studio_token ?? prev.has_hermes_studio_token,
+          has_hermes_studio_password: hermesResult.has_hermes_studio_password ?? prev.has_hermes_studio_password,
+          hermes_studio_token_masked: hermesResult.hermes_studio_token_masked ?? prev.hermes_studio_token_masked,
         } : prev)
       } else {
         setApiKey('')
@@ -285,6 +310,11 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
         setHermesGatewayUrl('')
         setHermesApiKey('')
         setHermesModel('')
+        setHermesStudioUrl('')
+        setHermesStudioProfile('seekhub')
+        setHermesStudioToken('')
+        setHermesStudioUsername('')
+        setHermesStudioPassword('')
         setHermesProbe(null)
         setHermesAcknowledged(false)
         hermesDraft.current = { gatewayUrl: '', apiKey: '', model: '' }
@@ -319,6 +349,13 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
           hermes_configured: false,
           has_hermes_key: false,
           hermes_api_key_masked: '',
+          hermes_studio_url: '',
+          hermes_studio_profile: 'seekhub',
+          hermes_studio_configured: false,
+          has_hermes_studio_token: false,
+          has_hermes_studio_password: false,
+          hermes_studio_token_masked: '',
+          hermes_studio_username: '',
         } : {
           ai_provider: OPENAI_COMPAT_PROVIDER,
           ai_base_url: '',
@@ -490,12 +527,12 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
             <div className="text-xs text-muted mt-0.5 truncate">
               {configured
                 ? (isHermesProvider
-                  ? `${s?.hermes_model ?? hermesModel} · ${hermesProbe?.mode === 'enhanced' ? '增强模式' : 'Gateway'}`
+                  ? `${s?.hermes_model ?? hermesModel} · ${hermesProbe?.mode === 'enhanced' ? '增强模式' : 'Gateway'} · Studio ${s?.hermes_studio_configured ? '已配置' : '未配置'}`
                   : savedCodexProvider
                   ? `${s?.ai_codex_command ?? CODEX_COMMAND} · ${codexModelLabel(s?.ai_model, s?.ai_codex_reasoning_effort)}`
                   : `${s?.ai_model} · ${s?.ai_api_key_masked}`)
                 : (isHermesProvider
-                  ? '填写 Gateway 地址、API Server Key 和 Agent 模型后启用。'
+                  ? '填写 Gateway 地址、API Server Key 和 Agent 模型后启用；连续会话另需配置 Studio token 或登录账号。'
                   : isCodexProvider ? '使用本机 codex exec, 此处无需填写 API Key。' : '配置 API Key 后即可使用 AI 功能.')}
             </div>
           </div>
@@ -540,8 +577,8 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
         icon={Settings2}
         title={configTitle}
         right={
-          <span className="inline-flex items-center gap-1.5 text-[10px] text-muted/60" title={isCodexProvider ? 'Use local Codex CLI via codex exec' : isHermesProvider ? 'Use Hermes Agent Gateway from the backend' : 'Use OpenAI-compatible Chat Completions API'}>
-            <span className="rounded-full border border-border/40 bg-base/50 px-1.5 py-px font-mono">{isCodexProvider ? 'codex exec' : isHermesProvider ? 'Hermes Gateway' : 'Chat Completions'}</span>
+          <span className="inline-flex items-center gap-1.5 text-[10px] text-muted/60" title={isCodexProvider ? 'Use local Codex CLI via codex exec' : isHermesProvider ? 'Use Hermes Gateway for one-shot and Studio for persistent chat' : 'Use OpenAI-compatible Chat Completions API'}>
+            <span className="rounded-full border border-border/40 bg-base/50 px-1.5 py-px font-mono">{isCodexProvider ? 'codex exec' : isHermesProvider ? 'Gateway + Studio' : 'Chat Completions'}</span>
             {isCodexProvider ? 'CLI' : isHermesProvider ? 'Agent' : '接口'}
           </span>
         }
@@ -617,6 +654,67 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
                   </div>
                 </div>
               </Field>
+
+              <div className="border-t border-border/20 pt-4 space-y-4">
+                <div>
+                  <div className="text-xs font-medium text-foreground">连续会话：Hermes Studio chat-run</div>
+                  <div className="text-[10px] text-muted mt-1">详情页多轮对话会在 Studio 中落库；单次分析仍走上面的 Gateway。</div>
+                </div>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <Field label="Studio API 地址" hint="默认 http://127.0.0.1:6060；不要填网页路径。">
+                    <input
+                      type="text"
+                      value={hermesStudioUrl}
+                      onChange={e => setHermesStudioUrl(e.target.value)}
+                      placeholder="http://127.0.0.1:6060"
+                      className={INPUT_CLS}
+                    />
+                  </Field>
+                  <Field label="Studio Profile" hint="默认 seekhub；必须与 Studio 授权 profile 一致。">
+                    <input
+                      type="text"
+                      value={hermesStudioProfile}
+                      onChange={e => setHermesStudioProfile(e.target.value)}
+                      placeholder="seekhub"
+                      className={INPUT_CLS}
+                    />
+                  </Field>
+                </div>
+                <Field label="Studio Token" hint="优先使用 Bearer token；留空表示沿用已保存的 token。">
+                  <div className="relative">
+                    <input
+                      type={showHermesStudioToken ? 'text' : 'password'}
+                      value={hermesStudioToken}
+                      onChange={e => setHermesStudioToken(e.target.value)}
+                      placeholder={s?.has_hermes_studio_token ? `${s.hermes_studio_token_masked} · 留空不修改` : '输入 Studio 访问令牌'}
+                      className={`${INPUT_CLS} pr-9`}
+                    />
+                    <button onClick={() => setShowHermesStudioToken(v => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted/40 hover:text-muted" tabIndex={-1} aria-label={showHermesStudioToken ? '隐藏' : '显示'}>
+                      {showHermesStudioToken ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                    </button>
+                  </div>
+                </Field>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <Field label="Studio 用户名（可选）" hint="没有 token 时，与密码一起用于 /api/auth/login。">
+                    <input
+                      type="text"
+                      value={hermesStudioUsername}
+                      onChange={e => setHermesStudioUsername(e.target.value)}
+                      placeholder={s?.hermes_studio_username || '专用 seekhub 用户'}
+                      className={INPUT_CLS}
+                    />
+                  </Field>
+                  <Field label="Studio 密码（可选）" hint={s?.has_hermes_studio_password ? '已保存；留空不修改。' : '仅服务端保存，不发送到浏览器下游。'}>
+                    <input
+                      type="password"
+                      value={hermesStudioPassword}
+                      onChange={e => setHermesStudioPassword(e.target.value)}
+                      placeholder={s?.has_hermes_studio_password ? '留空不修改' : '输入专用用户密码'}
+                      className={INPUT_CLS}
+                    />
+                  </Field>
+                </div>
+              </div>
 
               <div className="flex flex-wrap gap-2">
                 <button
@@ -750,7 +848,7 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
         <Shield className="h-4 w-4 text-amber-400/70 mt-0.5 shrink-0" />
         <div className="text-[11px] text-amber-400/70 leading-relaxed">
           {isHermesProvider
-            ? 'Hermes API Server Key 仅保存在本机项目文件中, 不会发送到浏览器。当前会复用 Agent 在 Hermes 侧配置的完整工具权限，请仅在本机或可信内网使用。'
+            ? 'Hermes Gateway Key、Studio token 和登录密码仅保存在本机项目文件中, 不会发送到浏览器。Studio 会复用 profile 的完整工具权限，请仅在本机或可信内网使用。'
             : isCodexProvider
             ? 'Codex CLI 模式会复用本机已登录的 Codex 账户, 个股、财务、复盘等分析上下文会发送给 OpenAI/Codex。保存即表示确认仅在本机或可信内网使用。'
             : 'API Key 仅保存在本机项目文件中, 不会上传到任何服务器。请妥善保管。'}
@@ -777,7 +875,7 @@ export function SettingsAIPanel({ highlight }: { highlight?: string } = {}) {
             <h3 className="text-sm font-medium text-foreground mb-2">清空 AI 配置</h3>
             <p className="text-xs text-secondary mb-5 leading-relaxed">
               {isHermesProvider
-                ? '这会清空 Hermes Gateway 地址、API Server Key 和模型，但不会影响其他 AI Provider 的配置。'
+                ? '这会清空 Hermes Gateway、Studio 连接凭据和模型，但不会影响其他 AI Provider 的配置。'
                 : '这会清空已保存的 provider、API Key、API 地址、模型和 Codex CLI 命令。之后可以重新配置。'}
             </p>
             <div className="flex items-center justify-end gap-2">

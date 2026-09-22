@@ -12,6 +12,7 @@ export interface StockChatMessage extends ApiStockChatMessage {
 export interface StockChatConversation {
   symbol: string
   snapshot: StockChatSnapshotV1
+  studioSessionId?: string
   messages: StockChatMessage[]
   phase: StockChatPhase
   error: string
@@ -62,6 +63,7 @@ function persist() {
       .map(conversation => ({
         symbol: conversation.symbol,
         snapshot: conversation.snapshot,
+        studioSessionId: conversation.studioSessionId,
         messages: conversation.messages.slice(-MAX_MESSAGES),
         phase: conversation.phase,
         error: conversation.error,
@@ -125,6 +127,7 @@ function hydrate() {
       conversations.set(raw.symbol, {
         symbol: raw.symbol,
         snapshot: raw.snapshot,
+        studioSessionId: typeof raw.studioSessionId === 'string' ? raw.studioSessionId : undefined,
         messages: interrupted
           ? visibleMessages.map(item => item.role === 'assistant' && item === visibleMessages.at(-1) ? { ...item, incomplete: true } : item)
           : visibleMessages,
@@ -168,6 +171,7 @@ function createConversation(symbol: string, snapshot: StockChatSnapshotV1): Stoc
   const conversation: StockChatConversation = {
     symbol,
     snapshot,
+    studioSessionId: undefined,
     messages: [],
     phase: 'idle',
     error: '',
@@ -250,11 +254,19 @@ async function runStream(symbol: string): Promise<void> {
   }
 
   try {
-    for await (const event of api.stockChatStream(symbol, conversation.snapshot, providerMessages, controller.signal)) {
+    for await (const event of api.stockChatStream(
+      symbol,
+      conversation.snapshot,
+      providerMessages,
+      conversation.studioSessionId,
+      controller.signal,
+    )) {
       const current = getConversation(symbol)
       if (!current) return
       if (event.type === 'meta') {
         updateConversation(symbol, value => ({ ...value, historyTruncated: event.history_truncated === true }))
+      } else if (event.type === 'session') {
+        updateConversation(symbol, value => ({ ...value, studioSessionId: event.session_id }))
       } else if (event.type === 'delta') {
         updateConversation(symbol, value => ({
           ...value,

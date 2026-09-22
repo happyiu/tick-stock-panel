@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from app.api import stock_analysis as stock_analysis_api
 from app.services import stock_chat
+from app.services.hermes_studio import HermesStudioError
 
 
 def _snapshot(symbol: str = "600000.SH") -> stock_chat.StockChatSnapshot:
@@ -33,11 +34,16 @@ def _snapshot(symbol: str = "600000.SH") -> stock_chat.StockChatSnapshot:
     )
 
 
-def _request(*messages: dict[str, str], symbol: str = "600000.SH") -> stock_chat.StockChatRequest:
+def _request(
+    *messages: dict[str, str],
+    symbol: str = "600000.SH",
+    studio_session_id: str | None = None,
+) -> stock_chat.StockChatRequest:
     return stock_chat.StockChatRequest(
         symbol=symbol,
         snapshot=_snapshot(symbol),
         messages=list(messages),
+        studio_session_id=studio_session_id,
     )
 
 
@@ -71,11 +77,6 @@ def test_prepare_stock_chat_is_hermes_only(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_chat_route_rejects_non_hermes_without_calling_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(stock_chat, "current_ai_provider", lambda: "openai_compat")
-
-    def fail_if_called(*_args, **_kwargs):
-        raise AssertionError("generic or Hermes upstream must not be called")
-
-    monkeypatch.setattr(stock_chat, "hermes_stream_chat", fail_if_called)
     with _client() as client:
         response = client.post(
             "/api/stock-analysis/chat/stream",
@@ -90,21 +91,20 @@ def test_chat_route_streams_meta_delta_and_done(monkeypatch: pytest.MonkeyPatch)
         stock_analysis_api,
         "prepare_stock_chat",
         lambda _req: (
-            [{"role": "system", "content": "固定提示"}, {"role": "user", "content": "你好"}],
+            "固定提示",
             {
                 "meta": {
                     "type": "meta",
                     "provider": "hermes_agent",
-                    "model": "hermes-agent",
+                    "transport": "studio_chat_run",
                     "symbol": "600000.SH",
                     "period": "1d",
                     "as_of": "2026-09-12",
                     "history_truncated": False,
                     "heartbeat_seconds": 15,
                 },
-                "gateway_url": "http://hermes.example",
-                "api_key": "secret",
-                "model": "hermes-agent",
+                "session_id": None,
+                "profile": "seekhub",
             },
         ),
     )
@@ -126,86 +126,71 @@ def test_chat_route_streams_meta_delta_and_done(monkeypatch: pytest.MonkeyPatch)
     assert "secret" not in response.text
 
 
-def test_prepare_stock_chat_keeps_roles_and_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_prepare_stock_chat_builds_first_studio_turn(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(stock_chat, "current_ai_provider", lambda: stock_chat.HERMES_AGENT_PROVIDER)
-    monkeypatch.setattr(stock_chat, "current_hermes_gateway_url", lambda: "http://hermes.example")
-    monkeypatch.setattr(stock_chat, "current_hermes_key", lambda: "secret")
-    monkeypatch.setattr(stock_chat, "current_hermes_model", lambda: "hermes-agent")
-    monkeypatch.setattr(stock_chat, "current_ai_context_window", lambda: 20_000)
-    monkeypatch.setattr(stock_chat, "current_ai_max_output_tokens", lambda: 2_000)
+    monkeypatch.setattr(stock_chat, "studio_configured", lambda: True)
+    monkeypatch.setattr(stock_chat, "current_studio_url", lambda: "http://studio.example")
+    monkeypatch.setattr(stock_chat, "current_studio_profile", lambda: "seekhub")
 
-    messages, prepared = stock_chat.prepare_stock_chat(_request(
-        {"role": "user", "content": "第一问"},
-        {"role": "assistant", "content": "第一答"},
-        {"role": "user", "content": "第二问"},
-    ))
+    input_text, prepared = stock_chat.prepare_stock_chat(_request({"role": "user", "content": "第一问"}))
 
-    assert [item["role"] for item in messages] == ["system", "system", "user", "assistant", "user"]
-    assert "600000.SH" in messages[1]["content"]
-    assert messages[-1]["content"] == "第二问"
+    assert "600000.SH" in input_text
+    assert "第一问" in input_text
     assert prepared["meta"]["provider"] == stock_chat.HERMES_AGENT_PROVIDER
-    assert "api_key" not in prepared["meta"]
+    assert prepared["meta"]["transport"] == "studio_chat_run"
+    assert prepared["session_id"] is None
 
 
-def test_prepare_stock_chat_trims_old_complete_turns(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_prepare_stock_chat_continuation_sends_only_latest_question(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(stock_chat, "current_ai_provider", lambda: stock_chat.HERMES_AGENT_PROVIDER)
-    monkeypatch.setattr(stock_chat, "current_hermes_gateway_url", lambda: "http://hermes.example")
-    monkeypatch.setattr(stock_chat, "current_hermes_key", lambda: "secret")
-    monkeypatch.setattr(stock_chat, "current_hermes_model", lambda: "hermes-agent")
-    monkeypatch.setattr(stock_chat, "current_ai_context_window", lambda: 100)
-    monkeypatch.setattr(stock_chat, "current_ai_max_output_tokens", lambda: 20)
-    monkeypatch.setattr(stock_chat, "estimate_input_tokens", lambda messages: 90 if len(messages) > 3 else 10)
+    monkeypatch.setattr(stock_chat, "studio_configured", lambda: True)
+    monkeypatch.setattr(stock_chat, "current_studio_url", lambda: "http://studio.example")
+    monkeypatch.setattr(stock_chat, "current_studio_profile", lambda: "seekhub")
 
-    req = _request(
+    input_text, prepared = stock_chat.prepare_stock_chat(_request(
         {"role": "user", "content": "旧问题 " + "x" * 80},
         {"role": "assistant", "content": "旧回答 " + "x" * 80},
         {"role": "user", "content": "新问题"},
-    )
-    messages, prepared = stock_chat.prepare_stock_chat(req)
-    assert messages[-1]["content"] == "新问题"
-    assert prepared["meta"]["history_truncated"] is True
+        studio_session_id="studio-session-1",
+    ))
+    assert input_text == "新问题"
+    assert prepared["session_id"] == "studio-session-1"
+    assert prepared["meta"]["history_truncated"] is False
 
 
 @pytest.mark.asyncio
 async def test_stream_stock_chat_emits_heartbeat_and_delta(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_stream(*_args, **_kwargs):
+    async def fake_run(*_args, **_kwargs):
         await asyncio.sleep(0.03)
-        yield "回答"
+        return {"session_id": "studio-session-1", "output": "回答"}
 
-    monkeypatch.setattr(stock_chat, "hermes_stream_chat", fake_stream)
+    monkeypatch.setattr(stock_chat, "hermes_studio_run_chat", fake_run)
     events = [
         event
         async for event in stock_chat.stream_stock_chat(
-            [{"role": "user", "content": "你好"}],
-            gateway_url="http://hermes.example",
-            api_key="secret",
-            model="hermes-agent",
+            "你好",
             heartbeat_seconds=0.005,
-            upstream_timeout=0.1,
         )
     ]
 
     assert any(event["type"] == "heartbeat" for event in events)
+    assert {event.get("session_id") for event in events if event["type"] == "session"} == {"studio-session-1"}
     assert {event.get("content") for event in events if event["type"] == "delta"} == {"回答"}
     assert events[-1] == {"type": "done"}
 
 
 @pytest.mark.asyncio
 async def test_stream_stock_chat_converts_upstream_error_to_event(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_stream(*_args, **_kwargs):
-        raise RuntimeError("Hermes Gateway 请求超时: secret")
-        yield "never"
+    async def fake_run(*_args, **_kwargs):
+        raise HermesStudioError("Hermes Studio 请求失败", status_code=409)
 
-    monkeypatch.setattr(stock_chat, "hermes_stream_chat", fake_stream)
+    monkeypatch.setattr(stock_chat, "hermes_studio_run_chat", fake_run)
     events = [
         event
         async for event in stock_chat.stream_stock_chat(
-            [{"role": "user", "content": "你好"}],
-            gateway_url="http://hermes.example",
-            api_key="secret",
-            model="hermes-agent",
+            "你好",
             heartbeat_seconds=0.01,
         )
     ]
     assert events[-1]["type"] == "error"
-    assert "secret" not in str(events)
+    assert events[-1]["status_code"] == 409

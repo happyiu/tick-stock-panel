@@ -617,10 +617,13 @@ export type StockChatStreamEvent =
       as_of?: string | null
       history_truncated?: boolean
       heartbeat_seconds?: number
+      transport?: string
+      profile?: string
     }
   | { type: 'delta'; content: string }
+  | { type: 'session'; session_id: string }
   | { type: 'heartbeat'; ts?: number }
-  | { type: 'error'; message: string }
+  | { type: 'error'; message: string; status_code?: number }
   | { type: 'done' }
 
 /** 兼容日K增量刷新路径的别名；完整日K响应包含图表状态和技术评分字段。 */
@@ -2060,6 +2063,13 @@ export interface SettingsState {
   has_hermes_key?: boolean
   hermes_configured?: boolean
   hermes_model?: string
+  hermes_studio_url?: string
+  hermes_studio_profile?: string
+  hermes_studio_token_masked?: string
+  has_hermes_studio_token?: boolean
+  hermes_studio_username?: string
+  has_hermes_studio_password?: boolean
+  hermes_studio_configured?: boolean
 }
 
 export interface HermesProbeResult {
@@ -2100,6 +2110,13 @@ export interface HermesSettingsResult extends HermesProbeResult {
   has_hermes_key?: boolean
   hermes_configured?: boolean
   hermes_model?: string
+  hermes_studio_url?: string
+  hermes_studio_profile?: string
+  hermes_studio_token_masked?: string
+  has_hermes_studio_token?: boolean
+  hermes_studio_username?: string
+  has_hermes_studio_password?: boolean
+  hermes_studio_configured?: boolean
 }
 
 /** 保存 TickFlow Key 的响应(先探后存) */
@@ -2733,7 +2750,7 @@ export const api = {
       body: JSON.stringify(config),
     }),
   /** 探测成功后保存 Hermes 并启用 */
-  saveHermesSettings: (config: { gateway_url: string; api_key?: string; model?: string; max_output_tokens?: number; context_window?: number }) =>
+  saveHermesSettings: (config: { gateway_url: string; api_key?: string; model?: string; studio_url?: string; studio_profile?: string; studio_token?: string; studio_username?: string; studio_password?: string; max_output_tokens?: number; context_window?: number }) =>
     request<HermesSettingsResult>('/api/settings/hermes', {
       method: 'POST',
       body: JSON.stringify(config),
@@ -4176,6 +4193,7 @@ export const api = {
     symbol: string,
     snapshot: StockChatSnapshotV1,
     messages: StockChatMessage[],
+    studioSessionId?: string,
     signal?: AbortSignal,
   ): AsyncGenerator<StockChatStreamEvent> {
     let res: Response
@@ -4183,7 +4201,7 @@ export const api = {
       res = await fetch('/api/stock-analysis/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbol, snapshot, messages }),
+        body: JSON.stringify({ symbol, snapshot, messages, studio_session_id: studioSessionId }),
         signal,
       })
     } catch (error) {

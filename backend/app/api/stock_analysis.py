@@ -201,17 +201,16 @@ async def analyze_stock(request: Request, req: AnalyzeRequest):
 async def stock_chat_stream(req: StockChatRequest):
     """Hermes-only multi-turn detail-page chat (NDJSON with heartbeats)."""
     try:
-        provider_messages, prepared = prepare_stock_chat(req)
+        studio_input, prepared = prepare_stock_chat(req)
     except StockChatError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
     async def stream_gen():
         yield json.dumps(prepared["meta"], ensure_ascii=False) + "\n"
         async for event in stream_stock_chat(
-            provider_messages,
-            gateway_url=prepared["gateway_url"],
-            api_key=prepared["api_key"],
-            model=prepared["model"],
+            studio_input,
+            session_id=prepared["session_id"],
+            profile=prepared["profile"],
         ):
             yield json.dumps(event, ensure_ascii=False) + "\n"
 
