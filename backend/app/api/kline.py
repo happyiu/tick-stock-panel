@@ -129,6 +129,21 @@ def _annotate_bar_closure(rows: list[dict], period: str, requested_end: date) ->
     return result
 
 
+def _json_safe(obj):
+    """把 nan/inf 换成 None, 保证 JSON 合法。
+
+    gzip 路径原先 allow_nan=True, 会写出前端 JSON.parse 不能吃的 NaN/Infinity;
+    未压缩路径走 Starlette allow_nan=False, 遇到非有限浮点整段 500。
+    """
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    return obj
+
+
 def _gzip_payload(request: Request, payload: dict, *, pref_key: str) -> dict | Response:
     """大 JSON 响应的传输压缩: 偏好开启 + 客户端接受 gzip + 响应超阈值才压。
 
@@ -149,10 +164,11 @@ def _gzip_payload(request: Request, payload: dict, *, pref_key: str) -> dict | R
             compress_on = bool(getter())
         except Exception:  # 偏好读取异常按不压缩返回原样
             compress_on = False
+    payload = _json_safe(payload)
     headers = getattr(request, "headers", None) or {}
     if compress_on and "gzip" in (headers.get("accept-encoding") or ""):
         raw = json.dumps(
-            payload, ensure_ascii=False, separators=(",", ":"), allow_nan=True,
+            payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
             default=lambda o: o.isoformat() if hasattr(o, "isoformat") else str(o),
         ).encode()
         if len(raw) > 1024:
@@ -973,9 +989,12 @@ def get_daily_batch(request: Request, body: dict):
 
     repo = request.app.state.repo
     import polars as pl
-    from datetime import date, timedelta
+    from datetime import timedelta
 
-    end = date.today()
+    # 窗口右端必须是北京今天: QuoteService 当日 flush 的分区日期是北京交易日。
+    # 美西主机整个 A 股交易时段、UTC 主机北京 00:00-08:00, date.today() 比北京早一天,
+    # 迷你蜡烛会把当日实时 K 排除在窗口外。
+    end = cn_today()
     start = end - timedelta(days=days * 2)  # 多取一些确保交易日够
 
     cols = ["symbol", "date", "open", "high", "low", "close", "volume"]
@@ -1584,6 +1603,23 @@ async def sync_minute(request: Request):
 
     body 可选: { "days": int } — 指定拉取天数 (不传则用偏好设置)。
     """
+    # 可选 body: { "days": int, "extend": bool }
+    # days: 拉取天数; extend: 向前扩展模式 (从最早数据往前补)
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        pass
+    return await trigger_minute_sync(
+        request.app.state.repo,
+        request.app.state.capabilities,
+        override_days=body.get("days"),
+        extend_flag=body.get("extend"),
+    )
+
+
+async def trigger_minute_sync(repo, capset, *, override_days=None, extend_flag=None) -> dict:
+    """触发分钟K同步/向前扩展后台任务(HTTP 端点与 AI 助手共用同一条触发路径)。"""
     import asyncio
 
     from app.services.pipeline_jobs import JobCancelledError, job_store, release_run_slot, run_with_capacity, try_acquire_run_slot
@@ -1592,22 +1628,8 @@ async def sync_minute(request: Request):
     from app.tickflow.capabilities import Cap
     from app.tickflow.pools import get_pool
 
-    repo = request.app.state.repo
-    capset = request.app.state.capabilities
-
     if not _minute_allowed(capset):
         raise HTTPException(status_code=403, detail="需要 Pro+ 权限")
-
-    # 可选 body: { "days": int, "extend": bool }
-    # days: 拉取天数; extend: 向前扩展模式 (从最早数据往前补)
-    body = {}
-    try:
-        body = await request.json()
-    except Exception:  # noqa: BLE001
-        pass
-    override_days = body.get("days")
-    extend_flag = body.get("extend")
-
     # 分钟K全市场同步是长任务(数据量是日K的 ~240 倍),用更宽松的卡死阈值
     job_id, is_new = job_store.create(long_running=True)
     if not is_new:

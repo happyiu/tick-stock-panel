@@ -22,6 +22,11 @@ def _load_doc(name: str) -> str:
 DIRECTION_CN = {"long": "做多", "short": "做空", "monitor": "监控"}
 
 
+def _format_basic_filter(basic_filter: dict) -> str:
+    """dict → Python 字面量单行 (True/False/None 保持 Python 语法, 供 AI 直接抄进 META)。"""
+    return repr(dict(basic_filter))
+
+
 def build_step1(
     name: str,
     description: str,
@@ -36,6 +41,7 @@ def build_step1(
 
     注意: 生成规范已在 ai_generator.py 的 system prompt 中加载，
     此处只拼用户输入以降低网关超时概率。
+    basic_filter: 用户「默认基础参数」(策略页设置); None = 不约束, AI 自行默认。
     """
     id_line = f"\n策略ID（必须使用此ID）：{strategy_id}" if strategy_id else ""
     selected_assets = [
@@ -60,7 +66,7 @@ def build_step1(
 适用资产：{asset_label}
 适用周期：{timeframe_label}
 执行后端：{execution_backend}
-策略规则：
+{bf_line}策略规则：
 {rules}
 
 输出要求：

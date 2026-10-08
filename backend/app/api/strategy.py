@@ -12,7 +12,7 @@ import re
 from dataclasses import asdict
 from datetime import date
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse

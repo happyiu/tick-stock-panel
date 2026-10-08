@@ -82,6 +82,19 @@ export interface StockPreviewDecisionSectionsV1 {
   showInvalidationLine: boolean
 }
 
+export interface DefaultStrategyBasicFilter {
+  price_min: number | null
+  price_max: number | null
+  float_cap_min: number | null
+  float_cap_max: number | null
+  amount_min: number | null
+  amount_max: number | null
+  turnover_min: number | null
+  turnover_max: number | null
+  exclude_st: boolean
+  boards: string[]
+}
+
 export interface StockPreviewChanlunOverlayConfig {
   enabled: boolean
   fractals: boolean
@@ -208,6 +221,9 @@ export const storage = {
   /** Screener 卡片尺寸 */
   screenerCardSize:     kv<string>('screener-card-size'),
 
+  /** 界面整体缩放 (0.8–1.5, 设置→系统→界面缩放; 桌面客户端无浏览器缩放快捷键) */
+  pageZoom:             kv<number>('tf-page-zoom'),
+
   /** 连板梯队板块筛选 */
   limitLadderBoard:     kv<string[]>('limit-ladder-board-filter'),
 
@@ -225,6 +241,9 @@ export const storage = {
 
   /** 策略创建草稿（新建专用） */
   strategyDraft: kv<{ name: string; description: string; direction: string; style?: string; rules: string; code: string; step: number; strategyId: string; source?: 'ai' | 'custom'; assetTypes?: ('stock' | 'etf')[]; timeframes?: ('1d' | '1w' | '30m' | '1m')[] } | null>('strategy-draft'),
+
+  /** 新建策略默认基础过滤参数 (策略页「默认基础参数」设置; null=未自定义, 用内置默认) */
+  defaultStrategyBasicFilter: kv<DefaultStrategyBasicFilter | null>('default-strategy-basic-filter'),
 
   /** 策略修改草稿（AI修改专用，不影响创建按钮） */
   strategyModify: kv<{ name: string; description: string; direction: string; style?: string; rules: string; code: string; step: number; strategyId: string; source?: 'ai' | 'custom'; assetTypes?: ('stock' | 'etf')[]; timeframes?: ('1d' | '1w' | '30m' | '1m')[] } | null>('strategy-modify'),

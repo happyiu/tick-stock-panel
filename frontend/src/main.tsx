@@ -1,8 +1,10 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { RouterProvider } from 'react-router-dom'
-import { QueryClient, QueryClientProvider, QueryCache } from '@tanstack/react-query'
+import { QueryClient, QueryCache } from '@tanstack/react-query'
+import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client'
 import { initializeFrontendExtensions } from './extensions/bootstrap'
+import { createAppPersister, PERSIST_BUSTER, shouldPersistQuery } from './lib/queryPersist'
 import { applyPageSize, getPageSize } from './lib/theme'
 import './index.css'
 
@@ -51,9 +53,18 @@ async function bootstrap() {
   const { router } = await import('./router')
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
-      <QueryClientProvider client={queryClient}>
+      <PersistQueryClientProvider
+        client={queryClient}
+        persistOptions={{
+          persister: createAppPersister(),
+          buster: PERSIST_BUSTER,
+          // 恢复超过 1 天的缓存直接丢弃 (慢变族一天内必然后台刷新过)
+          maxAge: 24 * 60 * 60 * 1000,
+          dehydrateOptions: { shouldDehydrateQuery: shouldPersistQuery },
+        }}
+      >
         <RouterProvider router={router} />
-      </QueryClientProvider>
+      </PersistQueryClientProvider>
     </React.StrictMode>,
   )
 }

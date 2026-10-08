@@ -90,7 +90,7 @@ function Section({ icon: Icon, title, accent, defaultOpen = true, children, extr
 
 
 // ===== 区间字段（最小 ~ 最大） =====
-function RangeField({ label, minVal, maxVal, onMinChange, onMaxChange, unit, step }: {
+export function RangeField({ label, minVal, maxVal, onMinChange, onMaxChange, unit, step }: {
   label: string
   minVal: any
   maxVal: any
@@ -125,7 +125,7 @@ function RangeField({ label, minVal, maxVal, onMinChange, onMaxChange, unit, ste
 }
 
 // 板块标签
-const ALL_BOARDS = ['沪主板', '深主板', '创业板', '科创板', '北交所']
+export const ALL_BOARDS = ['沪主板', '深主板', '创业板', '科创板', '北交所']
 
 // 策略参数字段
 function ParamField({ def, value, onChange }: {
@@ -167,6 +167,20 @@ function ParamField({ def, value, onChange }: {
       </div>
     )
   }
+  if (def.type === 'string') {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-[11px] text-secondary w-16 shrink-0 text-right">{def.label}</span>
+        <input
+          type="text"
+          value={value ?? def.default ?? ''}
+          onChange={e => onChange(e.target.value)}
+          className="flex-1 min-w-0 px-1.5 py-0.5 rounded bg-base border border-border text-[11px] font-mono text-foreground focus:outline-none focus:border-accent/50"
+        />
+      </div>
+    )
+  }
+
 
   return (
     <div className="flex items-center gap-2">
