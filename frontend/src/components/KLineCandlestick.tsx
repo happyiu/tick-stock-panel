@@ -2,17 +2,22 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { dispose, init, registerIndicator, registerOverlay, type Chart, type Crosshair, type KLineData } from 'klinecharts'
 import { chartTheme, useTheme } from '@/lib/theme'
 import { fmtAssetPrice, fmtPct, priceDigits } from '@/lib/format'
-import { EChartsCandlestick, type CandlestickProps } from './EChartsCandlestick'
+import { EChartsCandlestick, SUB_CHARTS, type CandlestickProps } from './EChartsCandlestick'
 import {
-  chartIndicators, classifyBarUpdate, COLORS, SUB_CHARTS, toChartBars,
+  chartIndicators, classifyBarUpdate, COLORS, toChartBars,
   type ChartBar,
 } from '@/lib/kline-chart'
 import { annotationTemplate, ANNOTATION_GROUP, buildAnnotations } from '@/lib/kline-chart-overlays'
+import { formulaHeaderHeight, formulaIndicators, formulaName } from '@/lib/kline-chart-formulas'
+import { ANGEL_DEVIL_MA, calculateAngelDevil } from '@/lib/angelDevil'
+import { BOLL2_LINES, calculateBoll2 } from '@/lib/boll2'
+import { storage } from '@/lib/storage'
 
 export { SUB_CHARTS, OVERLAY_INDICATORS } from './EChartsCandlestick'
 export type { ChartMarker, ChartPriceLine, ChartRange, OHLC, VolumeCompareConfig } from '@/lib/kline-chart'
 
 chartIndicators.forEach(indicator => registerIndicator(indicator))
+formulaIndicators.forEach(indicator => registerIndicator(indicator))
 registerOverlay(annotationTemplate)
 
 const EMPTY: never[] = []
@@ -21,10 +26,11 @@ const DEFAULT_COMPARE = { enabled: true, days: 1 }
 export function usesLegacyChart(props: CandlestickProps): boolean {
   return Boolean(props.hideCurrentDate
     || (props.chanlunAnalysis && props.chanlunOverlay?.enabled)
-    || props.activeIndicators?.some(key => !['vol', 'macd', 'rsi', 'kdj', 'boll'].includes(key)))
+    || props.activeIndicators?.some(key => !['vol', 'macd', 'rsi', 'kdj', 'boll',
+      'angel-devil', 'boll2', 'kd-divergence', 'kd-enhanced', 'etf-swing-v2', 'bull-bear-trend-v2'].includes(key)))
 }
 
-/** 分阶段迁移：dev 的公式、缠论和隐藏日期调试继续走已经验证的原实现。 */
+/** 缠论和隐藏日期调试仍保留原实现，其余指标共用 KLineChart。 */
 export function KLineCandlestick(props: CandlestickProps) {
   return usesLegacyChart(props) ? <EChartsCandlestick {...props} /> : <BasicKLineCandlestick {...props} />
 }
@@ -49,6 +55,10 @@ function BasicKLineCandlestick({
   const pushBar = useRef<((bar: KLineData) => void) | null>(null)
   const fitInitialView = useRef(true)
   const restoreView = useRef<{ spacing: number; timestamp: number } | null>(null)
+  const subKeysRef = useRef<string[]>([])
+  const headerHeights = useRef(new Map<string, number>())
+  const paneHeights = useRef(new Map<string, number>())
+  const [minimumChartHeight, setMinimumChartHeight] = useState(150)
   const callbacks = useRef({ onDateClick, onPriceDoubleClick, visibleBars })
   callbacks.current = { onDateClick, onPriceDoubleClick, visibleBars }
   const precision = priceDigits(assetType)
@@ -59,8 +69,21 @@ function BasicKLineCandlestick({
   const row = bars[infoIndex]
   const previous = bars[infoIndex - 1]
   const subKey = activeIndicators.filter(key => SUB_CHARTS.some(def => def.key === key)).join(',')
+  subKeysRef.current = subKey.split(',').filter(Boolean)
   const boll = activeIndicators.includes('boll')
-  const chartHeight = Math.max(height - (showInfoBar ? 40 : 0), 150 + subKey.split(',').filter(Boolean).length * 100)
+  const angel = activeIndicators.includes('angel-devil')
+  const boll2 = activeIndicators.includes('boll2')
+  const angelRows = useMemo(() => angel ? calculateAngelDevil(bars.map(b => b.close)) : null, [bars, angel])
+  const boll2Rows = useMemo(() => boll2 ? calculateBoll2(bars.map(b => b.close)) : null, [bars, boll2])
+  const candleTrends = useMemo(() => new Map(bars.map((bar, i) => [bar.timestamp, angelRows?.[i]?.bull])), [bars, angelRows])
+  const chartHeight = Math.max(height - (showInfoBar ? 40 : 0), minimumChartHeight)
+  const fitPaneHeights = () => {
+    // 恢复较大的副图或窄屏提示换行时，扩展画布，给主图留下120px。
+    setMinimumChartHeight(142 + subKeysRef.current.reduce((total, key) => {
+      const def = SUB_CHARTS.find(d => d.key === key)!
+      return total + (paneHeights.current.get(key) ?? def.height) + (headerHeights.current.get(key) ?? 28) + 4
+    }, 0))
+  }
 
   // 图表消费现有查询缓存，不另建请求或 SSE 订阅。
   useEffect(() => {
@@ -72,6 +95,14 @@ function BasicKLineCandlestick({
     })
     if (!chart) return
     chartRef.current = chart
+    const savedHeights = storage.stockPreviewSubChartHeights.get({})
+    if (savedHeights && typeof savedHeights === 'object' && !Array.isArray(savedHeights)) {
+      for (const { key } of SUB_CHARTS) {
+        const value = savedHeights[key]
+        if (typeof value === 'number' && Number.isFinite(value) && value >= 50 && value <= 2000) paneHeights.current.set(key, value)
+      }
+    }
+    chart.setPaneOptions({ id: 'candle_pane', minHeight: 120 })
     let alive = true
     let frame = 0
     const fitView = () => {
@@ -86,6 +117,8 @@ function BasicKLineCandlestick({
     // 右侧分时在日K就绪后才展开，首次布局宽度会再次变化。
     const observer = new ResizeObserver(() => {
       chart.resize()
+      for (const key of subKeysRef.current) layoutSubPane(chart, key, element.clientWidth, headerHeights.current, paneHeights.current)
+      fitPaneHeights()
       if (!userInteracted.current) fitView()
     })
     observer.observe(element)
@@ -100,8 +133,22 @@ function BasicKLineCandlestick({
       const bar = event?.dataIndex != null ? barsRef.current[event.dataIndex] : undefined
       if (bar) callbacks.current.onDateClick?.(bar.date)
     }
+    const onPaneDrag = () => {
+      userInteracted.current = true
+      // 一次拖动会同时改变相邻两块区域，保存所有副图的绘图区高度。
+      for (const key of subKeysRef.current) {
+        const options = chart.getPaneOptions(`tsp_${key.replaceAll('-', '_')}`)
+        const header = headerHeights.current.get(key)
+        if (options && !Array.isArray(options) && header != null && Number.isFinite(options.height)) {
+          paneHeights.current.set(key, Math.max(50, options.height - header))
+        }
+      }
+      storage.stockPreviewSubChartHeights.set(Object.fromEntries(paneHeights.current))
+      fitPaneHeights()
+    }
     chart.subscribeAction('onCrosshairChange', onCrosshair)
     chart.subscribeAction('onCandleBarClick', onCandleClick)
+    chart.subscribeAction('onPaneDrag', onPaneDrag)
     chart.setSymbol({ ticker: previousSymbol.current || 'daily', pricePrecision: precision, volumePrecision: 0 })
     chart.setPeriod(chartPeriod(previousPeriod.current))
     chart.setDataLoader({
@@ -131,8 +178,11 @@ function BasicKLineCandlestick({
       pushBar.current = null
       chartRef.current = null
       previousRef.current = []
+      headerHeights.current.clear()
+      paneHeights.current.clear()
       chart.unsubscribeAction('onCrosshairChange', onCrosshair)
       chart.unsubscribeAction('onCandleBarClick', onCandleClick)
+      chart.unsubscribeAction('onPaneDrag', onPaneDrag)
       dispose(element)
     }
   }, [])
@@ -179,52 +229,57 @@ function BasicKLineCandlestick({
     chart.setStyles({
       grid: { horizontal: { color: ct.grid }, vertical: { show: false } },
       candle: {
-        type: 'candle_solid', bar: {
-          upColor: COLORS.bull, downColor: COLORS.bear, noChangeColor: COLORS.bull,
-          upBorderColor: COLORS.bull, downBorderColor: COLORS.bear, noChangeBorderColor: COLORS.bull,
-          upWickColor: COLORS.bull, downWickColor: COLORS.bear, noChangeWickColor: COLORS.bull,
+        type: 'candle_solid', bar: ({ current }) => {
+          const bull = current ? candleTrends.get(current.timestamp) : null
+          if (bull != null) return { color: bull ? 'transparent' : '#00FFFF', borderColor: bull ? '#FF0000' : '#00DDFF', wickColor: bull ? '#FF0000' : '#00DDFF' }
+          const color = current && current.close < current.open ? COLORS.bear : COLORS.bull
+          return { color, borderColor: color, wickColor: color }
         },
         tooltip: { showRule: 'none' },
         priceMark: { high: { show: false }, low: { show: false }, last: { show: false } },
       },
-      indicator: { tooltip: { legend: { color: ct.text, size: 10 }, title: { color: ct.text, size: 10 } } },
+      indicator: { tooltip: {
+        offsetTop: 2, offsetLeft: 4,
+        legend: { color: ct.text, size: 10, marginLeft: 0, marginRight: 8, marginTop: 1, marginBottom: 1 },
+        title: { color: ct.text, size: 10, marginLeft: 0, marginRight: 8, marginTop: 1, marginBottom: 1 },
+      } },
       xAxis: { tickText: { color: ct.text, size: 10 }, axisLine: { color: ct.border }, tickLine: { show: false } },
       yAxis: { tickText: { color: ct.text, size: 10 }, axisLine: { show: false }, tickLine: { show: false } },
-      separator: { color: ct.border, activeBackgroundColor: ct.grid },
+      separator: { size: 4, color: ct.border, activeBackgroundColor: ct.crosshair },
       crosshair: {
         horizontal: { line: { color: ct.crosshair }, text: { backgroundColor: ct.crosshairLabelBg, color: '#fff' } },
         vertical: { line: { color: ct.crosshair }, text: { backgroundColor: ct.crosshairLabelBg, color: '#fff' } },
       },
     })
-  }, [theme])
+  }, [theme, candleTrends])
 
   useEffect(() => {
     const chart = chartRef.current
     if (!chart) return
     const wanted = new Set([
-      ...(showMA ? ['MA'] : []), ...(boll ? ['BOLL'] : []),
-      ...subKey.split(',').filter(Boolean).map(key => key.toUpperCase()),
-    ])
+      ...(angel ? ['angel-devil'] : showMA ? ['ma'] : []), ...(boll ? ['boll'] : []), ...(boll2 ? ['boll2'] : []),
+      ...subKey.split(',').filter(Boolean),
+    ].map(formulaName))
     for (const indicator of chart.getIndicators()) {
-      if (!wanted.has(indicator.name.slice(4))) chart.removeIndicator({ id: indicator.id })
+      if (!wanted.has(indicator.name)) chart.removeIndicator({ id: indicator.id })
     }
-    for (const key of wanted) {
-      const name = `TSP_${key}`
+    for (const name of wanted) {
       const existing = chart.getIndicators({ name })[0]
+      const key = name.slice(4)
       const options = {
-        name, paneId: key === 'MA' || key === 'BOLL' ? 'candle_pane' : `tsp_${key.toLowerCase()}`,
-        ...(key === 'VOL' ? { extendData: volumeCompare.enabled, calcParams: [volumeCompare.days] } : {}),
+        name, paneId: ['MA', 'BOLL', 'ANGEL_DEVIL', 'BOLL2'].includes(key) ? 'candle_pane' : `tsp_${key.toLowerCase()}`,
+        ...(key === 'VOL' ? { extendData: volumeCompare.enabled, calcParams: [volumeCompare.days] }
+          : { extendData: { period } }),
       }
       if (existing) chart.overrideIndicator({ ...options, id: existing.id })
       else chart.createIndicator(options, true)
     }
     subKey.split(',').filter(Boolean).forEach((key, index) => {
-      const def = SUB_CHARTS.find(d => d.key === key)!
-      chart.setPaneOptions({ id: `tsp_${key}`, height: def.height + 20, minHeight: 50, order: index + 1, dragEnabled: true })
-      chart.overrideYAxis({ paneId: `tsp_${key}`, gap: { top: 28, bottom: 4 } })
+      layoutSubPane(chart, key, containerRef.current?.clientWidth ?? 600, headerHeights.current, paneHeights.current, index)
     })
+    fitPaneHeights()
     chart.resize()
-  }, [showMA, boll, subKey, volumeCompare.enabled, volumeCompare.days])
+  }, [showMA, angel, boll, boll2, subKey, volumeCompare.enabled, volumeCompare.days, period, theme])
 
   useEffect(() => {
     const chart = chartRef.current
@@ -281,16 +336,23 @@ function BasicKLineCandlestick({
               </>}
             </div>
             <div className="flex min-h-5 flex-wrap items-center gap-x-2.5">
-              {showMA && (['ma5', 'ma10', 'ma20', 'ma60'] as const).map(key => row[key] != null && (
+              {showMA && !angel && (['ma5', 'ma10', 'ma20', 'ma60'] as const).map(key => row[key] != null && (
                 <span key={key} style={{ color: COLORS[key] }}>{key.toUpperCase()}:{price(row[key])}</span>
               ))}
               {boll && row.boll_upper != null && <span style={{ color: '#E879F9' }}>BOLL:{price(row.boll_upper)}/{price(row.ma20)}/{price(row.boll_lower)}</span>}
+              {angelRows && ANGEL_DEVIL_MA.map(ma => angelRows[infoIndex]?.[ma.key] != null && (
+                <span key={ma.key} style={{ color: theme === 'light' ? ma.lightColor : ma.color }}>{ma.label}:{price(angelRows[infoIndex][ma.key])}</span>
+              ))}
+              {boll2Rows && BOLL2_LINES.map(line => boll2Rows[infoIndex]?.[line.key] != null && (
+                <span key={line.key} style={{ color: theme === 'light' ? line.lightColor : line.color }}>{line.key === 'mid' ? 'boll2 ' : ''}{line.label}:{price(boll2Rows[infoIndex][line.key])}</span>
+              ))}
             </div>
           </>}
         </div>
       )}
       <div ref={containerRef} data-kline-chart className="w-full" style={{ height: chartHeight }} onDoubleClick={doubleClick}
         onPointerDown={() => { userInteracted.current = true }} onWheel={() => { userInteracted.current = true }} />
+      {subKey && <div className="px-2 py-1 text-right text-[10px] text-muted">上下拖动副图之间的分隔线可调整高度</div>}
       {!bars.length && <div className="text-sm text-muted py-2">暂无有效日K数据</div>}
     </div>
   )
@@ -299,4 +361,15 @@ function BasicKLineCandlestick({
 function chartPeriod(period: NonNullable<CandlestickProps['period']>) {
   return period === '30m' ? { span: 30, type: 'minute' as const }
     : { span: 1, type: period === '1w' ? 'week' as const : period === '1mo' ? 'month' as const : 'day' as const }
+}
+
+function layoutSubPane(chart: Chart, key: string, width: number, headers: Map<string, number>, heights: Map<string, number>, order?: number) {
+  const paneId = `tsp_${key.replaceAll('-', '_')}`
+  const def = SUB_CHARTS.find(d => d.key === key)
+  if (!def || !chart.getDom(paneId)) return
+  const header = formulaHeaderHeight(key, chart.getSize(paneId, 'main')?.width ?? width)
+  if (order == null && headers.get(key) === header) return
+  headers.set(key, header)
+  chart.setPaneOptions({ id: paneId, height: (heights.get(key) ?? def.height) + header, minHeight: header + 50, ...(order == null ? {} : { order: order + 1 }), dragEnabled: true })
+  chart.overrideYAxis({ paneId, gap: { top: header, bottom: 4 } })
 }

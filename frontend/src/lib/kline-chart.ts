@@ -103,7 +103,7 @@ export function toChartBars(rows: OHLC[], compareDays: number): ChartBar[] {
     prefix.push(prefix[i] + volume)
     const previousAverage = i >= days ? (prefix[i] - prefix[i - days]) / days : 0
     const bar: ChartBar = {
-      ...row, timestamp, volume, turnover: finite(row.amount),
+      ...row, timestamp, volume, source_volume: finite(row.volume), turnover: finite(row.amount),
       vol_ma5: i >= 4 ? (prefix[i + 1] - prefix[i - 4]) / 5 : undefined,
       vol_ma10: i >= 9 ? (prefix[i + 1] - prefix[i - 9]) / 10 : undefined,
       volume_ratio: previousAverage > 0 ? volume / previousAverage : undefined,
@@ -216,4 +216,3 @@ export const chartIndicators: IndicatorTemplate<IndicatorValues>[] = definitions
     },
   } : {}),
 }))
-

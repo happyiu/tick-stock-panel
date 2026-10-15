@@ -125,6 +125,9 @@ export const storage = {
   /** 个股预览 K 线副图显隐与顺序 */
   stockPreviewSubCharts: kv<string[]>('stock_preview_sub_charts'),
 
+  /** KLineChart 各副图的绘图区高度，不含顶部提示区。 */
+  stockPreviewSubChartHeights: kv<Record<string, number>>('stock_preview_sub_chart_heights'),
+
   /** K线主图叠加指标，与已有副图设置独立保存。 */
   stockPreviewMainCharts: kv<string[]>('stock_preview_main_charts'),
 

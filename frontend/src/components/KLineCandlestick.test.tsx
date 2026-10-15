@@ -17,6 +17,9 @@ const state = vi.hoisted(() => ({
   bars: [] as KLineData[], symbol: '',
   indicators: [] as { name: string; id: string; paneId: string }[],
   frames: [] as FrameRequestCallback[],
+  panes: {} as Record<string, { height: number; minHeight?: number }>,
+  width: 800,
+  resize: null as (() => void) | null,
 }))
 const chart = vi.hoisted(() => ({
   setSymbol: vi.fn(), setPeriod: vi.fn(), setDataLoader: vi.fn(), resetData: vi.fn(),
@@ -26,7 +29,7 @@ const chart = vi.hoisted(() => ({
   subscribeAction: vi.fn(), unsubscribeAction: vi.fn(),
   setBarSpace: vi.fn(), setOffsetRightDistance: vi.fn(), scrollToRealTime: vi.fn(), scrollToTimestamp: vi.fn(),
   getBarSpace: () => ({ bar: 12 }), getVisibleRange: () => ({ from: 1, to: 3 }),
-  getSize: () => ({ width: 800, height: 300 }), getDom: vi.fn(),
+  getSize: vi.fn(), getPaneOptions: vi.fn(), getDom: vi.fn(),
   convertFromPixel: vi.fn(() => [{ value: 11.25 }]),
 }))
 const engine = vi.hoisted(() => ({ init: vi.fn(), dispose: vi.fn(), registerIndicator: vi.fn(), registerOverlay: vi.fn() }))
@@ -51,11 +54,13 @@ const load = () => state.loader?.getBars({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  localStorage.removeItem('stock_preview_sub_chart_heights')
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   state.handlers = {}; state.indicators = []; state.frames = []; state.loader = null; state.symbol = ''; state.bars = []
+  state.panes = {}; state.width = 800; state.resize = null
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { state.frames.push(cb); return state.frames.length })
   vi.stubGlobal('cancelAnimationFrame', vi.fn())
-  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
+  vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { state.resize = callback } observe() {} disconnect() {} })
   engine.init.mockReturnValue(chart)
   chart.subscribeAction.mockImplementation((name: string, cb: (value: unknown) => void) => { state.handlers[name] = cb })
   chart.setSymbol.mockImplementation(({ ticker }: { ticker: string }) => { state.symbol = ticker; if (state.loader) load() })
@@ -63,11 +68,20 @@ beforeEach(() => {
   chart.setDataLoader.mockImplementation((loader: DataLoader) => { state.loader = loader; load() })
   chart.resetData.mockImplementation(load)
   chart.getIndicators.mockImplementation((filter?: { name: string }) => state.indicators.filter(i => !filter || i.name === filter.name))
+  chart.getSize.mockImplementation((id: string) => ({ width: state.width, height: state.panes[id]?.height ?? 300 }))
+  chart.getPaneOptions.mockImplementation((id: string) => state.panes[id] ? { id, ...state.panes[id] } : null)
+  chart.setPaneOptions.mockImplementation(({ id, ...options }: { id: string; height?: number; minHeight?: number }) => {
+    state.panes[id] = { ...(state.panes[id] ?? { height: 100 }), ...options }
+  })
   chart.createIndicator.mockImplementation((indicator: { name: string; paneId: string }) => {
     const id = indicator.name
     state.indicators.push({ ...indicator, id }); return id
   })
-  chart.removeIndicator.mockImplementation(({ id }: { id: string }) => { state.indicators = state.indicators.filter(i => i.id !== id) })
+  chart.removeIndicator.mockImplementation(({ id }: { id: string }) => {
+    const paneId = state.indicators.find(i => i.id === id)?.paneId
+    state.indicators = state.indicators.filter(i => i.id !== id)
+    if (paneId && paneId !== 'candle_pane') delete state.panes[paneId]
+  })
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
   chart.getDom.mockReturnValue(host)
   vi.spyOn(host, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, width: 800, height: 300 } as DOMRect)
@@ -134,6 +148,51 @@ it('日期点击与主图双击使用当前回调，副图区不触发价格预�
   expect(onPriceDoubleClick).toHaveBeenCalledOnce()
 })
 
+it('拖动后的副图高度在切周期、指标重排/重开和窄屏布局时保留', async () => {
+  const indicators = ['vol', 'etf-swing-v2']
+  await render({ activeIndicators: indicators })
+  expect(state.panes.tsp_vol).toMatchObject({ height: 112, minHeight: 78 })
+  state.panes.tsp_vol.height = 180
+  state.panes.tsp_etf_swing_v2.height = 260
+  await act(async () => state.handlers.onPaneDrag({ paneId: '' }))
+  expect(JSON.parse(localStorage.getItem('stock_preview_sub_chart_heights')!)).toEqual({ vol: 152, 'etf-swing-v2': 220 })
+  chart.scrollToRealTime.mockClear()
+  await render({ activeIndicators: ['etf-swing-v2', 'vol'], period: '30m', volumeCompare: { enabled: false, days: 3 } })
+  expect(state.panes.tsp_vol.height).toBe(180)
+  expect(state.panes.tsp_etf_swing_v2.height).toBe(260)
+  await render({ activeIndicators: ['etf-swing-v2'], period: '30m' })
+  await render({ activeIndicators: indicators, period: '30m' })
+  expect(state.panes.tsp_vol.height).toBe(180)
+  state.width = 320
+  await act(async () => state.resize?.())
+  expect(state.panes.tsp_vol.height).toBe(180)
+  expect(state.panes.tsp_etf_swing_v2.height).toBe(300)
+  expect(state.panes.tsp_etf_swing_v2.minHeight).toBe(130)
+  expect(chart.setStyles).toHaveBeenCalledWith(expect.objectContaining({ separator: expect.objectContaining({ size: 4 }) }))
+  await act(async () => root.render(null))
+  expect(chart.unsubscribeAction).toHaveBeenCalledWith('onPaneDrag', expect.any(Function))
+  await render({ activeIndicators: indicators })
+  expect(state.panes.tsp_vol.height).toBe(180)
+  expect(state.panes.tsp_etf_swing_v2.height).toBe(300)
+})
+
+it('损坏或非法的副图高度设置使用默认值', async () => {
+  for (const value of [null, [], { vol: -1, 'etf-swing-v2': 'huge', unknown: 400 }, { vol: 1e10 }]) {
+    localStorage.setItem('stock_preview_sub_chart_heights', JSON.stringify(value))
+    await render({ activeIndicators: ['vol', 'etf-swing-v2'] })
+    expect(state.panes.tsp_vol.height).toBe(112)
+    expect(state.panes.tsp_etf_swing_v2.height).toBe(240)
+    await act(async () => root.render(null))
+  }
+})
+
+it('恢复较高副图时扩展画布，不挤掉主图', async () => {
+  localStorage.setItem('stock_preview_sub_chart_heights', JSON.stringify({ vol: 600, 'etf-swing-v2': 700 }))
+  await render({ activeIndicators: ['vol', 'etf-swing-v2'] })
+  expect((host.querySelector('[data-kline-chart]') as HTMLElement).style.height).toBe('1518px')
+  expect(state.panes.candle_pane.minHeight).toBe(120)
+})
+
 it('预警价线参与纵轴范围；无效数据有空态；卸载销毁图表', async () => {
   await render({ priceLines: [{ value: 50, label: '预警' }] })
   const createRange = chart.overrideYAxis.mock.calls.at(-1)![0].createRange
@@ -144,17 +203,42 @@ it('预警价线参与纵轴范围；无效数据有空态；卸载销毁图表'
   expect(engine.dispose).toHaveBeenCalledOnce()
 })
 
-it('dev 自定义公式和隐藏日期调试保留原引擎，普通指标使用新引擎', async () => {
+it('六个自定义公式迁入同一个新引擎，移除后不残留；隐藏日期仍走原实现', async () => {
   for (const key of ['angel-devil', 'boll2', 'kd-divergence', 'kd-enhanced', 'etf-swing-v2', 'bull-bear-trend-v2']) {
-    expect(usesLegacyChart({ data: rows(), activeIndicators: [key] })).toBe(true)
+    expect(usesLegacyChart({ data: rows(), activeIndicators: [key] })).toBe(false)
   }
-  await render({ activeIndicators: ['kd-enhanced', 'etf-swing-v2', 'bull-bear-trend-v2'] })
-  expect(host.querySelector('[data-legacy-chart]')?.getAttribute('data-indicators')).toBe('kd-enhanced,etf-swing-v2,bull-bear-trend-v2')
-  expect(engine.init).not.toHaveBeenCalled()
+  await render({ activeIndicators: ['angel-devil', 'boll2', 'kd-divergence', 'kd-enhanced', 'etf-swing-v2', 'bull-bear-trend-v2'] })
+  expect(host.querySelector('[data-legacy-chart]')).toBeNull()
+  expect(state.indicators.map(i => i.name)).toEqual(['TSP_ANGEL_DEVIL', 'TSP_BOLL2', 'TSP_KD_DIVERGENCE', 'TSP_KD_ENHANCED', 'TSP_ETF_SWING_V2', 'TSP_BULL_BEAR_TREND_V2'])
+  expect(chart.setPaneOptions).toHaveBeenCalledWith(expect.objectContaining({ id: 'tsp_kd_enhanced', order: 2 }))
+  expect(chart.setPaneOptions).toHaveBeenCalledWith(expect.objectContaining({ id: 'tsp_bull_bear_trend_v2', order: 4 }))
+  await render({ activeIndicators: ['bull-bear-trend-v2'], period: '30m' })
+  expect(chart.overrideIndicator).toHaveBeenCalledWith(expect.objectContaining({ name: 'TSP_BULL_BEAR_TREND_V2', extendData: { period: '30m' } }))
   await render({ activeIndicators: ['vol', 'macd'] })
+  expect(state.indicators.map(i => i.name)).toEqual(['TSP_MA', 'TSP_VOL', 'TSP_MACD'])
   expect(host.querySelector('[data-kline-chart]')).not.toBeNull()
+  expect(engine.init).toHaveBeenCalledOnce()
   await render({ hideCurrentDate: true })
   expect(host.querySelector('[data-legacy-chart]')?.getAttribute('data-hidden-date')).toBe('true')
+})
+
+it('天使魔鬼按原公式显示空心多头/实心空头，主图信息随悬停更新并在移除时恢复普通MA', async () => {
+  const data = [...Array<number>(30).fill(100), 110, 112, 90, 88, 105].map((close, i) => ({
+    date: new Date(Date.UTC(2026, 0, i + 1)).toISOString().slice(0, 10),
+    open: close + 1, close, high: close + 2, low: close - 2, ma5: 999,
+  }))
+  await render({ data, activeIndicators: ['angel-devil', 'boll2'] })
+  const barStyle = chart.setStyles.mock.calls.at(-1)![0].candle.bar
+  expect(barStyle({ current: state.bars[30] })).toMatchObject({ color: 'transparent', borderColor: '#FF0000' })
+  expect(barStyle({ current: state.bars[32] })).toMatchObject({ color: '#00FFFF', borderColor: '#00DDFF' })
+  expect(host.textContent).toContain('MA13:')
+  expect(host.textContent).not.toContain('MA5:999')
+  await act(async () => state.handlers.onCrosshairChange({ dataIndex: 20 }))
+  expect(host.textContent).toContain('boll2 BOLL:100.00')
+  await render({ data, activeIndicators: [] })
+  expect(host.textContent).not.toContain('MA13:')
+  expect(host.textContent).not.toContain('boll2')
+  expect(chart.setStyles.mock.calls.at(-1)![0].candle.bar({ current: state.bars[30] })).toMatchObject({ color: '#2D9B65' })
 })
 
 it('缠论开关决定原引擎路径，30分钟切换和ETF三位价格保留', async () => {
