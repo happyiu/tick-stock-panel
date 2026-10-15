@@ -6,9 +6,6 @@ import type {
   StockChatSnapshotV1,
 } from '@/lib/api'
 import type { ChanlunAnalysis, ChanlunCandidateSignal } from '@/lib/chanlun'
-import type { ElliottAnalysis, ElliottCount } from '@/lib/elliott'
-import type { PriceZone } from '@/lib/priceZones'
-import type { SignalRiskContext } from '@/lib/signalRisk'
 import { selectStockChatRows, stockChatBarKey } from './stockChatPrimitives'
 
 /** Inputs owned by StockPanel; the resulting snapshot is safe to persist/send. */
@@ -19,9 +16,6 @@ export interface StockChatSnapshotInput {
   selectedDate: string | null
   response: KlineResponse | undefined
   chanlun: ChanlunAnalysis
-  elliott: ElliottAnalysis
-  priceZones: PriceZone[]
-  signalRisk: SignalRiskContext[]
 }
 
 const BAR_KEYS = [
@@ -121,83 +115,6 @@ function compactChanlun(analysis: ChanlunAnalysis): Record<string, unknown> {
   }
 }
 
-function compactCount(count: ElliottCount | null): Record<string, unknown> | null {
-  if (!count) return null
-  return {
-    label: count.label,
-    degree: count.degree,
-    family: count.family,
-    direction: count.direction,
-    currentWave: count.currentWave,
-    stage: count.stage,
-    pivots: count.pivots.slice(-8).map(pivot => compact(pivot, ['label', 'type', 'eventTime', 'confirmedAt', 'availableAt', 'price', 'state'])),
-    supportSummary: count.supportSummary,
-    confirmation: count.confirmation,
-    invalidation: count.invalidation,
-    recountConditions: count.recountConditions,
-    nextObservation: count.nextObservation,
-  }
-}
-
-function compactElliott(analysis: ElliottAnalysis): Record<string, unknown> {
-  return {
-    schema: analysis.schema,
-    ruleVersion: analysis.ruleVersion,
-    period: analysis.period,
-    asOf: analysis.asOf,
-    availableAt: analysis.availableAt,
-    priceBasis: analysis.priceBasis,
-    definitionMode: analysis.definitionMode,
-    dataQuality: analysis.dataQuality,
-    status: analysis.status,
-    window: analysis.window,
-    primaryCount: compactCount(analysis.primaryCount),
-    alternateCounts: analysis.alternateCounts.slice(0, 2).map(compactCount),
-    ambiguity: analysis.ambiguity,
-    approximationLoss: analysis.approximationLoss,
-    confirmation: analysis.confirmation,
-    invalidation: analysis.invalidation,
-    recountConditions: analysis.recountConditions,
-    nextObservation: analysis.nextObservation,
-    currentPrice: analysis.currentPrice,
-  }
-}
-
-function compactZone(zone: PriceZone): Record<string, unknown> {
-  return {
-    id: zone.id,
-    side: zone.side,
-    low: zone.low,
-    high: zone.high,
-    center: zone.center,
-    distancePct: zone.distancePct,
-    sources: zone.sources.slice(0, 4).map(source => compact(source, ['type', 'label', 'price', 'date'])),
-    sourceCount: zone.sourceCount,
-    lastTouchTime: zone.lastTouchTime,
-    period: zone.period,
-    structureSource: zone.structureSource,
-    atrAvailable: zone.atrAvailable,
-  }
-}
-
-function compactRisk(context: SignalRiskContext): Record<string, unknown> {
-  return {
-    signal: compactSignal(context.signal),
-    direction: context.direction,
-    referencePrice: context.referencePrice,
-    invalidation: context.invalidation,
-    target1: context.target1 ? compactZone(context.target1 as PriceZone) : null,
-    target2: context.target2 ? compactZone(context.target2 as PriceZone) : null,
-    riskPct: context.riskPct,
-    target1Pct: context.target1Pct,
-    target2Pct: context.target2Pct,
-    riskReward1: context.riskReward1,
-    riskReward2: context.riskReward2,
-    status: context.status,
-    reason: context.reason,
-  }
-}
-
 /** Build a compact snapshot from the exact response/analysis currently visible. */
 export function buildStockChatSnapshot(input: StockChatSnapshotInput): StockChatSnapshotV1 | null {
   const response = input.response
@@ -228,9 +145,6 @@ export function buildStockChatSnapshot(input: StockChatSnapshotInput): StockChat
     technical_score: technicalScore ? clean(technicalScore) as Record<string, unknown> : null,
     structure: {
       chanlun: compactChanlun(input.chanlun),
-      elliott: compactElliott(input.elliott),
     },
-    price_zones: input.priceZones.slice(0, 12).map(compactZone),
-    signal_risk: input.signalRisk.slice(0, 12).map(compactRisk),
   }
 }

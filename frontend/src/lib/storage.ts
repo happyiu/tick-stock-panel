@@ -71,15 +71,6 @@ export interface StockPreviewAnalysisSectionsV3 {
   version: 3
   technicalCollapsed: boolean
   chanlunCollapsed: boolean
-  elliottCollapsed: boolean
-}
-
-export interface StockPreviewDecisionSectionsV1 {
-  version: 1
-  priceZonesCollapsed: boolean
-  signalRiskCollapsed: boolean
-  showPriceZones: boolean
-  showInvalidationLine: boolean
 }
 
 export interface DefaultStrategyBasicFilter {
@@ -103,12 +94,6 @@ export interface StockPreviewChanlunOverlayConfig {
   centers: boolean
   candidates: boolean
   divergences: boolean
-}
-
-export interface StockPreviewElliottOverlayConfig {
-  enabled: boolean
-  labels: boolean
-  strokes: boolean
 }
 
 export const storage = {
@@ -140,6 +125,9 @@ export const storage = {
   /** 个股预览 K 线副图显隐与顺序 */
   stockPreviewSubCharts: kv<string[]>('stock_preview_sub_charts'),
 
+  /** K线主图叠加指标，与已有副图设置独立保存。 */
+  stockPreviewMainCharts: kv<string[]>('stock_preview_main_charts'),
+
   /** 个股详情多日分时周期 */
   stockPreviewIntradayDays: kv<number>('stock_preview_intraday_days'),
 
@@ -161,17 +149,8 @@ export const storage = {
   /** 个股预览技术指标与结构分析子区折叠状态 v3 */
   stockPreviewAnalysisSectionsV3: kv<StockPreviewAnalysisSectionsV3 | null>('stock_preview_analysis_sections_v3'),
 
-  /** 个股预览关键价位与缠论信号区折叠及覆盖层/失效线状态 v1 */
-  stockPreviewDecisionSectionsV1: kv<StockPreviewDecisionSectionsV1 | null>('stock_preview_decision_sections_v1'),
-
   /** 个股预览 K 线缠论覆盖层配置 */
   stockPreviewChanlunOverlay: kv<StockPreviewChanlunOverlayConfig>('stock_preview_chanlun_overlay'),
-
-  /** 个股预览 K 线艾略特波浪覆盖层配置 */
-  stockPreviewElliottOverlay: kv<StockPreviewElliottOverlayConfig>('stock_preview_elliott_overlay'),
-
-  /** 个股预览行动信号显示状态（默认开启） */
-  stockPreviewActionSignals: kv<boolean>('stock_preview_action_signals'),
 
   /** 个股预览 K 线与右侧面板的分栏比例 */
   stockPreviewSplitRatio: kv<number>('stock_preview_split_ratio'),

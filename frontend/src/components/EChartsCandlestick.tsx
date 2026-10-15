@@ -4,9 +4,18 @@ import { fmtAssetPrice, fmtPct } from '@/lib/format'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
 import type { ChanlunAnalysis } from '@/lib/chanlun'
-import type { ElliottAnalysis } from '@/lib/elliott'
-import type { StockPreviewChanlunOverlayConfig, StockPreviewElliottOverlayConfig } from '@/lib/storage'
+import type { StockPreviewChanlunOverlayConfig } from '@/lib/storage'
 import { zoomWindowEndingAt } from '@/lib/chartViewport'
+import { ANGEL_DEVIL_MA, calculateAngelDevil, type AngelDevilRow } from '@/lib/angelDevil'
+import { BOLL2_LINES, calculateBoll2, type Boll2Row } from '@/lib/boll2'
+import { calculateKdDivergence, type KdDivergenceRow } from '@/lib/kdDivergence'
+import { buildKdDivergenceSeries } from './kdDivergenceSeries'
+import { calculateKdEnhanced, type KdEnhancedRow } from '@/lib/kdEnhanced'
+import { calculateEtfSwingV2, type EtfSwingV2Row } from '@/lib/etfSwingV2'
+import { buildEtfSwingV2Series } from './etfSwingV2Series'
+import { calculateBullBearTrendV2, type BullBearTrendV2Row } from '@/lib/bullBearTrendV2'
+import { buildBullBearTrendV2Series } from './bullBearTrendV2Series'
+import type { KlinePeriod } from '@/lib/api'
 
 export interface OHLC {
   date: string
@@ -53,15 +62,6 @@ export interface ChartRange {
   color?: string
 }
 
-/** 横向价格区间覆盖层；与按时间的 ChartRange 保持独立。 */
-export interface ChartPriceBand {
-  low: number
-  high: number
-  label?: string
-  color?: string
-  borderColor?: string
-}
-
 export interface ChartPriceLine {
   value: number
   label?: string
@@ -84,6 +84,10 @@ export interface VolumeCompareConfig {
 }
 
 interface SubChartContext {
+  kdDivergence?: KdDivergenceRow[]
+  kdEnhanced?: KdEnhancedRow[]
+  etfSwing?: EtfSwingV2Row[]
+  bullBearTrend?: BullBearTrendV2Row[]
   compact: boolean
   volumeCompare: VolumeCompareConfig
 }
@@ -97,7 +101,7 @@ export interface SubChartDef {
   /** 构建 series 数组 */
   buildSeries: (data: OHLC[], context: SubChartContext) => any[]
   /** 构建信息栏文字 (当前数据行 -> 显示内容) */
-  buildInfo: (d: OHLC | null) => { label: string; color: string; value: string }[]
+  buildInfo: (d: OHLC | null, kdDivergence?: KdDivergenceRow, etfSwing?: EtfSwingV2Row, bullBearTrend?: BullBearTrendV2Row) => { label: string; color: string; value: string; group?: number }[]
   /** Y 轴特殊配置 */
   yAxisConfig?: Record<string, any>
 }
@@ -371,6 +375,56 @@ export const SUB_CHARTS: SubChartDef[] = [
       ]
     },
   },
+  {
+    key: 'kd-divergence', label: 'KD背离', height: 160,
+    yAxisConfig: { min: -10, max: 110 },
+    buildSeries: (data, context) => buildKdDivergenceSeries(context.kdDivergence ?? [], data.map(row => row.date)),
+    buildInfo: (_data, row) => [
+      { label: 'K', color: getTheme() === 'light' ? '#A16207' : '#FFFF00', value: row?.k?.toFixed(2) ?? '—' },
+      { label: 'D', color: CT().textStrong, value: row?.d?.toFixed(2) ?? '—' },
+      { label: '底背离', color: '#EF4444', value: row?.bottomDivergence ? '1' : '0' },
+      { label: '顶背离', color: '#22C55E', value: row?.topDivergence ? '1' : '0' },
+    ],
+  },
+  {
+    key: 'kd-enhanced', label: 'K/D精准背离增强版', height: 180,
+    yAxisConfig: { min: 0, max: 100 },
+    buildSeries: (data, context) => buildKdDivergenceSeries(context.kdEnhanced ?? [], data.map(row => row.date), true),
+    buildInfo: (_data, row) => [
+      { label: 'K', color: CT().textStrong, value: row?.k?.toFixed(2) ?? '—' },
+      { label: 'D', color: getTheme() === 'light' ? '#A16207' : '#FFFF00', value: row?.d?.toFixed(2) ?? '—' },
+    ],
+  },
+  {
+    key: 'etf-swing-v2', label: 'ETF波段操盘V2', height: 200,
+    yAxisConfig: { min: 0, max: 105 },
+    buildSeries: (data, context) => buildEtfSwingV2Series(context.etfSwing ?? [], data.map(row => row.date)),
+    buildInfo: (_data, _kd, row) => [
+      { label: '趋势强度', color: CT().textStrong, value: row?.k?.toFixed(2) ?? '—' },
+      { label: '慢速线', color: getTheme() === 'light' ? '#A16207' : '#FFFF00', value: row?.d?.toFixed(2) ?? '—' },
+      { label: '底部条件数', color: '#EAB308', value: row?.bottomCount?.toString() ?? '—', group: 1 },
+      { label: '高位条件数', color: '#06B6D4', value: row?.topCount?.toString() ?? '—', group: 1 },
+      { label: '量比参考', color: CT().text, value: row?.volumeRatio == null ? '—' : row.volumeRatio.toFixed(2) + 'x', group: 2 },
+      { label: '防守参考', color: CT().textStrong, value: row?.defense?.toFixed(3) ?? '—', group: 2 },
+    ],
+  },
+
+  {
+    key: 'bull-bear-trend-v2', label: '多空趋势V2', height: 200,
+    yAxisConfig: {
+      min: ({ min }: { min: number }) => Math.min(0, Math.floor(min / 10) * 10),
+      max: ({ max }: { max: number }) => Math.max(100, Math.ceil(max / 10) * 10),
+    },
+    buildSeries: (data, context) => buildBullBearTrendV2Series(context.bullBearTrend ?? [], data.map(row => row.date)),
+    buildInfo: (_data, _kd, _etf, row) => [
+      { label: '多方强度', color: getTheme() === 'light' ? '#C026D3' : '#FF00FF', value: row?.dp?.toFixed(2) ?? '—' },
+      { label: '低位程度', color: getTheme() === 'light' ? '#15803D' : '#00FF00', value: row?.lowPos?.toFixed(2) ?? '—' },
+      { label: '相对量能', color: CT().text, value: row?.rv == null ? '—' : row.rv.toFixed(2) + 'x', group: 1 },
+      { label: '动态防守价', color: CT().textStrong, value: row?.stop?.toFixed(3) ?? '—', group: 1 },
+      { label: '趋势参考价', color: CT().textStrong, value: row?.e21?.toFixed(3) ?? '—', group: 2 },
+      { label: '信号状态', color: CT().text, value: !row ? '—' : !row.supported ? '仅30分钟/日线' : !row.ready ? '需81根K线' : '已就绪', group: 2 },
+    ],
+  },
 ]
 
 /** 向后兼容的 INDICATORS 导出 (不含 vol) */
@@ -378,14 +432,16 @@ export const INDICATORS = SUB_CHARTS.filter(s => s.key !== 'vol')
 
 /** 主图叠加指标 (画在 K 线上方, 不占副图空间) */
 export const OVERLAY_INDICATORS: { key: string; label: string }[] = [
+  { key: 'angel-devil', label: '天使魔鬼' },
   { key: 'boll', label: 'BOLL' },
+  { key: 'boll2', label: 'boll2' },
 ]
 
 interface Props {
   data: OHLC[]
+  period?: KlinePeriod
   markers?: ChartMarker[]
   ranges?: ChartRange[]
-  priceBands?: ChartPriceBand[]
   priceLines?: ChartPriceLine[]
   height?: number
   showMA?: boolean
@@ -409,8 +465,6 @@ interface Props {
   assetType?: string
   chanlunAnalysis?: ChanlunAnalysis
   chanlunOverlay?: StockPreviewChanlunOverlayConfig
-  elliottAnalysis?: ElliottAnalysis
-  elliottOverlay?: StockPreviewElliottOverlayConfig
   /** 调试设置开启时隐藏当前推进 K 线的日期展示。 */
   hideCurrentDate?: boolean
 }
@@ -430,6 +484,41 @@ const THEME = {
 
 /** 当前主题的图表调色板 (buildOption/信息栏在渲染时调用; 主题切换由组件 effect 触发重建)。 */
 const CT = () => chartTheme(getTheme())
+
+function buildMAInfoHTML(
+  d: OHLC, showMA: boolean, activeIndicators: string[], assetType?: string,
+  angelDevil?: AngelDevilRow | null,
+  boll2?: Boll2Row | null,
+): string {
+  const items: string[] = []
+  if (angelDevil) {
+    for (const ma of ANGEL_DEVIL_MA) {
+      const value = angelDevil[ma.key]
+      const color = getTheme() === 'light' ? ma.lightColor : ma.color
+      if (value !== null) items.push(`<span style="color:${color}">${ma.label}:${fmtAssetPrice(value, assetType)}</span>`)
+    }
+  } else if (showMA) {
+    for (const [key, color, label] of [
+      ['ma5', THEME.ma5, 'MA5'], ['ma10', THEME.ma10, 'MA10'],
+      ['ma20', THEME.ma20, 'MA20'], ['ma60', THEME.ma60, 'MA60'],
+    ] as const) {
+      if (d[key] != null) items.push(`<span style="color:${color}">${label}:${fmtAssetPrice(Number(d[key]), assetType)}</span>`)
+    }
+  }
+  if (d.boll_upper != null && activeIndicators.includes('boll')) {
+    items.push(`<span style="color:#E879F9">BOLL:${fmtAssetPrice(Number(d.boll_upper), assetType)}/${fmtAssetPrice(Number(d.ma20), assetType)}/${fmtAssetPrice(Number(d.boll_lower), assetType)}</span>`)
+  }
+  if (boll2) {
+    for (const line of BOLL2_LINES) {
+      const value = boll2[line.key]
+      const color = getTheme() === 'light' ? line.lightColor : line.color
+      if (value !== null) items.push(`<span style="color:${color}">${line.key === 'mid' ? 'boll2 ' : ''}${line.label}:${fmtAssetPrice(value, assetType)}</span>`)
+    }
+  }
+  return items.length > 0
+    ? `<div style="display:flex;align-items:center;gap:10px;padding:0 8px;font:11px 'JetBrains Mono',monospace;select:none;min-height:20px;flex-wrap:wrap">${items.join('')}</div>`
+    : ''
+}
 
 /** 可见蜡烛超过此数量时，涨停/炸板标签切换为小圆点。 */
 const COMPACT_THRESHOLD = 60
@@ -530,70 +619,6 @@ function appendChanlunMarkPoints(
         tooltip: { formatter: `${divergence.kind === 'trend' ? '趋势' : '盘整'}背驰代理<br/>${divergence.evidence}` },
         z: 94,
       })
-    }
-  }
-}
-
-function appendElliottMarkPoints(
-  target: any[],
-  lineTarget: any[],
-  dateIndexMap: Map<string, number>,
-  analysis: ElliottAnalysis | undefined,
-  config: StockPreviewElliottOverlayConfig | undefined,
-  compact: boolean,
-) {
-  if (!analysis || !config?.enabled || !analysis.primaryCount) return
-  const primaryPivots = analysis.primaryCount.pivots.filter(pivot => dateIndexMap.has(pivot.eventTime) && pivot.state !== 'projected')
-  // 疑似末端只来自当前截面尾部，不属于已完成主计数；单独追加以虚线和问号呈现。
-  const suspected = analysis.pivots.find(pivot => pivot.state === 'suspected' && dateIndexMap.has(pivot.eventTime))
-  const pivots = suspected && !primaryPivots.some(pivot => pivot.eventTime === suspected.eventTime)
-    ? [...primaryPivots, suspected]
-    : primaryPivots
-  if (pivots.length === 0) return
-  for (const pivot of pivots) {
-    const isHigh = pivot.type === 'high'
-    target.push({
-      name: `elliott-${pivot.eventTime}-${pivot.label}`,
-      coord: [pivot.eventTime, pivot.price],
-      symbol: 'circle',
-      symbolSize: compact ? 5 : pivot.state === 'suspected' ? 7 : 8,
-      symbolOffset: isHigh ? [0, '-65%'] : [0, '65%'],
-      itemStyle: {
-        color: pivot.state === 'suspected' ? '#FCD34D' : '#F59E0B',
-        opacity: pivot.state === 'suspected' ? 0.65 : 0.95,
-      },
-      label: {
-        show: config.labels && !compact,
-        formatter: pivot.state === 'suspected'
-          ? (pivot.label === '?' ? '?' : `${pivot.label}?`)
-          : pivot.label,
-        position: isHigh ? 'top' : 'bottom',
-        distance: 5,
-        color: '#FBBF24',
-        fontSize: 9,
-        fontFamily: 'JetBrains Mono, monospace',
-      },
-      z: 88,
-    })
-  }
-  if (config.strokes && pivots.length > 1) {
-    for (let index = 1; index < pivots.length; index += 1) {
-      const start = pivots[index - 1]
-      const end = pivots[index]
-      lineTarget.push([
-        { coord: [start.eventTime, start.price], symbol: 'none' },
-        {
-          coord: [end.eventTime, end.price],
-          symbol: 'none',
-          lineStyle: {
-            color: '#F59E0B',
-            type: start.state === 'suspected' || end.state === 'suspected' ? 'dashed' : 'solid',
-            width: 1.2,
-            opacity: start.state === 'suspected' || end.state === 'suspected' ? 0.55 : 0.8,
-          },
-          label: { show: false },
-        },
-      ])
     }
   }
 }
@@ -700,22 +725,26 @@ function appendChanlunMarkLines(
   }
 }
 
-function buildSubInfoGraphics(
+function buildSubInfoRows(
   data: OHLC[],
   infoIdx: number,
   activeIndicators: string[],
   subStartTop: number,
   volumeCompare: VolumeCompareConfig,
-): any[] {
+  kdDivergence?: KdDivergenceRow[],
+  kdEnhanced?: KdEnhancedRow[],
+  etfSwing?: EtfSwingV2Row[],
+  bullBearTrend?: BullBearTrendV2Row[],
+): { key: string; top: number; html: string }[] {
   const d = infoIdx >= 0 && infoIdx < data.length ? data[infoIdx] : null
-  const graphics: any[] = []
+  const rows: { key: string; top: number; html: string }[] = []
   let curTop = subStartTop
 
   activeIndicators.forEach((key) => {
     const def = SUB_CHARTS.find(s => s.key === key)
     if (!def) return
 
-    const items = def.buildInfo(d)
+    const items = def.buildInfo(d, def.key === 'kd-enhanced' ? kdEnhanced?.[infoIdx] : kdDivergence?.[infoIdx], etfSwing?.[infoIdx], bullBearTrend?.[infoIdx])
     if (def.key === 'vol' && d) {
       const calcVolMa = (n: number) => {
         if (infoIdx < n - 1) return null
@@ -737,61 +766,25 @@ function buildSubInfoGraphics(
       }
     }
 
-    // 每个元素加固定 id，确保 ECharts 增量更新时能正确匹配
-    graphics.push({
-      id: `sub-sep-${key}`,
-      type: 'line',
-      shape: { x1: 0, y1: curTop, x2: 2000, y2: curTop },
-      style: { stroke: 'rgba(255,255,255,0.08)', lineWidth: 1 },
-      silent: true, z: 0,
+    const groups = new Map<number, typeof items>()
+    items.forEach(item => {
+      const group = item.group ?? 0
+      const values = groups.get(group) ?? []
+      values.push(item)
+      groups.set(group, values)
     })
-    graphics.push({
-      id: `sub-label-${key}`,
-      type: 'text',
-      style: {
-        text: def.label,
-        x: 4, y: curTop + 4,
-        fill: '#8E8E96',
-        fontSize: 10, fontFamily: 'JetBrains Mono, monospace',
-        fontWeight: 'bold',
-      },
-      silent: true, z: 10,
-    })
-
-    const richTextParts: string[] = []
-    const rich: Record<string, any> = {}
-    items.forEach((item, idx) => {
-      const styleKey = `s${idx}`
-      richTextParts.push(`{${styleKey}|${item.label}:${item.value}}`)
-      rich[styleKey] = {
-        fill: item.color,
-        fontSize: 10,
-        fontFamily: 'JetBrains Mono, monospace',
-      }
-    })
-    graphics.push({
-      id: `sub-val-${key}`,
-      type: 'text',
-      right: 24,
-      style: {
-        text: richTextParts.join(`{gap|  }`),
-        y: curTop + 3,
-        rich: {
-          gap: { fill: 'transparent', fontSize: 10 },
-          ...rich,
-        },
-        fontSize: 10,
-        fontFamily: 'JetBrains Mono, monospace',
-        textAlign: 'right',
-        textVerticalAlign: 'top',
-      },
-      silent: true, z: 10,
+    const valuesHTML = [...groups.values()].map(group => `<span data-sub-info-group style="display:inline-flex;gap:8px">${group.map(item =>
+      `<span style="color:${item.color}">${item.label}:${item.value}</span>`,
+    ).join('')}</span>`).join('')
+    rows.push({
+      key, top: curTop,
+      html: `<div style="display:flex;align-items:center;gap:24px;width:max-content;min-width:100%;white-space:nowrap"><span style="color:#8E8E96;font-weight:bold;margin-right:auto">${def.label}</span>${valuesHTML}</div>`,
     })
 
     curTop += INFO_BAR_H + def.height + SUB_GAP_PX
   })
 
-  return graphics
+  return rows
 }
 
 function buildOption(
@@ -800,26 +793,36 @@ function buildOption(
   dateIndexMap: Map<string, number>,
   markers: ChartMarker[] | undefined,
   ranges: ChartRange[] | undefined,
-  priceBands: ChartPriceBand[] | undefined,
   priceLines: ChartPriceLine[] | undefined,
   showMA: boolean,
   compact: boolean,
   activeIndicators: string[],
   containerHeight: number,
-  infoIdx: number,
   linkedPrice: number | null | undefined,
   volumeCompare: VolumeCompareConfig,
   addedDate: string | null | undefined,
   assetType?: string,
   chanlunAnalysis?: ChanlunAnalysis,
   chanlunOverlay?: StockPreviewChanlunOverlayConfig,
-  elliottAnalysis?: ElliottAnalysis,
-  elliottOverlay?: StockPreviewElliottOverlayConfig,
   hideCurrentDate = false,
+  angelDevil: AngelDevilRow[] | null = null,
+  boll2: Boll2Row[] | null = null,
+  kdDivergence?: KdDivergenceRow[],
+  kdEnhanced?: KdEnhancedRow[],
+  etfSwing?: EtfSwingV2Row[],
+  bullBearTrend?: BullBearTrendV2Row[],
 ): EChartsOption {
-  const candleData = data.map(d => [d.open, d.close, d.low, d.high])
+  const candleData = data.map((d, index) => {
+    const value = [d.open, d.close, d.low, d.high]
+    const bull = angelDevil?.[index].bull
+    if (bull == null) return value
+    // 原公式按天使/魔鬼关系着色，独立于当根K线涨跌；多头空心、空头实心。
+    const color = bull ? 'transparent' : '#00FFFF'
+    const borderColor = bull ? '#FF0000' : '#00DDFF'
+    return { value, itemStyle: { color, color0: color, borderColor, borderColor0: borderColor } }
+  })
 
-  const hasMA = showMA && data.some(d => d.ma5 != null || d.ma10 != null || d.ma20 != null || d.ma60 != null)
+  const hasMA = showMA && !angelDevil && data.some(d => d.ma5 != null || d.ma10 != null || d.ma20 != null || d.ma60 != null)
 
   const markPointData: any[] = []
   if (markers && markers.length > 0) {
@@ -872,8 +875,6 @@ function buildOption(
     }
   }
   appendChanlunMarkPoints(markPointData, dateIndexMap, chanlunAnalysis, chanlunOverlay, compact)
-  const elliottLineData: any[] = []
-  appendElliottMarkPoints(markPointData, elliottLineData, dateIndexMap, elliottAnalysis, elliottOverlay, compact)
 
   // ====== 布局计算 ======
   const left = 60
@@ -899,13 +900,9 @@ function buildOption(
   const series: any[] = []
   const xAxisIndices: number[] = []
 
-  const priceLineValues = (priceLines ?? [])
+  const priceOverlayValues = (priceLines ?? [])
     .map(line => line.value)
     .filter(value => Number.isFinite(value) && value > 0)
-  const priceBandValues = (priceBands ?? [])
-    .flatMap(band => [band.low, band.high])
-    .filter(value => Number.isFinite(value) && value > 0)
-  const priceOverlayValues = [...priceLineValues, ...priceBandValues]
   const axisMin = priceOverlayValues.length > 0
     ? ({ min, max }: { min: number; max: number }) => {
         const nextMin = Math.min(min, ...priceOverlayValues)
@@ -976,30 +973,6 @@ function buildOption(
       { xAxis: r.end },
     ]))
 
-  for (const band of priceBands ?? []) {
-    if (!Number.isFinite(band.low) || !Number.isFinite(band.high) || band.high < band.low) continue
-    markAreaData.push([
-      {
-        name: band.label ?? '',
-        yAxis: band.low,
-        itemStyle: {
-          color: band.color ?? 'rgba(249,115,22,0.10)',
-          borderColor: band.borderColor ?? 'rgba(249,115,22,0.42)',
-          borderWidth: 1,
-        },
-        label: {
-          show: !!band.label,
-          formatter: band.label ?? '',
-          position: 'insideTop',
-          color: band.borderColor ?? '#F97316',
-          fontSize: 9,
-          fontFamily: 'JetBrains Mono, monospace',
-        },
-      },
-      { yAxis: band.high },
-    ] as any)
-  }
-
   if (chanlunAnalysis && chanlunOverlay?.enabled && chanlunOverlay.centers) {
     for (const center of chanlunAnalysis.centers) {
       if (!dateIndexMap.has(center.startDate) || !dateIndexMap.has(center.endDate)) continue
@@ -1026,13 +999,15 @@ function buildOption(
     }
   }
 
-  const markLineData: any[] = [...elliottLineData]
+  const markLineData: any[] = []
   appendPriceMarkLines(markLineData, priceLines, dateIndexMap, linkedPrice, assetType)
 
   appendChanlunMarkLines(markLineData, dateIndexMap, chanlunAnalysis, chanlunOverlay)
 
   series.push({
     name: 'K', type: 'candlestick', data: candleData,
+    // 大数据模式会忽略逐根样式，公式着色时必须保留普通渲染。
+    large: !angelDevil,
     animation: false,
     itemStyle: {
       color: THEME.bull, color0: THEME.bear,
@@ -1056,6 +1031,38 @@ function buildOption(
     series.push(maLine('ma10', THEME.ma10, 'MA10'))
     series.push(maLine('ma20', THEME.ma20, 'MA20'))
     series.push(maLine('ma60', THEME.ma60, 'MA60'))
+  }
+
+  if (angelDevil) {
+    for (const ma of ANGEL_DEVIL_MA) {
+      const color = getTheme() === 'light' ? ma.lightColor : ma.color
+      series.push({
+        name: ma.label, type: 'line',
+        data: angelDevil.map(row => row[ma.key] ?? '-'),
+        symbol: 'none', smooth: false, silent: true, animation: false,
+        lineStyle: { color, width: ma.width }, itemStyle: { color },
+      })
+    }
+    for (const signal of ['buy', 'sell'] as const) {
+      const buy = signal === 'buy'
+      const label = buy ? '进攻' : '撤退'
+      const color = buy ? (getTheme() === 'light' ? '#A16207' : '#FFFF00') : CT().textStrong
+      const indices = angelDevil.flatMap((row, index) => row.signal === signal ? [index] : [])
+      // 箭头和文字分开使用原公式的价格坐标，随可见窗口缩放，不作为成交价。
+      for (const text of [false, true]) {
+        series.push({
+          name: `天使魔鬼${label}${text ? '文字' : '箭头'}`, type: 'scatter',
+          data: indices.map(index => [data[index].date,
+            buy ? data[index].low * (text ? 0.92 : 0.97) : data[index].high * (text ? 1.08 : 1.03)]),
+          symbol: text ? 'circle' : 'arrow', symbolSize: text ? 0 : 10,
+          symbolRotate: buy ? 0 : 180,
+          itemStyle: { color: text ? 'transparent' : buy ? '#FF0000' : '#00FFFF', opacity: 1 },
+          label: { show: text, formatter: label, position: buy ? 'bottom' : 'top', distance: 0, color, fontSize: 11 },
+          labelLayout: { hideOverlap: true },
+          silent: true, animation: false, z: 8,
+        })
+      }
+    }
   }
 
   // 加入自选日标注: 蓝色竖虚线从该根K线的下沿连到主图底端的「自选」标签。
@@ -1135,6 +1142,18 @@ function buildOption(
     series.push(bollLine('boll_lower', '#E879F9', 'BOLL下'))
   }
 
+  if (boll2) {
+    for (const line of BOLL2_LINES) {
+      const color = getTheme() === 'light' ? line.lightColor : line.color
+      series.push({
+        name: `boll2 ${line.label}`, type: 'line',
+        data: boll2.map(row => row[line.key] ?? '-'),
+        symbol: 'none', smooth: false, connectNulls: false, silent: true, animation: false,
+        lineStyle: { width: 1, color }, itemStyle: { color },
+      })
+    }
+  }
+
   // ===== 子图区域 =====
   let curTop = topPad + candleAvail + candleBottomPad
 
@@ -1176,7 +1195,7 @@ function buildOption(
 
     xAxisIndices.push(xAxisIdx)
 
-    const subSeries = def.buildSeries(data, { compact, volumeCompare })
+    const subSeries = def.buildSeries(data, { compact, volumeCompare, kdDivergence, kdEnhanced, etfSwing, bullBearTrend })
     subSeries.forEach((s: any) => {
       series.push({ ...s, xAxisIndex: xAxisIdx, yAxisIndex: yAxisIdx })
     })
@@ -1184,9 +1203,6 @@ function buildOption(
     curTop += INFO_BAR_H + def.height + SUB_GAP_PX
   })
 
-  // 子图信息栏 graphic
-  const subStartTop = topPad + candleAvail + candleBottomPad
-  const infoGraphics = buildSubInfoGraphics(data, infoIdx, activeIndicators, subStartTop, volumeCompare)
 
   return {
     animation: false,
@@ -1212,7 +1228,6 @@ function buildOption(
         fontSize: 10,
       },
     },
-    graphic: infoGraphics.length > 0 ? infoGraphics : undefined,
     grid: grids,
     xAxis: xAxes,
     yAxis: yAxes,
@@ -1233,9 +1248,9 @@ function buildOption(
 
 export function EChartsCandlestick({
   data,
+  period = '1d',
   markers,
   ranges,
-  priceBands,
   priceLines,
   height = 480,
   showMA = true,
@@ -1255,8 +1270,6 @@ export function EChartsCandlestick({
   assetType,
   chanlunAnalysis,
   chanlunOverlay,
-  elliottAnalysis,
-  elliottOverlay,
   hideCurrentDate = false,
 }: Props) {
   const hoverSurfaceRef = useRef<HTMLDivElement>(null)
@@ -1270,6 +1283,49 @@ export function EChartsCandlestick({
   onPriceDoubleClickRef.current = onPriceDoubleClick
   // 主题: buildOption/信息栏内部通过 CT() 动态取调色板, 这里只负责切换时触发重建
   const theme = useTheme()
+  const showAngelDevil = activeIndicators.includes('angel-devil')
+  const angelDevil = useMemo(
+    () => showAngelDevil ? calculateAngelDevil(data.map(row => row.close)) : null,
+    [data, showAngelDevil],
+  )
+
+  const showBoll2 = activeIndicators.includes('boll2')
+  const boll2 = useMemo(
+    () => showBoll2 ? calculateBoll2(data.map(row => row.close)) : null,
+    [data, showBoll2],
+  )
+
+  const showKdDivergence = activeIndicators.includes('kd-divergence')
+  const kdDivergence = useMemo(
+    () => showKdDivergence ? calculateKdDivergence(data) : undefined,
+    [data, showKdDivergence],
+  )
+  const kdDivergenceRef = useRef(kdDivergence)
+  kdDivergenceRef.current = kdDivergence
+
+  const showKdEnhanced = activeIndicators.includes('kd-enhanced')
+  const kdEnhanced = useMemo(
+    () => showKdEnhanced ? calculateKdEnhanced(data) : undefined,
+    [data, showKdEnhanced],
+  )
+  const kdEnhancedRef = useRef(kdEnhanced)
+  kdEnhancedRef.current = kdEnhanced
+
+  const showEtfSwing = activeIndicators.includes('etf-swing-v2')
+  const etfSwing = useMemo(
+    () => showEtfSwing ? calculateEtfSwingV2(data) : undefined,
+    [data, showEtfSwing],
+  )
+  const etfSwingRef = useRef(etfSwing)
+  etfSwingRef.current = etfSwing
+
+  const showBullBearTrend = activeIndicators.includes('bull-bear-trend-v2')
+  const bullBearTrend = useMemo(
+    () => showBullBearTrend ? calculateBullBearTrendV2(data, period) : undefined,
+    [data, period, showBullBearTrend],
+  )
+  const bullBearTrendRef = useRef(bullBearTrend)
+  bullBearTrendRef.current = bullBearTrend
 
   // --- 全部用 ref，避免高频交互触发 React 重渲染 ---
   const infoIdxRef = useRef<number>(data.length - 1)
@@ -1291,16 +1347,13 @@ export function EChartsCandlestick({
   chanlunAnalysisRef.current = chanlunAnalysis
   const chanlunOverlayRef = useRef(chanlunOverlay)
   chanlunOverlayRef.current = chanlunOverlay
-  const elliottAnalysisRef = useRef(elliottAnalysis)
-  elliottAnalysisRef.current = elliottAnalysis
-  const elliottOverlayRef = useRef(elliottOverlay)
-  elliottOverlayRef.current = elliottOverlay
   const chartHeightRef = useRef(300)
   const subTotalHRef = useRef(0)
   const getInfoBarHTMLRef = useRef<() => string>(() => '')
 
   // 强制刷新信息栏 DOM 的回调
   const infoBarRef = useRef<HTMLDivElement>(null)
+  const subInfoRef = useRef<HTMLDivElement>(null)
   const triggerInfoBarUpdate = useRef(() => {
     const idx = infoIdxRef.current
     const curData = dataRef.current
@@ -1309,16 +1362,21 @@ export function EChartsCandlestick({
     const chart = chartRef.current
     if (!chart) return
     const subStartTop = chartHeightRef.current - subTotalHRef.current
-    const infoGraphics = buildSubInfoGraphics(
+    const infoRows = buildSubInfoRows(
       curData,
       idx,
       activeIndicatorsRef.current,
       subStartTop,
       volumeCompareRef.current,
+      kdDivergenceRef.current,
+      kdEnhancedRef.current,
+      etfSwingRef.current,
+      bullBearTrendRef.current,
     )
-    if (infoGraphics.length > 0) {
-      chart.setOption({ graphic: infoGraphics }, { lazyUpdate: true })
-    }
+    infoRows.forEach(row => {
+      const el = subInfoRef.current?.querySelector<HTMLElement>(`[data-sub-info="${row.key}"]`)
+      if (el) el.innerHTML = row.html
+    })
   }).current
 
   // 计算子图总高度
@@ -1424,21 +1482,10 @@ export function EChartsCandlestick({
     }
     html += `</div>`
 
-    // 第二行: MA + BOLL
-    if (showMA) {
-      html += `<div style="display:flex;align-items:center;gap:10px;padding:0 8px;font:11px 'JetBrains Mono',monospace;select:none;min-height:20px;flex-wrap:wrap">`
-      if (d.ma5 != null) html += `<span style="color:${THEME.ma5}">MA5:${fmtAssetPrice(Number(d.ma5), assetType)}</span>`
-      if (d.ma10 != null) html += `<span style="color:${THEME.ma10}">MA10:${fmtAssetPrice(Number(d.ma10), assetType)}</span>`
-      if (d.ma20 != null) html += `<span style="color:${THEME.ma20}">MA20:${fmtAssetPrice(Number(d.ma20), assetType)}</span>`
-      if (d.ma60 != null) html += `<span style="color:${THEME.ma60}">MA60:${fmtAssetPrice(Number(d.ma60), assetType)}</span>`
-      if (d.boll_upper != null && activeIndicators.includes('boll')) {
-        html += `<span style="color:#E879F9">BOLL:${fmtAssetPrice(Number(d.boll_upper), assetType)}/${fmtAssetPrice(Number(d.ma20), assetType)}/${fmtAssetPrice(Number(d.boll_lower), assetType)}</span>`
-      }
-      html += `</div>`
-    }
+    html += buildMAInfoHTML(d, showMA, activeIndicators, assetType, angelDevil?.[idx], boll2?.[idx])
 
     return html
-  }, [data, stockInfo, showMA, activeIndicators, assetType, hideCurrentDate])
+  }, [data, stockInfo, showMA, activeIndicators, assetType, hideCurrentDate, angelDevil, boll2, theme])
   getInfoBarHTMLRef.current = getInfoBarHTML
 
   // data/symbol 变化时重置 infoIdx:
@@ -1505,7 +1552,7 @@ export function EChartsCandlestick({
       // 竖虚线命中 K 线即悬停成立: 切股后竖虚线重画而鼠标没离开图表区, 等不到 mouseenter, 靠这里复显
       const hoverResumed = setHoverActive(true)
       if (idxChanged || hoverResumed) writeInfoBar()
-      // 更新子图 graphic (仅悬停 K 线变化时; 纯显隐切换不影响副图)
+      // 更新副图信息栏 (仅悬停 K 线变化时; 纯显隐切换不影响副图)
       if (idxChanged) triggerInfoBarUpdate()
     })
 
@@ -1632,17 +1679,8 @@ export function EChartsCandlestick({
       chanlunOverlayRef.current,
       compact,
     )
-    const elliottLineData: any[] = []
-    appendElliottMarkPoints(
-      markPointData,
-      elliottLineData,
-      currentDateIndexMap,
-      elliottAnalysisRef.current,
-      elliottOverlayRef.current,
-      compact,
-    )
-    if (mkrs?.length || (chanlunAnalysisRef.current && chanlunOverlayRef.current?.enabled) || (elliottAnalysisRef.current && elliottOverlayRef.current?.enabled)) {
-      const markLineData: any[] = [...elliottLineData]
+    if (mkrs?.length || (chanlunAnalysisRef.current && chanlunOverlayRef.current?.enabled)) {
+      const markLineData: any[] = []
       appendPriceMarkLines(markLineData, priceLines, currentDateIndexMap, linkedPrice, assetType)
       appendChanlunMarkLines(markLineData, currentDateIndexMap, chanlunAnalysisRef.current, chanlunOverlayRef.current)
       seriesUpdates.push({
@@ -1670,20 +1708,22 @@ export function EChartsCandlestick({
       data, dates, dateIndexMap,
       showMarkersProp ? markers : undefined,
       ranges,
-      priceBands,
       priceLines,
       showMA, compactRef.current,
       activeIndicators, chartHeight,
-      infoIdxRef.current,
       linkedPrice,
       volumeCompare,
       addedDate,
       assetType,
       chanlunAnalysis,
       chanlunOverlay,
-      elliottAnalysis,
-      elliottOverlay,
       hideCurrentDate,
+      angelDevil,
+      boll2,
+      kdDivergence,
+      kdEnhanced,
+      etfSwing,
+      bullBearTrend,
     )
 
     chart.setOption(option, true)
@@ -1701,7 +1741,8 @@ export function EChartsCandlestick({
     if (infoEl) {
       infoEl.innerHTML = getInfoBarHTML()
     }
-  }, [data, markers, ranges, priceBands, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, addedDate, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme, assetType, chanlunAnalysis, chanlunOverlay, elliottAnalysis, elliottOverlay, hideCurrentDate])
+    triggerInfoBarUpdate()
+  }, [data, markers, ranges, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, addedDate, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme, assetType, chanlunAnalysis, chanlunOverlay, hideCurrentDate, angelDevil, boll2, kdDivergence, kdEnhanced, etfSwing, bullBearTrend])
 
   useEffect(() => {
     if (!selectedDate) return
@@ -1738,19 +1779,12 @@ export function EChartsCandlestick({
       html += `<span style="color:${CT().text}">${turnoverRate.toFixed(2)}%</span>`
     }
     html += `</div>`
-    if (showMA) {
-      html += `<div style="display:flex;align-items:center;gap:10px;padding:0 8px;font:11px 'JetBrains Mono',monospace;min-height:20px;flex-wrap:wrap">`
-      if (d.ma5 != null) html += `<span style="color:${THEME.ma5}">MA5:${fmtAssetPrice(Number(d.ma5), assetType)}</span>`
-      if (d.ma10 != null) html += `<span style="color:${THEME.ma10}">MA10:${fmtAssetPrice(Number(d.ma10), assetType)}</span>`
-      if (d.ma20 != null) html += `<span style="color:${THEME.ma20}">MA20:${fmtAssetPrice(Number(d.ma20), assetType)}</span>`
-      if (d.ma60 != null) html += `<span style="color:${THEME.ma60}">MA60:${fmtAssetPrice(Number(d.ma60), assetType)}</span>`
-      if (d.boll_upper != null && activeIndicators.includes('boll')) {
-        html += `<span style="color:#E879F9">BOLL:${fmtAssetPrice(Number(d.boll_upper), assetType)}/${fmtAssetPrice(Number(d.ma20), assetType)}/${fmtAssetPrice(Number(d.boll_lower), assetType)}</span>`
-      }
-      html += `</div>`
-    }
+    html += buildMAInfoHTML(d, showMA, activeIndicators, assetType, angelDevil?.[idx], boll2?.[idx])
     return html
-  }, [data, stockInfo, showMA, activeIndicators, assetType, hideCurrentDate])
+  }, [data, stockInfo, showMA, activeIndicators, assetType, hideCurrentDate, angelDevil, boll2, theme])
+
+  const subInfoRows = buildSubInfoRows(data, infoIdxRef.current, activeIndicators, chartHeight - subTotalH,
+    volumeCompare, kdDivergence, kdEnhanced, etfSwing, bullBearTrend)
 
   return (
     <div ref={hoverSurfaceRef} className="w-full">
@@ -1760,8 +1794,21 @@ export function EChartsCandlestick({
           dangerouslySetInnerHTML={{ __html: initialHTML }} />
       )}
 
-      {/* ECharts canvas */}
-      <div ref={containerRef} className="w-full" style={{ height: chartHeight }} />
+      <div className="relative">
+        <div ref={containerRef} className="w-full" style={{ height: chartHeight }} />
+        <div ref={subInfoRef} className="pointer-events-none absolute inset-0">
+          {subInfoRows.map(row => (
+            <div key={row.key} data-sub-info={row.key} tabIndex={0}
+              aria-label={`${SUB_CHARTS.find(def => def.key === row.key)?.label} 数据说明`}
+              onKeyDown={event => {
+                if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') event.stopPropagation()
+              }}
+              className="pointer-events-auto absolute overflow-x-auto overflow-y-hidden border-t border-border/50 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              style={{ top: row.top, left: 4, right: 20, height: INFO_BAR_H, font: "10px/15px 'JetBrains Mono', monospace" }}
+              dangerouslySetInnerHTML={{ __html: row.html }} />
+          ))}
+        </div>
+      </div>
     </div>
   )
 }

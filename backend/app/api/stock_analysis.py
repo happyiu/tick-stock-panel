@@ -6,7 +6,6 @@
   GET  /levels?symbol=         11 类关键价位(图表 markLine 数据源)
   POST /analyze                AI 流式四维分析(NDJSON)
   POST /chat/stream            Hermes-only 详情页多轮对话(NDJSON)
-  POST /elliott/explain        详情页本地波浪结果的 AI 只读解释
   GET  /reports                历史报告列表
   POST /reports                保存一条报告
   DELETE /reports/{report_id}  删除一条报告
@@ -14,7 +13,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import math
 from datetime import timedelta
 
@@ -26,15 +24,6 @@ from pydantic import BaseModel
 from app.indicators.levels import compute_levels, summarize_levels
 from app.market_time import cn_today
 from app.services import stock_reports
-from app.services.ai_provider import ai_configured
-from app.services.elliott_wave_analyzer import (
-    ElliottAnalyzeRequest,
-    ElliottAssessment,
-    ElliottAssessmentError,
-    ElliottExplanation,
-    analyze_elliott,
-    explain_elliott,
-)
 from app.services.ndjson_heartbeat import with_heartbeat
 from app.services.stock_analyzer import analyze_stock_stream
 from app.services.stock_chat import (
@@ -43,8 +32,6 @@ from app.services.stock_chat import (
     prepare_stock_chat,
     stream_stock_chat,
 )
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/stock-analysis", tags=["stock-analysis"])
 
@@ -220,38 +207,6 @@ async def stock_chat_stream(req: StockChatRequest):
         media_type="application/x-ndjson",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
-
-
-@router.post("/elliott/analyze", response_model=ElliottAssessment)
-async def analyze_elliott_wave(req: ElliottAnalyzeRequest):
-    """艾略特波浪 AI 增强评估。
-
-    K 线快照由详情页提交, 服务端再次按 as_of 截断; 该接口只返回研究评估,
-    不写入报告、不连接券商, 也不参与技术分、选股或监控。
-    """
-    if not ai_configured():
-        raise HTTPException(status_code=503, detail="AI 未配置; 请在设置页配置 API Key 与接口地址")
-    try:
-        return await analyze_elliott(req)
-    except ElliottAssessmentError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.exception("AI Elliott assessment failed for %s: %s", req.symbol, exc)
-        raise HTTPException(status_code=502, detail=f"艾略特波浪 AI 评估失败: {exc}") from exc
-
-
-@router.post("/elliott/explain", response_model=ElliottExplanation)
-async def explain_elliott_wave(req: ElliottAnalyzeRequest):
-    """艾略特波浪 AI v2 解释; 计数、排名、规则和价格事实必须来自详情页本地结果。"""
-    if not ai_configured():
-        raise HTTPException(status_code=503, detail="AI 未配置; 请在设置页配置 API Key 与接口地址")
-    try:
-        return await explain_elliott(req)
-    except ElliottAssessmentError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.exception("AI Elliott explanation failed for %s: %s", req.symbol, exc)
-        raise HTTPException(status_code=502, detail=f"艾略特波浪 AI 解释失败: {exc}") from exc
 
 
 # ================================================================

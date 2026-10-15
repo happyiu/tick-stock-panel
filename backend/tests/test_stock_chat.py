@@ -29,8 +29,6 @@ def _snapshot(symbol: str = "600000.SH") -> stock_chat.StockChatSnapshot:
         bars=[{"date": "2026-09-12", "close": 10.2, "ma20": 10.0}],
         technical_score={"as_of": "2026-09-12", "direction_score": 0.2},
         structure={"chanlun": {"definitionMode": "structure_proxy"}},
-        price_zones=[],
-        signal_risk=[],
     )
 
 
@@ -66,6 +64,30 @@ def test_request_requires_latest_user_and_matching_snapshot() -> None:
             snapshot=_snapshot("000001.SZ"),
             messages=[{"role": "user", "content": "你好"}],
         )
+
+
+def test_snapshot_no_longer_exports_price_zones_or_signal_risk() -> None:
+    snapshot = _snapshot().model_dump(mode="json")
+    assert "price_zones" not in snapshot
+    assert "signal_risk" not in snapshot
+    assert snapshot["bars"][0]["close"] == 10.2
+    assert snapshot["structure"]["chanlun"]["definitionMode"] == "structure_proxy"
+
+
+def test_legacy_snapshot_drops_removed_context_but_rejects_unknown_fields() -> None:
+    legacy = {
+        **_snapshot().model_dump(mode="json"),
+        "price_zones": [{"low": 9, "high": 10}],
+        "signal_risk": [{"riskReward1": 2}],
+        "structure": {"chanlun": {"status": "ready"}, "elliott": {"primaryCount": {}}},
+    }
+    restored = stock_chat.StockChatSnapshot.model_validate(legacy).model_dump(mode="json")
+    assert "price_zones" not in restored
+    assert "signal_risk" not in restored
+    assert restored["structure"] == {"chanlun": {"status": "ready"}}
+    assert "elliott" in legacy["structure"]
+    with pytest.raises(ValidationError, match="Extra inputs"):
+        stock_chat.StockChatSnapshot.model_validate({**legacy, "unexpected": True})
 
 
 def test_prepare_stock_chat_is_hermes_only(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -194,3 +216,10 @@ async def test_stream_stock_chat_converts_upstream_error_to_event(monkeypatch: p
     ]
     assert events[-1]["type"] == "error"
     assert events[-1]["status_code"] == 409
+
+
+@pytest.mark.parametrize("endpoint", ["analyze", "explain"])
+def test_removed_wave_endpoints_return_not_found(endpoint: str) -> None:
+    with _client() as client:
+        response = client.post(f"/api/stock-analysis/elliott/{endpoint}", json={})
+    assert response.status_code == 404

@@ -4,7 +4,6 @@
 // Prod:同源(FastAPI 托管前端 dist)
 
 import { toast } from '@/components/Toast'
-import type { ElliottAssessmentRequest, ElliottAssessmentResponse, ElliottExplanationResponse } from '@/lib/elliott'
 
 const BASE = ''
 
@@ -598,8 +597,6 @@ export interface StockChatSnapshotV1 {
   bars: Array<Record<string, any>>
   technical_score?: Record<string, any> | null
   structure: Record<string, any>
-  price_zones: Array<Record<string, any>>
-  signal_risk: Array<Record<string, any>>
 }
 
 export interface StockChatMessage {
@@ -4398,20 +4395,6 @@ export const api = {
 
   stockAnalysisReportDelete: (reportId: string) =>
     request<{ ok: boolean }>(`/api/stock-analysis/reports/${encodeURIComponent(reportId)}`, { method: 'DELETE' }),
-
-  /** 艾略特波浪 AI 增强评估；本地 swing_proxy 由详情页先行计算。 */
-  elliottAnalyze: (body: ElliottAssessmentRequest) =>
-    request<ElliottAssessmentResponse>('/api/stock-analysis/elliott/analyze', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-
-  /** 艾略特波浪 AI v2 只读解释；计数、排名、规则和价格边界以 local_analysis 为准。 */
-  elliottExplain: (body: ElliottAssessmentRequest) =>
-    request<ElliottExplanationResponse>('/api/stock-analysis/elliott/explain', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
 
   /**
    * AI 个股四维分析 — 流式调用(NDJSON,与财务分析同协议)。

@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { api, type StockChatMessage as ApiStockChatMessage, type StockChatSnapshotV1 } from './api'
-import { trimStockChatMessages } from './stockChatPrimitives'
+import { stripLegacyStockChatContext, trimStockChatMessages } from './stockChatPrimitives'
 
 export type StockChatPhase = 'idle' | 'loading' | 'streaming' | 'done' | 'error' | 'stopped' | 'interrupted'
 
@@ -98,8 +98,6 @@ function isSnapshot(value: unknown, symbol: string): value is StockChatSnapshotV
     && Array.isArray(snapshot.bars)
     && !!snapshot.structure
     && typeof snapshot.structure === 'object'
-    && Array.isArray(snapshot.price_zones)
-    && Array.isArray(snapshot.signal_risk)
 }
 
 function hydrate() {
@@ -126,7 +124,7 @@ function hydrate() {
       const visibleMessages = trimVisibleMessages(messages)
       conversations.set(raw.symbol, {
         symbol: raw.symbol,
-        snapshot: raw.snapshot,
+        snapshot: stripLegacyStockChatContext(raw.snapshot),
         studioSessionId: typeof raw.studioSessionId === 'string' ? raw.studioSessionId : undefined,
         messages: interrupted
           ? visibleMessages.map(item => item.role === 'assistant' && item === visibleMessages.at(-1) ? { ...item, incomplete: true } : item)
@@ -170,7 +168,7 @@ function trimVisibleMessages(messages: StockChatMessage[]): StockChatMessage[] {
 function createConversation(symbol: string, snapshot: StockChatSnapshotV1): StockChatConversation {
   const conversation: StockChatConversation = {
     symbol,
-    snapshot,
+    snapshot: stripLegacyStockChatContext(snapshot),
     studioSessionId: undefined,
     messages: [],
     phase: 'idle',

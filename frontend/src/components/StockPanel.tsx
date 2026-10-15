@@ -18,25 +18,19 @@ import {
 import { StockInfoBar } from '@/components/StockInfoBar'
 import {
   StockDailyKChart,
-  actionStateClass,
-  actionStateLabel,
   getDefaultRange,
   toOHLC,
   type ChartSignalSelection,
   type ChartStrategySelection,
-  type StockActionState,
 } from '@/components/StockDailyKChart'
 import { StockIntradayChart } from '@/components/StockIntradayChart'
 import { StockTechnicalPanel } from '@/components/StockTechnicalPanel'
 import { StockChanlunPanel } from '@/components/StockChanlunPanel'
-import { StockElliottPanel } from '@/components/StockElliottPanel'
-import { StockPriceZonesPanel } from '@/components/StockPriceZonesPanel'
-import { StockSignalRiskPanel } from '@/components/StockSignalRiskPanel'
 import { StockAiChatPanel } from '@/components/StockAiChatPanel'
 import { financialMetricsQueryOptions, useFinancialMetrics } from '@/lib/useFinancials'
 import { useCapabilities, useQuoteStatus } from '@/lib/useSharedQueries'
 import { scheduleNeighborPrefetch } from '@/lib/neighborPrefetch'
-import type { ChartMarker, ChartPriceBand, ChartPriceLine, ChartRange } from '@/components/EChartsCandlestick'
+import type { ChartMarker, ChartPriceLine, ChartRange } from '@/components/EChartsCandlestick'
 import {
   loadInfoFields,
   saveInfoFields,
@@ -44,36 +38,14 @@ import {
   type ColumnConfig,
 } from '@/lib/stock-info-fields'
 import { analyzeChanlun, type ChanlunStructureSource } from '@/lib/chanlun'
-import { analyzeElliott } from '@/lib/elliott'
-import { storage, type StockPreviewAnalysisSectionsV2, type StockPreviewAnalysisSectionsV3, type StockPreviewDecisionSectionsV1 } from '@/lib/storage'
-import { buildPriceZones, type PriceZone } from '@/lib/priceZones'
-import { buildSignalRiskContexts, selectPreferredSignal, type SignalRiskContext } from '@/lib/signalRisk'
+import { storage, type StockPreviewAnalysisSectionsV2, type StockPreviewAnalysisSectionsV3 } from '@/lib/storage'
 import { buildStockChatSnapshot } from '@/lib/stockChatContext'
-import { actionSignalMarkers, buildActionSignals, type ActionSignalInput, type ActionSignalResult } from '@/lib/actionSignals'
 
 const DEFAULT_SPLIT_RATIO = 1.4 / 2.4
 const MIN_SPLIT_RATIO = 0.25
 const MAX_SPLIT_RATIO = 0.75
 const SPLIT_GAP_PX = 12
 const CHANLUN_PERIODS: KlinePeriod[] = ['30m', '1d', '1w', '1mo']
-
-function actionStateReason(result: ActionSignalResult): string {
-  const { current } = result
-  if (current.action === 'defense_test') {
-    return current.defensePrice == null
-      ? '盘中跌破防守位但收盘收回，暂不退出。'
-      : `盘中跌破防守位 ${current.defensePrice.toFixed(3)} 但收盘收回，暂不退出。`
-  }
-  if (current.defenseStatus === 'break_pending' && current.defensePrice != null) {
-    return `收盘跌破防守位 ${current.defensePrice.toFixed(3)}，等待第二根收盘确认；单根深破则立即退出。`
-  }
-  if (current.phase === 'defensive') {
-    return current.observation === 'bottom_observe'
-      ? '防守状态；重新进入底部观察，等待回补或结构恢复。'
-      : '高位风险确认后进入防守；等待 HL + 颈线突破、强势恢复或防守失败。'
-  }
-  return result.currentEvent?.reasons.join('；') ?? result.reason
-}
 
 function clampSplitRatioValue(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_SPLIT_RATIO
@@ -104,17 +76,6 @@ function normalizeAnalysisSections(
     version: 3,
     technicalCollapsed: value?.technicalCollapsed ?? legacy?.technicalCollapsed ?? false,
     chanlunCollapsed: value?.chanlunCollapsed === true,
-    elliottCollapsed: value?.elliottCollapsed === true,
-  }
-}
-
-function normalizeDecisionSections(value: StockPreviewDecisionSectionsV1 | null | undefined): StockPreviewDecisionSectionsV1 {
-  return {
-    version: 1,
-    priceZonesCollapsed: value?.priceZonesCollapsed === true,
-    signalRiskCollapsed: value?.signalRiskCollapsed === true,
-    showPriceZones: value?.showPriceZones !== false,
-    showInvalidationLine: value?.showInvalidationLine !== false,
   }
 }
 
@@ -271,11 +232,6 @@ export function StockPanel({
     storage.stockPreviewAnalysisSectionsV2.get(null),
   ))
   const [analysisTab, setAnalysisTab] = useState<StockAnalysisTab>('indicator')
-  const [decisionSections, setDecisionSections] = useState(() => normalizeDecisionSections(
-    storage.stockPreviewDecisionSectionsV1.get(null),
-  ))
-  const [selectedSignalId, setSelectedSignalId] = useState<string | null>(null)
-  const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null)
   const [splitDragging, setSplitDragging] = useState(false)
   const setFollowingLatest = useCallback((value: boolean) => {
     followsLatestRef.current = value
@@ -299,14 +255,6 @@ export function StockPanel({
     setAnalysisSections(previous => {
       const next = { ...previous, [key]: !previous[key] }
       storage.stockPreviewAnalysisSectionsV3.set(next)
-      return next
-    })
-  }, [])
-
-  const toggleDecisionSection = useCallback((key: keyof Omit<StockPreviewDecisionSectionsV1, 'version'>) => {
-    setDecisionSections(previous => {
-      const next = { ...previous, [key]: !previous[key] }
-      storage.stockPreviewDecisionSectionsV1.set(next)
       return next
     })
   }, [])
@@ -441,18 +389,6 @@ export function StockPanel({
     () => analyzeChanlun(analysisRows, effectiveSelectedBarKey, { period, source: chanlunSource }),
     [analysisRows, chanlunSource, effectiveSelectedBarKey, period],
   )
-  const elliottAnalysis = useMemo(
-    () => analyzeElliott(analysisRows, period, effectiveSelectedBarKey),
-    [analysisRows, effectiveSelectedBarKey, period],
-  )
-  const priceZones: PriceZone[] = useMemo(
-    () => buildPriceZones(chanlunAnalysis),
-    [chanlunAnalysis],
-  )
-  const signalRiskContexts: SignalRiskContext[] = useMemo(
-    () => buildSignalRiskContexts(chanlunAnalysis.candidateSignals, priceZones, chanlunAnalysis.currentPrice),
-    [chanlunAnalysis.candidateSignals, chanlunAnalysis.currentPrice, priceZones],
-  )
   const stockChatSnapshot = useMemo(
     () => buildStockChatSnapshot({
       symbol,
@@ -461,119 +397,8 @@ export function StockPanel({
       selectedDate: effectiveSelectedBarKey,
       response: displayAnalysisResponse,
       chanlun: chanlunAnalysis,
-      elliott: elliottAnalysis,
-      priceZones,
-      signalRisk: signalRiskContexts,
     }),
-    [chanlunAnalysis, displayAnalysisResponse, effectiveSelectedBarKey, elliottAnalysis, period, priceZones, signalRiskContexts, symbol],
-  )
-  const preferredSignal = useMemo(
-    () => selectPreferredSignal(signalRiskContexts),
-    [signalRiskContexts],
-  )
-  const selectedSignal = useMemo(
-    () => signalRiskContexts.find(context => context.signal.id === selectedSignalId) ?? preferredSignal,
-    [preferredSignal, selectedSignalId, signalRiskContexts],
-  )
-  const actionRows = useMemo(() => {
-    if (analysisRows.length > 0) return analysisRows
-    if (period === '30m') return periodKline.isPlaceholderData ? [] : periodRows
-    return rows
-  }, [analysisRows, period, periodKline.isPlaceholderData, periodRows, rows])
-  const actionResponse = displayAnalysisResponse ?? (
-    period === '30m' && !periodKline.isPlaceholderData ? periodKline.data : period === '1d' ? kline.data : undefined
-  )
-  const actionInput = useMemo<ActionSignalInput | null>(() => {
-    if (period !== '1d' && period !== '30m') return null
-    return {
-      symbol,
-      assetType: analysisAssetType,
-      period,
-      rows: actionRows,
-      technicalScores: actionResponse?.technical_scores,
-      dataStatus: actionResponse?.data_status,
-      dataSource: actionResponse?.source,
-      selectedDate: effectiveSelectedBarKey,
-    }
-  }, [actionResponse, actionRows, analysisAssetType, effectiveSelectedBarKey, period, symbol])
-  const actionInputKey = `${symbol}|${period}|${chartDateRange.start}|${chartDateRange.end}|${effectiveSelectedBarKey ?? ''}|${analysisSnapshot?.calculatedAt ?? 0}|${actionRows.length}|${actionRows.at(-1)?.date ?? ''}`
-  const actionContextKey = analysisContextKey
-  const actionSnapshotKey = `${analysisContextKey}|${effectiveSelectedBarKey ?? ''}`
-  const actionWorkerRef = useRef<Worker | null>(null)
-  const actionWorkerRequestRef = useRef(0)
-  const actionResultCacheRef = useRef(new Map<string, ActionSignalResult>())
-  const [workerAction, setWorkerAction] = useState<{ key: string; contextKey: string; requestId: number; result: ActionSignalResult } | null>(null)
-  useEffect(() => {
-    const requestId = actionWorkerRequestRef.current + 1
-    actionWorkerRequestRef.current = requestId
-    if (!actionInput) {
-      setWorkerAction(null)
-      return
-    }
-    const resolveActionResult = (result: ActionSignalResult) => {
-      if (result.status === 'stale') {
-        const previous = actionResultCacheRef.current.get(actionSnapshotKey)
-        if (previous) {
-          return {
-            ...previous,
-            status: 'stale' as const,
-            dataStatus: 'stale' as const,
-            reason: '当前为过期快照，保留上一份有效行动信号，不确认新的行动信号。',
-          }
-        }
-      } else if (result.status === 'ready' || result.status === 'provisional') {
-        const cache = actionResultCacheRef.current
-        cache.set(actionSnapshotKey, result)
-        if (cache.size > 20) {
-          const oldestKey = cache.keys().next().value
-          if (typeof oldestKey === 'string') cache.delete(oldestKey)
-        }
-      }
-      return result
-    }
-    let worker = actionWorkerRef.current
-    try {
-      if (!worker) {
-        worker = new Worker(new URL('../lib/actionSignals.worker.ts', import.meta.url), { type: 'module' })
-        actionWorkerRef.current = worker
-      }
-    } catch {
-      setWorkerAction({ key: actionInputKey, contextKey: actionContextKey, requestId, result: resolveActionResult(buildActionSignals(actionInput)) })
-      return
-    }
-    const handleMessage = (event: MessageEvent<{ requestId: number; result: ActionSignalResult }>) => {
-      if (event.data.requestId !== requestId || actionWorkerRequestRef.current !== requestId) return
-      setWorkerAction({ key: actionInputKey, contextKey: actionContextKey, requestId, result: resolveActionResult(event.data.result) })
-    }
-    const handleError = () => {
-      if (actionWorkerRequestRef.current !== requestId) return
-      setWorkerAction({ key: actionInputKey, contextKey: actionContextKey, requestId, result: resolveActionResult(buildActionSignals(actionInput)) })
-    }
-    worker.addEventListener('message', handleMessage)
-    worker.addEventListener('error', handleError)
-    worker.postMessage({ requestId, input: actionInput })
-    return () => {
-      worker?.removeEventListener('message', handleMessage)
-      worker?.removeEventListener('error', handleError)
-    }
-  }, [actionContextKey, actionInput, actionInputKey, actionSnapshotKey])
-  useEffect(() => () => {
-    actionWorkerRef.current?.terminate()
-    actionWorkerRef.current = null
-  }, [])
-  const actionSignals = useMemo(
-    () => {
-      if (!actionInput || !workerAction) return null
-      // 快照或历史 K 线点选会触发下一次 Worker 计算。保留同一标的、周期和窗口
-      // 的上一份结果，避免计算空窗让行动卡在新旧两套摘要之间闪烁。
-      if (workerAction.key === actionInputKey || workerAction.contextKey === actionContextKey) return workerAction.result
-      return null
-    },
-    [actionContextKey, actionInput, actionInputKey, workerAction],
-  )
-  const actionMarkers = useMemo(
-    () => actionSignals ? actionSignalMarkers(actionSignals) : [],
-    [actionSignals],
+    [chanlunAnalysis, displayAnalysisResponse, effectiveSelectedBarKey, period, symbol],
   )
   const recalculateAnalysis = useCallback(async () => {
     const requestId = analysisRefreshRequestRef.current + 1
@@ -629,41 +454,6 @@ export function StockPanel({
     return () => window.clearTimeout(timer)
   }, [analysisRefreshing, autoAnalysisEnabled, quoteStatus?.is_trading_hours, recalculateAnalysis, refetchIntervalMs, resolvedRightPaneMode, symbol])
 
-  const priceBands: ChartPriceBand[] = useMemo(() => {
-    const supports = priceZones.filter(zone => zone.side === 'support').sort((a, b) => (a.distancePct ?? Infinity) - (b.distancePct ?? Infinity))
-    const resistances = priceZones.filter(zone => zone.side === 'resistance').sort((a, b) => (a.distancePct ?? Infinity) - (b.distancePct ?? Infinity))
-    const highlightedZoneIds = new Set([
-      selectedZoneId,
-      selectedSignal?.target1?.id,
-      selectedSignal?.target2?.id,
-    ].filter((id): id is string => !!id))
-    return priceZones.map(zone => {
-      const rank = zone.side === 'support' ? supports.findIndex(item => item.id === zone.id) + 1 : zone.side === 'resistance' ? resistances.findIndex(item => item.id === zone.id) + 1 : 0
-      return {
-        low: zone.low,
-        high: zone.high,
-        label: zone.side === 'support' ? `S${rank}` : zone.side === 'resistance' ? `R${rank}` : '现价区',
-        color: highlightedZoneIds.has(zone.id) ? 'rgba(59,130,246,0.16)' : zone.side === 'support' ? 'rgba(34,197,94,0.08)' : zone.side === 'resistance' ? 'rgba(239,68,68,0.08)' : 'rgba(59,130,246,0.08)',
-        borderColor: highlightedZoneIds.has(zone.id) ? '#3B82F6' : zone.side === 'support' ? 'rgba(34,197,94,0.48)' : zone.side === 'resistance' ? 'rgba(239,68,68,0.48)' : 'rgba(59,130,246,0.48)',
-      }
-    })
-  }, [priceZones, selectedSignal, selectedZoneId])
-  const decisionPriceLines: ChartPriceLine[] = useMemo(() => {
-    if (!selectedSignal) return []
-    const lines: ChartPriceLine[] = []
-    if (decisionSections.showInvalidationLine && selectedSignal.invalidation != null) {
-      lines.push({
-        value: selectedSignal.invalidation,
-        label: '结构失效',
-        color: selectedSignal.direction === 'buy' ? '#EF4444' : '#22C55E',
-      })
-    }
-    return lines
-  }, [decisionSections.showInvalidationLine, selectedSignal])
-  const chartPriceLines = useMemo(
-    () => [...(priceLines ?? []), ...decisionPriceLines],
-    [decisionPriceLines, priceLines],
-  )
   // 非日K查询尚未到达时用信息条的日线维持分栏高度，数据到达后自动切换到目标周期。
   const selectableRows = period !== '1d' && periodRows.length > 0 ? periodRows : rows
   const infoRows = visibleThrough && period !== '1d' ? visiblePeriodRawRows : visibleRawRows
@@ -864,8 +654,6 @@ export function StockPanel({
     setFollowingLatest(true)
     setLinkedPrice(null)
     setRightPaneDismissed(false)
-    setSelectedSignalId(null)
-    setSelectedZoneId(null)
   }, [setFollowingLatest, symbol])
 
   const prevPeriod = useRef<KlinePeriod>(period)
@@ -876,14 +664,7 @@ export function StockPanel({
     setFollowingLatest(true)
     setLinkedPrice(null)
     setRightPaneDismissed(false)
-    setSelectedSignalId(null)
-    setSelectedZoneId(null)
   }, [period, setFollowingLatest])
-
-  useEffect(() => {
-    setSelectedSignalId(null)
-    setSelectedZoneId(null)
-  }, [chanlunSource])
 
   // 目标周期数据到达后，如果此前只是用日线占位选中了日期，则回到该周期最新一根。
   useEffect(() => {
@@ -925,21 +706,6 @@ export function StockPanel({
   const rightPaneLabel = resolvedRightPaneMode === 'technical'
     ? '技术指标'
     : resolvedRightPaneMode === 'intraday' ? '分时图' : '右侧面板'
-  const actionState: StockActionState | undefined = actionSignals ? {
-    action: actionSignals.current.action,
-    observation: actionSignals.current.observation,
-    defenseStatus: actionSignals.current.defenseStatus,
-    status: actionSignals.status,
-    reason: actionStateReason(actionSignals),
-  } : undefined
-  const actionStatus = actionState && (period === '1d' || period === '30m') ? (
-    <span
-      className={`shrink-0 rounded px-2 py-0.5 text-[11px] font-mono ${actionStateClass(actionState.action)}`}
-      title={actionState.reason}
-    >
-      {actionStateLabel(actionState)}{actionState.status === 'provisional' ? '（待收盘）' : ''}
-    </span>
-  ) : undefined
   // 详情页的独立滚动布局把信息条归入左栏，让右侧分析面板从同一高度开始。
   const splitInfoBar = independentPaneScroll && !infoBarOnly
   const infoBar = (
@@ -955,7 +721,6 @@ export function StockPanel({
       fields={fields}
       onFieldsChange={handleFieldsChange}
       financialMetrics={financialMetrics}
-      actionStatus={actionStatus}
       onMonitor={onMonitor}
       inWatchlist={inWatchlist}
       onAddToWatchlist={onAddToWatchlist}
@@ -990,10 +755,8 @@ export function StockPanel({
               height={height}
               dateRange={chartDateRange}
               markers={markers}
-              actionMarkers={actionMarkers}
               ranges={ranges}
-              priceBands={decisionSections.showPriceZones ? priceBands : undefined}
-              priceLines={chartPriceLines}
+              priceLines={priceLines}
               showLimitMarkers={showLimitMarkers}
               showMarkerToggle={showMarkerToggle}
               linkedPrice={linkedPrice}
@@ -1008,7 +771,6 @@ export function StockPanel({
               addedDate={addedDate}
               includeTechnicalScores={includeTechnicalScores}
               chanlunAnalysis={resolvedRightPaneMode === 'technical' ? chanlunAnalysis : undefined}
-              elliottAnalysis={resolvedRightPaneMode === 'technical' ? elliottAnalysis : undefined}
               visibleThrough={visibleThrough}
               hideCurrentDate={hideCurrentDate}
               selectedStrategy={selectedStrategy}
@@ -1059,7 +821,7 @@ export function StockPanel({
                 onPriceHover={setLinkedPrice}
                 onPriceDoubleClick={onPriceDoubleClick}
                 currentPrice={rows[rows.length - 1]?.close}
-                priceLines={chartPriceLines}
+                priceLines={priceLines}
                 assetType={assetType}
                 refetchIntervalMs={refetchIntervalMs}
               />
@@ -1150,37 +912,6 @@ export function StockPanel({
                   multiPeriodExpanded={multiPeriodExpanded}
                   onToggleMultiPeriod={() => setMultiPeriodExpanded(value => !value)}
                   multiPeriod={multiPeriodAnalysis}
-                />
-                <StockElliottPanel
-                  symbol={symbol}
-                  rows={analysisRows}
-                  period={period}
-                  assetType={analysisAssetType}
-                  analysis={elliottAnalysis}
-                  collapsed={analysisSections.elliottCollapsed}
-                  onToggleCollapsed={() => toggleAnalysisSection('elliottCollapsed')}
-                />
-                <StockPriceZonesPanel
-                  analysis={chanlunAnalysis}
-                  zones={priceZones}
-                  assetType={analysisAssetType}
-                  collapsed={decisionSections.priceZonesCollapsed}
-                  onToggleCollapsed={() => toggleDecisionSection('priceZonesCollapsed')}
-                  showZones={decisionSections.showPriceZones}
-                  onToggleShowZones={() => toggleDecisionSection('showPriceZones')}
-                  selectedZoneId={selectedZoneId}
-                  onSelectZone={zone => setSelectedZoneId(current => current === zone.id ? null : zone.id)}
-                />
-                <StockSignalRiskPanel
-                  contexts={signalRiskContexts}
-                  period={period}
-                  assetType={analysisAssetType}
-                  collapsed={decisionSections.signalRiskCollapsed}
-                  onToggleCollapsed={() => toggleDecisionSection('signalRiskCollapsed')}
-                  showInvalidationLine={decisionSections.showInvalidationLine}
-                  onToggleShowInvalidationLine={() => toggleDecisionSection('showInvalidationLine')}
-                  selectedSignalId={selectedSignalId}
-                  onSelectSignal={setSelectedSignalId}
                 />
                 </>}
                 {analysisTab === 'ai' && (

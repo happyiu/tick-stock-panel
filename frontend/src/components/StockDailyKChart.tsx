@@ -2,19 +2,17 @@ import { useCallback, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Activity, Check, Layers, Loader2, Settings2, X } from 'lucide-react'
 import { api, type KlinePeriod, type KlineRow } from '@/lib/api'
-import type { ActionCurrentAction, ActionDefenseStatus, ActionObservation, ActionSignalStatus } from '@/lib/actionSignals'
 import type { ChanlunAnalysis } from '@/lib/chanlun'
-import type { ElliottAnalysis } from '@/lib/elliott'
 import { DEFAULT_30M_DAYS, defaultKlineRange, filterKlineRowsThrough, klinePeriodQueryOptions, normalizeKlineBarKey } from '@/lib/kline'
 import { QK } from '@/lib/queryKeys'
 import type { ChartSignalSelection as ChartSignalSelectionModel } from '@/lib/signals'
-import { storage, type StockPreviewChanlunOverlayConfig, type StockPreviewElliottOverlayConfig } from '@/lib/storage'
+import { storage, type StockPreviewChanlunOverlayConfig } from '@/lib/storage'
+import { ChartIndicatorMenu } from './ChartIndicatorMenu'
 import {
   EChartsCandlestick,
   OVERLAY_INDICATORS,
   SUB_CHARTS,
   type ChartMarker,
-  type ChartPriceBand,
   type ChartPriceLine,
   type ChartRange,
   type OHLC,
@@ -32,11 +30,6 @@ const DEFAULT_CHANLUN_OVERLAY: StockPreviewChanlunOverlayConfig = {
   centers: true,
   candidates: true,
   divergences: false,
-}
-const DEFAULT_ELLIOTT_OVERLAY: StockPreviewElliottOverlayConfig = {
-  enabled: false,
-  labels: true,
-  strokes: true,
 }
 
 function normalizeVolumeCompare(config: VolumeCompareConfig): VolumeCompareConfig {
@@ -58,23 +51,18 @@ function normalizeChanlunOverlay(config: StockPreviewChanlunOverlayConfig): Stoc
   }
 }
 
-function normalizeElliottOverlay(config: StockPreviewElliottOverlayConfig): StockPreviewElliottOverlayConfig {
-  return {
-    enabled: config?.enabled === true,
-    labels: config?.labels !== false,
-    strokes: config?.strokes !== false,
-  }
-}
-
-function loadActiveSubCharts(): string[] {
+function loadActiveIndicators(): string[] {
   const saved = storage.stockPreviewSubCharts.get(['vol'])
-  if (!Array.isArray(saved)) return ['vol']
-  const valid = saved.filter((key, index) =>
+  const valid = Array.isArray(saved) ? saved.filter((key, index) =>
     typeof key === 'string'
       && SUB_CHARTS.some(chart => chart.key === key)
       && saved.indexOf(key) === index,
-  )
-  return saved.length > 0 && valid.length === 0 ? ['vol'] : valid
+  ) : ['vol']
+  const sub = Array.isArray(saved) && saved.length > 0 && valid.length === 0 ? ['vol'] : valid
+  const main = storage.stockPreviewMainCharts.get([])
+  return [...sub, ...(Array.isArray(main) ? main.filter((key, index) =>
+    OVERLAY_INDICATORS.some(indicator => indicator.key === key) && main.indexOf(key) === index,
+  ) : [])]
 }
 
 interface Props {
@@ -83,10 +71,7 @@ interface Props {
   className?: string
   dateRange?: { start: string; end: string }
   markers?: ChartMarker[]
-  /** 行动决策层历史事件标记；仅日线和30分钟周期接入。 */
-  actionMarkers?: ChartMarker[]
   ranges?: ChartRange[]
-  priceBands?: ChartPriceBand[]
   priceLines?: ChartPriceLine[]
   showLimitMarkers?: boolean
   showIndicatorControls?: boolean
@@ -111,8 +96,6 @@ interface Props {
   includeTechnicalScores?: boolean
   /** 当前周期、当前历史截面的缠论结构近似结果；未传入时不显示相关控件和覆盖层。 */
   chanlunAnalysis?: ChanlunAnalysis
-  /** 当前周期、当前历史截面的艾略特波浪摆动代理；覆盖层默认关闭。 */
-  elliottAnalysis?: ElliottAnalysis
   /** 调试进行中时只展示到当前推进的 K 线。 */
   visibleThrough?: string | null
   /** 调试设置开启时隐藏当前推进 K 线的日期。 */
@@ -129,47 +112,8 @@ interface Props {
   onClearSignals?: () => void
 }
 
-export type StockActionState = {
-  action: ActionCurrentAction
-  observation: ActionObservation | null
-  defenseStatus: ActionDefenseStatus
-  status: ActionSignalStatus
-  reason: string
-}
-
 export type ChartStrategySelection = NonNullable<Props['selectedStrategy']>
 export type ChartSignalSelection = ChartSignalSelectionModel
-
-const ACTION_STATE_LABELS: Record<ActionCurrentAction, string> = {
-  bottom_observe: '底部观察',
-  top_observe: '高位观察',
-  extreme_top_observe: '极端高位观察',
-  attack: '试仓',
-  add: '加仓',
-  reduce: '减仓',
-  retreat: '退出',
-  hold: '持有',
-  defensive: '防守',
-  defense_test: '防守位测试',
-  wait: '等待',
-  wait_defensive: '高位观察',
-}
-
-export function actionStateClass(action: ActionCurrentAction): string {
-  if (action === 'attack') return 'text-bull bg-bull/10'
-  if (action === 'add' || action === 'hold') return 'text-accent bg-accent/10'
-  if (action === 'reduce' || action === 'top_observe' || action === 'extreme_top_observe' || action === 'wait_defensive') return 'text-warning bg-warning/10'
-  if (action === 'defense_test' || action === 'defensive') return 'text-warning bg-warning/10'
-  if (action === 'retreat') return 'text-bear bg-bear/10'
-  return 'text-muted bg-elevated'
-}
-
-export function actionStateLabel(state: StockActionState): string {
-  const label = ACTION_STATE_LABELS[state.action]
-  return state.action === 'defensive' || state.action === 'defense_test'
-    ? `${label}${state.observation ? ` · ${ACTION_STATE_LABELS[state.observation]}` : ''}`
-    : label
-}
 
 function isValidRow(r: any): boolean {
   return r && r.date != null && r.open != null && r.close != null
@@ -257,9 +201,7 @@ export function StockDailyKChart({
   className,
   dateRange: externalDateRange,
   markers,
-  actionMarkers,
   ranges,
-  priceBands,
   priceLines,
   showLimitMarkers = true,
   showIndicatorControls = true,
@@ -278,7 +220,6 @@ export function StockDailyKChart({
   periodDays = DEFAULT_30M_DAYS,
   includeTechnicalScores = false,
   chanlunAnalysis,
-  elliottAnalysis,
   visibleThrough,
   hideCurrentDate = false,
   selectedStrategy,
@@ -287,21 +228,16 @@ export function StockDailyKChart({
   selectedSignals,
   onClearSignals,
 }: Props) {
-  const [activeIndicators, setActiveIndicators] = useState<string[]>(loadActiveSubCharts)
+  const [activeIndicators, setActiveIndicators] = useState<string[]>(loadActiveIndicators)
   const [showMarkers, setShowMarkers] = useState(true)
   // 加入自选日标注（与「异动」标记相互独立）
   const [showAddedMark, setShowAddedMark] = useState(true)
-  const [showActionSignals, setShowActionSignals] = useState(() => storage.stockPreviewActionSignals.get(true))
   const [volumeCompare, setVolumeCompare] = useState<VolumeCompareConfig>(() =>
     normalizeVolumeCompare(storage.stockVolumeCompare.get(DEFAULT_VOLUME_COMPARE)),
   )
   const [chanlunMenuOpen, setChanlunMenuOpen] = useState(false)
-  const [elliottMenuOpen, setElliottMenuOpen] = useState(false)
   const [chanlunOverlay, setChanlunOverlay] = useState<StockPreviewChanlunOverlayConfig>(() =>
     normalizeChanlunOverlay(storage.stockPreviewChanlunOverlay.get(DEFAULT_CHANLUN_OVERLAY)),
-  )
-  const [elliottOverlay, setElliottOverlay] = useState<StockPreviewElliottOverlayConfig>(() =>
-    normalizeElliottOverlay(storage.stockPreviewElliottOverlay.get(DEFAULT_ELLIOTT_OVERLAY)),
   )
   const dateRange = externalDateRange ?? defaultKlineRange(period)
 
@@ -433,26 +369,16 @@ export function StockDailyKChart({
   const effectiveShowLimitMarkers = showLimitMarkers && period === '1d' && kline.data?.asset_type !== 'etf'
   const allMarkers = useMemo(() => [
     ...(markers ?? []),
-    ...(showActionSignals && (period === '1d' || period === '30m') ? (actionMarkers ?? []) : []),
     ...(effectiveShowLimitMarkers ? limitMarkers : []),
     ...strategyMarkers,
     ...signalMarkers,
-  ], [actionMarkers, effectiveShowLimitMarkers, limitMarkers, markers, period, showActionSignals, signalMarkers, strategyMarkers])
-
-  const toggleActionSignals = useCallback(() => {
-    setShowActionSignals(value => {
-      const next = !value
-      storage.stockPreviewActionSignals.set(next)
-      return next
-    })
-  }, [])
+  ], [effectiveShowLimitMarkers, limitMarkers, markers, signalMarkers, strategyMarkers])
 
   const toggleIndicator = useCallback((key: string) => {
     setActiveIndicators(prev => {
       const next = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
-      if (SUB_CHARTS.some(chart => chart.key === key)) {
-        storage.stockPreviewSubCharts.set(next.filter(item => SUB_CHARTS.some(chart => chart.key === item)))
-      }
+      storage.stockPreviewSubCharts.set(next.filter(item => SUB_CHARTS.some(chart => chart.key === item)))
+      storage.stockPreviewMainCharts.set(next.filter(item => OVERLAY_INDICATORS.some(chart => chart.key === item)))
       return next
     })
   }, [])
@@ -473,14 +399,6 @@ export function StockDailyKChart({
     })
   }, [])
 
-  const updateElliottOverlay = useCallback((patch: Partial<StockPreviewElliottOverlayConfig>) => {
-    setElliottOverlay(previous => {
-      const next = normalizeElliottOverlay({ ...previous, ...patch })
-      storage.stockPreviewElliottOverlay.set(next)
-      return next
-    })
-  }, [])
-
   const activeSubDefs = activeIndicators
     .map(key => SUB_CHARTS.find(s => s.key === key))
     .filter((d): d is typeof SUB_CHARTS[number] => !!d)
@@ -495,34 +413,20 @@ export function StockDailyKChart({
     <div className={className} style={{ minHeight: chartHeight }}>
       {(showIndicatorControls || selectedStrategy || (selectedSignals?.length ?? 0) > 0) && rows.length > 0 && (
         <div className="px-1 pb-0.5">
-          <div className="flex min-w-0 items-center gap-1.5">
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           {showIndicatorControls && (<>
-            {SUB_CHARTS.map(ind => (
-              <button
-                key={ind.key}
-                onClick={() => toggleIndicator(ind.key)}
-                className={`px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors ${
-                  activeIndicators.includes(ind.key)
-                    ? 'bg-accent/20 text-accent'
-                    : 'bg-elevated text-muted hover:text-secondary'
-                }`}
-              >
-                {ind.label}
-              </button>
-            ))}
-            {OVERLAY_INDICATORS.map(ind => (
-              <button
-                key={ind.key}
-                onClick={() => toggleIndicator(ind.key)}
-                className={`px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors ${
-                  activeIndicators.includes(ind.key)
-                    ? 'bg-accent/20 text-accent'
-                    : 'bg-elevated text-muted hover:text-secondary'
-                }`}
-              >
-                {ind.label}
-              </button>
-            ))}
+            <ChartIndicatorMenu activeIndicators={activeIndicators} onToggle={toggleIndicator} />
+            {activeIndicators.map(key => {
+              const indicator = [...OVERLAY_INDICATORS, ...SUB_CHARTS].find(item => item.key === key)
+              return indicator && (
+                <button key={key} type="button" onClick={() => toggleIndicator(key)}
+                  aria-label={`移除${indicator.label}指标`} title={`移除${indicator.label}指标`}
+                  className="flex shrink-0 items-center gap-1 rounded bg-accent/10 px-2 py-0.5 text-[10px] text-accent hover:bg-accent/20"
+                >
+                  {indicator.label}<X className="h-2.5 w-2.5" />
+                </button>
+              )
+            })}
           {chanlunAnalysis && (
             <div
               className="relative ml-0.5 flex items-center"
@@ -580,73 +484,6 @@ export function StockDailyKChart({
                 </div>
               )}
             </div>
-          )}
-          {elliottAnalysis && (
-            <div
-              className="relative ml-0.5 flex items-center"
-              onBlur={event => {
-                if (!event.currentTarget.contains(event.relatedTarget)) setElliottMenuOpen(false)
-              }}
-            >
-              <button
-                type="button"
-                onClick={() => updateElliottOverlay({ enabled: !elliottOverlay.enabled })}
-                className={`rounded-l px-2 py-0.5 text-[10px] font-mono transition-colors ${
-                  elliottOverlay.enabled
-                    ? 'bg-[#F59E0B]/20 text-[#FBBF24]'
-                    : 'bg-elevated text-muted hover:text-secondary'
-                }`}
-                aria-pressed={elliottOverlay.enabled}
-                title={elliottOverlay.enabled ? '隐藏波浪覆盖层' : '显示波浪覆盖层'}
-              >
-                波浪
-              </button>
-              <button
-                type="button"
-                onClick={() => setElliottMenuOpen(value => !value)}
-                className="rounded-r border-l border-border/60 bg-elevated px-1.5 py-0.5 text-muted transition-colors hover:text-secondary"
-                title="配置波浪覆盖层"
-                aria-label="配置波浪覆盖层"
-                aria-expanded={elliottMenuOpen}
-              >
-                <Settings2 className="h-3 w-3" />
-              </button>
-              {elliottMenuOpen && (
-                <div className="absolute left-0 top-full z-30 mt-1 w-32 rounded-card border border-border bg-surface p-1.5 shadow-xl">
-                  {([
-                    ['labels', '拐点标签'],
-                    ['strokes', '波段连线'],
-                  ] as const).map(([key, label]) => (
-                    <button
-                      key={key}
-                      type="button"
-                      role="checkbox"
-                      aria-checked={elliottOverlay[key]}
-                      onClick={() => updateElliottOverlay({ [key]: !elliottOverlay[key] })}
-                      className="flex w-full items-center gap-2 rounded-btn px-2 py-1.5 text-left text-[10px] text-secondary transition-colors hover:bg-elevated hover:text-foreground"
-                    >
-                      <span className={`flex h-3.5 w-3.5 items-center justify-center rounded border ${elliottOverlay[key] ? 'border-[#F59E0B] bg-[#F59E0B]' : 'border-border bg-base'}`}>
-                        {elliottOverlay[key] && <Check className="h-2.5 w-2.5 text-white" strokeWidth={3} />}
-                      </span>
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-          {(actionMarkers?.length ?? 0) > 0 && (period === '1d' || period === '30m') && (
-            <button
-              type="button"
-              onClick={toggleActionSignals}
-              className={`ml-1 px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors ${
-                showActionSignals ? 'text-accent bg-accent/10' : 'bg-elevated text-muted hover:text-secondary'
-              }`}
-              aria-pressed={showActionSignals}
-              title={showActionSignals ? '隐藏行动信号' : '显示行动信号'}
-            >
-              行动信号
-            </button>
           )}
           {activeIndicators.includes('vol') && (
             <div className="ml-0.5 flex h-5 items-center gap-1.5 border-l border-border/70 pl-2">
@@ -782,9 +619,9 @@ export function StockDailyKChart({
       {rows.length > 0 && (
         <EChartsCandlestick
           data={rows}
+          period={period}
           markers={allMarkers}
           ranges={ranges}
-          priceBands={priceBands}
           priceLines={priceLines}
           height={chartHeight - 22}
           showMA={showMA}
@@ -803,8 +640,6 @@ export function StockDailyKChart({
           addedDate={showAddedMark ? addedDate : null}
           chanlunAnalysis={chanlunAnalysis}
           chanlunOverlay={chanlunOverlay}
-          elliottAnalysis={elliottAnalysis}
-          elliottOverlay={elliottOverlay}
           hideCurrentDate={hideCurrentDate}
         />
       )}

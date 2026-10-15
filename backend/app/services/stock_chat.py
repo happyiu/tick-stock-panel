@@ -72,8 +72,17 @@ class StockChatSnapshot(BaseModel):
     bars: list[dict[str, Any]] = Field(default_factory=list, max_length=90)
     technical_score: dict[str, Any] | None = None
     structure: dict[str, Any] = Field(default_factory=dict)
-    price_zones: list[dict[str, Any]] = Field(default_factory=list, max_length=12)
-    signal_risk: list[dict[str, Any]] = Field(default_factory=list, max_length=12)
+
+    @model_validator(mode="before")
+    @classmethod
+    def strip_legacy_analysis_context(cls, value: Any) -> Any:
+        # 兼容旧客户端/会话, 但不把已移除模块的数据继续传给 AI。
+        if isinstance(value, dict):
+            current = {key: item for key, item in value.items() if key not in {"price_zones", "signal_risk"}}
+            if isinstance(current.get("structure"), dict):
+                current["structure"] = {key: item for key, item in current["structure"].items() if key != "elliott"}
+            return current
+        return value
 
     @model_validator(mode="after")
     def validate_size(self) -> StockChatSnapshot:
@@ -122,7 +131,7 @@ _CHAT_SYSTEM_PROMPT = """你是 Seek Hub 详情页中的 Hermes Agent 研究助�
 ## 数据与上下文规则
 - <stock_snapshot_v1> 是详情页在会话首轮捕获的固定行情、指标和结构快照,其中的数值与截至时间优先于你的常识。
 - 只能把快照中明确存在的事实当作事实;缺失数据要直接说明,不要猜测或补造。
-- 缠论、艾略特及价位/风险信号是页面的“结构近似”研究结果,回答时保留近似边界、确认条件和失效条件,不能包装成严格预测。
+- 缠论是页面的结构近似研究结果,回答时保留近似边界、确认条件和失效条件,不能包装成严格预测。
 - 如果使用 Hermes 工具取得快照之外的信息,必须标明来源和取得时间,并区分外部信息与快照事实。
 - 不得编造新闻、公告、实时行情或快照中没有的指标值。
 
