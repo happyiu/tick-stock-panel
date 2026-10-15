@@ -33,8 +33,8 @@ vi.mock('@/lib/api', () => ({
 vi.mock('@/lib/useSharedQueries', () => ({
   useCapabilities: () => ({ data: { capabilities: { 'kline.minute.batch': true } } }),
 }))
-vi.mock('@/components/EChartsCandlestick', () => ({
-  EChartsCandlestick: ({ data, onDateClick }: {
+vi.mock('@/components/KLineCandlestick', () => ({
+  KLineCandlestick: ({ data, onDateClick }: {
     data: { date: string }[]; onDateClick: (date: string) => void
   }) => <div>{data.map(row => (
     <button key={row.date} data-day={row.date} onClick={() => onDateClick(row.date)}>{row.date}</button>

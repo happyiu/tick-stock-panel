@@ -437,7 +437,7 @@ export const OVERLAY_INDICATORS: { key: string; label: string }[] = [
   { key: 'boll2', label: 'boll2' },
 ]
 
-interface Props {
+export interface CandlestickProps {
   data: OHLC[]
   period?: KlinePeriod
   markers?: ChartMarker[]
@@ -1271,7 +1271,7 @@ export function EChartsCandlestick({
   chanlunAnalysis,
   chanlunOverlay,
   hideCurrentDate = false,
-}: Props) {
+}: CandlestickProps) {
   const hoverSurfaceRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<ECharts | null>(null)

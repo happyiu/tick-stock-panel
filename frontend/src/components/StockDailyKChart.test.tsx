@@ -12,9 +12,9 @@ vi.mock('@tanstack/react-query', () => ({
     } : undefined,
   }),
 }))
-vi.mock('./EChartsCandlestick', async importOriginal => ({
-  ...await importOriginal<typeof import('./EChartsCandlestick')>(),
-  EChartsCandlestick: ({ activeIndicators, period }: { activeIndicators: string[]; period?: string }) =>
+vi.mock('./KLineCandlestick', async importOriginal => ({
+  ...await importOriginal<typeof import('./KLineCandlestick')>(),
+  KLineCandlestick: ({ activeIndicators, period }: { activeIndicators: string[]; period?: string }) =>
     <div data-indicators={activeIndicators.join(',')} data-period={period} />,
 }))
 

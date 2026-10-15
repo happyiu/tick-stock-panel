@@ -9,7 +9,7 @@ import type { ChartSignalSelection as ChartSignalSelectionModel } from '@/lib/si
 import { storage, type StockPreviewChanlunOverlayConfig } from '@/lib/storage'
 import { ChartIndicatorMenu } from './ChartIndicatorMenu'
 import {
-  EChartsCandlestick,
+  KLineCandlestick,
   OVERLAY_INDICATORS,
   SUB_CHARTS,
   type ChartMarker,
@@ -17,7 +17,7 @@ import {
   type ChartRange,
   type OHLC,
   type VolumeCompareConfig,
-} from '@/components/EChartsCandlestick'
+} from '@/components/KLineCandlestick'
 
 const SUB_INFO_H = 16
 const SUB_GAP = 4
@@ -133,6 +133,7 @@ export function toOHLC(rows: KlineRow[], period: KlinePeriod = '1d'): OHLC[] {
       periodEnd: r.period_end != null ? String(r.period_end).replace('T', ' ').slice(0, 16) : null,
       isClosed: r.is_closed === true,
       volume: Number(r.volume ?? 0),
+      amount: r.amount != null ? Number(r.amount) : undefined,
       ma5: r.ma5 != null ? Number(r.ma5) : null,
       ma10: r.ma10 != null ? Number(r.ma10) : null,
       ma20: r.ma20 != null ? Number(r.ma20) : null,
@@ -617,7 +618,7 @@ export function StockDailyKChart({
         <div className="text-sm text-danger py-2">数据格式异常，请刷新页面</div>
       )}
       {rows.length > 0 && (
-        <EChartsCandlestick
+        <KLineCandlestick
           data={rows}
           period={period}
           markers={allMarkers}

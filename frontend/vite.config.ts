@@ -44,6 +44,7 @@ export default defineConfig({
         // 用函数形式按 node_modules 路径匹配, 比对象形式更可靠。
         manualChunks(id) {
           if (id.includes('node_modules')) {
+            if (id.includes('klinecharts')) return 'klinecharts'
             if (id.includes('echarts')) return 'echarts'
             if (id.includes('lightweight-charts')) return 'lightweight-charts'
           }
