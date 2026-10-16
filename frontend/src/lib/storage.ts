@@ -161,6 +161,9 @@ export const storage = {
   /** 个股预览弹窗宽度 */
   stockPreviewWidth: kv<number>('stock_preview_width'),
 
+  /** 个股预览弹窗高度 */
+  stockPreviewHeight: kv<number>('stock_preview_height'),
+
   /** 个股预览 30F 展示交易日数量 */
   stockPreview30mDays: kv<number>('stock_preview_30m_days'),
 

@@ -1,4 +1,7 @@
-import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
+import {
+  useEffect, useState, useCallback, useRef, useMemo, useId,
+  type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent,
+} from 'react'
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { PanelRightOpen, RefreshCw, X } from 'lucide-react'
 import { type KlinePeriod, type KlineResponse, type KlineRow, type FinancialMetricRecord } from '@/lib/api'
@@ -46,6 +49,131 @@ const MIN_SPLIT_RATIO = 0.25
 const MAX_SPLIT_RATIO = 0.75
 const SPLIT_GAP_PX = 12
 const CHANLUN_PERIODS: KlinePeriod[] = ['30m', '1d', '1w', '1mo']
+
+function ChartScrollbar({ scrollRef, controlsId, active }: {
+  scrollRef: { current: HTMLDivElement | null }
+  controlsId: string
+  active: boolean
+}) {
+  const trackRef = useRef<HTMLDivElement>(null)
+  const dragStart = useRef<{ pointerY: number; scrollTop: number } | null>(null)
+  const [metrics, setMetrics] = useState({ hasOverflow: false, top: 0, height: 0, scrollTop: 0, maxScroll: 0 })
+  const [focused, setFocused] = useState(false)
+  const [dragging, setDragging] = useState(false)
+
+  useEffect(() => {
+    const element = scrollRef.current
+    if (!element) return
+    const update = () => {
+      const maxScroll = Math.max(0, element.scrollHeight - element.clientHeight)
+      const trackHeight = Math.max(0, element.clientHeight - 8)
+      const hasOverflow = maxScroll > 0 && trackHeight > 0
+      const height = hasOverflow
+        ? Math.min(trackHeight, Math.max(24, trackHeight * element.clientHeight / element.scrollHeight))
+        : 0
+      const top = maxScroll > 0 ? element.scrollTop / maxScroll * (trackHeight - height) : 0
+      setMetrics({ hasOverflow, top, height, scrollTop: element.scrollTop, maxScroll })
+    }
+    update()
+    element.addEventListener('scroll', update, { passive: true })
+    const observer = new ResizeObserver(update)
+    observer.observe(element)
+    if (element.firstElementChild) observer.observe(element.firstElementChild)
+    return () => {
+      element.removeEventListener('scroll', update)
+      observer.disconnect()
+    }
+  }, [scrollRef])
+
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const element = scrollRef.current
+    const track = trackRef.current
+    if (!element || !track || event.button !== 0) return
+    event.preventDefault()
+    setDragging(true)
+    const maxThumbTop = Math.max(0, track.clientHeight - metrics.height)
+    if ((event.target as HTMLElement).dataset.scrollbarThumb === 'true') {
+      dragStart.current = { pointerY: event.clientY, scrollTop: element.scrollTop }
+    } else if (maxThumbTop > 0) {
+      const clickedTop = event.clientY - track.getBoundingClientRect().top - metrics.height / 2
+      element.scrollTop = Math.max(0, Math.min(1, clickedTop / maxThumbTop)) * metrics.maxScroll
+      dragStart.current = { pointerY: event.clientY, scrollTop: element.scrollTop }
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const element = scrollRef.current
+    const track = trackRef.current
+    if (!element || !track || !dragStart.current) return
+    const maxThumbTop = track.clientHeight - metrics.height
+    if (maxThumbTop <= 0) return
+    element.scrollTop = dragStart.current.scrollTop
+      + (event.clientY - dragStart.current.pointerY) / maxThumbTop * metrics.maxScroll
+  }
+
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const element = scrollRef.current
+    if (!element) return
+    const page = Math.max(40, element.clientHeight * 0.9)
+    const destinations: Record<string, number> = {
+      ArrowUp: element.scrollTop - 40,
+      ArrowDown: element.scrollTop + 40,
+      PageUp: element.scrollTop - page,
+      PageDown: element.scrollTop + page,
+      Home: 0,
+      End: metrics.maxScroll,
+    }
+    if (destinations[event.key] == null) return
+    event.preventDefault()
+    element.scrollTop = destinations[event.key]
+  }
+
+  const visible = active || focused || dragging
+  if (!metrics.hasOverflow) return null
+  return (
+    <div
+      ref={trackRef}
+      role="scrollbar"
+      aria-label="K线图滚动条"
+      aria-controls={controlsId}
+      aria-orientation="vertical"
+      aria-valuemin={0}
+      aria-valuemax={metrics.maxScroll}
+      aria-valuenow={metrics.scrollTop}
+      tabIndex={0}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={event => {
+        dragStart.current = null
+        setDragging(false)
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+      }}
+      onPointerCancel={() => { dragStart.current = null; setDragging(false) }}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      onWheel={event => {
+        const element = scrollRef.current
+        if (!element) return
+        event.preventDefault()
+        const delta = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+          ? event.deltaY * 32
+          : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+            ? event.deltaY * element.clientHeight
+            : event.deltaY
+        element.scrollTop += delta
+      }}
+      onKeyDown={onKeyDown}
+      className={`absolute inset-y-1 right-0 z-20 w-4 touch-none select-none cursor-grab outline-none active:cursor-grabbing transition-opacity duration-150 ${visible ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0'}`}
+    >
+      <span
+        data-scrollbar-thumb="true"
+        className="absolute left-1/2 w-1.5 -translate-x-1/2 rounded-full bg-muted/80 hover:bg-accent/80"
+        style={{ top: metrics.top, height: metrics.height }}
+      />
+    </div>
+  )
+}
 
 function clampSplitRatioValue(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_SPLIT_RATIO
@@ -233,12 +361,15 @@ export function StockPanel({
   ))
   const [analysisTab, setAnalysisTab] = useState<StockAnalysisTab>('indicator')
   const [splitDragging, setSplitDragging] = useState(false)
+  const [chartScrollbarHovered, setChartScrollbarHovered] = useState(false)
   const setFollowingLatest = useCallback((value: boolean) => {
     followsLatestRef.current = value
     setFollowsLatest(value)
   }, [])
   const splitContainerRef = useRef<HTMLDivElement>(null)
   const dailyPaneRef = useRef<HTMLDivElement>(null)
+  const dailyChartScrollRef = useRef<HTMLDivElement>(null)
+  const dailyChartScrollId = useId()
   const splitDraggingRef = useRef(false)
   const splitRatioRef = useRef(splitRatio)
   const splitPointerOffsetRef = useRef(0)
@@ -749,36 +880,59 @@ export function StockPanel({
           style={dailyPaneStyle}
         >
           {splitInfoBar && <div className="shrink-0">{infoBar}</div>}
-          <div className={splitInfoBar ? 'min-h-0 flex-1 overflow-y-auto' : undefined}>
-            <StockDailyKChart
-              symbol={symbol}
-              height={height}
-              dateRange={chartDateRange}
-              markers={markers}
-              ranges={ranges}
-              priceLines={priceLines}
-              showLimitMarkers={showLimitMarkers}
-              showMarkerToggle={showMarkerToggle}
-              linkedPrice={linkedPrice}
-              onDateClick={handleDateClick}
-              selectedDate={effectiveSelectedBarKey}
-              onPriceDoubleClick={onPriceDoubleClick}
-              visibleBars={visibleBars ?? (showIntraday ? 40 : 60)}
-              extColumns={extColumns}
-              refetchIntervalMs={refetchIntervalMs}
-              period={period}
-              periodDays={periodDays}
-              addedDate={addedDate}
-              includeTechnicalScores={includeTechnicalScores}
-              chanlunAnalysis={resolvedRightPaneMode === 'technical' ? chanlunAnalysis : undefined}
-              visibleThrough={visibleThrough}
-              hideCurrentDate={hideCurrentDate}
-              selectedStrategy={selectedStrategy}
-              onClearStrategy={onClearStrategy}
-              onAddSignal={onAddSignal}
-              selectedSignals={selectedSignals}
-              onClearSignals={onClearSignals}
-            />
+          <div
+            className={splitInfoBar ? 'relative min-h-0 flex-1' : undefined}
+            onPointerMove={splitInfoBar ? event => {
+              const bounds = event.currentTarget.getBoundingClientRect()
+              const hovered = event.clientX >= bounds.right - 16
+              setChartScrollbarHovered(previous => previous === hovered ? previous : hovered)
+            } : undefined}
+            onPointerLeave={splitInfoBar ? () => setChartScrollbarHovered(false) : undefined}
+          >
+            <div
+              id={dailyChartScrollId}
+              ref={dailyChartScrollRef}
+              tabIndex={splitInfoBar ? 0 : undefined}
+              aria-label={splitInfoBar ? 'K线图滚动区域' : undefined}
+              className={splitInfoBar ? 'stock-panel-chart-scroll absolute inset-0 overflow-y-auto' : undefined}
+            >
+              <StockDailyKChart
+                symbol={symbol}
+                height={height}
+                dateRange={chartDateRange}
+                markers={markers}
+                ranges={ranges}
+                priceLines={priceLines}
+                showLimitMarkers={showLimitMarkers}
+                showMarkerToggle={showMarkerToggle}
+                linkedPrice={linkedPrice}
+                onDateClick={handleDateClick}
+                selectedDate={effectiveSelectedBarKey}
+                onPriceDoubleClick={onPriceDoubleClick}
+                visibleBars={visibleBars ?? (showIntraday ? 40 : 60)}
+                extColumns={extColumns}
+                refetchIntervalMs={refetchIntervalMs}
+                period={period}
+                periodDays={periodDays}
+                addedDate={addedDate}
+                includeTechnicalScores={includeTechnicalScores}
+                chanlunAnalysis={resolvedRightPaneMode === 'technical' ? chanlunAnalysis : undefined}
+                visibleThrough={visibleThrough}
+                hideCurrentDate={hideCurrentDate}
+                selectedStrategy={selectedStrategy}
+                onClearStrategy={onClearStrategy}
+                onAddSignal={onAddSignal}
+                selectedSignals={selectedSignals}
+                onClearSignals={onClearSignals}
+              />
+            </div>
+            {splitInfoBar && (
+              <ChartScrollbar
+                scrollRef={dailyChartScrollRef}
+                controlsId={dailyChartScrollId}
+                active={chartScrollbarHovered}
+              />
+            )}
           </div>
         </div>
 

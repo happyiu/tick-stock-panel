@@ -84,6 +84,13 @@ html.dark {
 .timeline-scrollbar-hidden::-webkit-scrollbar {
   display: none;
 }
+.stock-panel-chart-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.stock-panel-chart-scroll::-webkit-scrollbar {
+  display: none;
+}
 .tabular { font-variant-numeric: tabular-nums; }
 .num { font-family: theme('fontFamily.mono'); font-variant-numeric: tabular-nums; }
 

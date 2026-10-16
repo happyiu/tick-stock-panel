@@ -416,7 +416,6 @@ export function KLineCandlestick({
         <label className="flex min-w-0 flex-1 items-center gap-1 whitespace-nowrap">起点<input aria-label="可见起始K线" className="w-full min-w-0 accent-sky-500" type="range" min={0} max={bars.length - 1} value={Math.min(visibleRange.from, bars.length - 1)} onChange={event => selectRange(Number(event.target.value), Math.max(Number(event.target.value) + 1, visibleRange.to))} /></label>
         <label className="flex min-w-0 flex-1 items-center gap-1 whitespace-nowrap">终点<input aria-label="可见结束K线" className="w-full min-w-0 accent-sky-500" type="range" min={1} max={bars.length} value={Math.min(visibleRange.to, bars.length)} onChange={event => selectRange(Math.min(visibleRange.from, Number(event.target.value) - 1), Number(event.target.value))} /></label>
       </div>}
-      {subKey && <div className="px-2 py-1 text-right text-[10px] text-muted">上下拖动副图之间的分隔线可调整高度</div>}
       {!bars.length && <div className="text-sm text-muted py-2">暂无有效日K数据</div>}
     </div>
   )

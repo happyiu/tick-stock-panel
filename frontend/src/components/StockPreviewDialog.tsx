@@ -85,6 +85,100 @@ interface PriceAlertDraft {
   currentPrice: number
 }
 const INTRADAY_DAY_OPTIONS = [1, 5, 10, 20] as const
+const DIALOG_MIN_WIDTH = 640
+const DIALOG_MIN_HEIGHT = 360
+const DIALOG_VIEWPORT_GAP = 12
+
+type ResizeDirection = 'ne' | 'nw' | 'se' | 'sw'
+
+interface DialogRect {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+interface DialogResizeSession {
+  direction: ResizeDirection
+  pointerId: number
+  startX: number
+  startY: number
+  startRect: DialogRect
+  currentRect: DialogRect
+  lastX: number
+  lastY: number
+  frameId: number | null
+  element: HTMLDivElement
+}
+
+interface DialogMoveSession {
+  pointerId: number
+  startX: number
+  startY: number
+  startRect: DialogRect
+  currentRect: DialogRect
+  lastX: number
+  lastY: number
+  frameId: number | null
+  element: HTMLDivElement
+}
+
+const RESIZE_HANDLES: { direction: ResizeDirection; label: string; className: string }[] = [
+  { direction: 'ne', label: '右上角', className: 'right-0 top-0 h-3 w-3 cursor-nesw-resize' },
+  { direction: 'nw', label: '左上角', className: 'left-0 top-0 h-3 w-3 cursor-nwse-resize' },
+  { direction: 'se', label: '右下角', className: 'bottom-0 right-0 h-3 w-3 cursor-nwse-resize' },
+  { direction: 'sw', label: '左下角', className: 'bottom-0 left-0 h-3 w-3 cursor-nesw-resize' },
+]
+
+function clampDialogSize(value: number, min: number, max: number): number {
+  return Math.round(Math.max(min, Math.min(Math.max(min, max), value)))
+}
+
+function resizeDialogRect(session: DialogResizeSession, clientX: number, clientY: number): DialogRect {
+  const { direction, startRect } = session
+  const deltaX = clientX - session.startX
+  const deltaY = clientY - session.startY
+  const right = startRect.left + startRect.width
+  const bottom = startRect.top + startRect.height
+  let { left, top, width, height } = startRect
+
+  if (direction.includes('e')) {
+    width = clampDialogSize(startRect.width + deltaX, DIALOG_MIN_WIDTH, window.innerWidth - DIALOG_VIEWPORT_GAP - startRect.left)
+  } else if (direction.includes('w')) {
+    width = clampDialogSize(startRect.width - deltaX, DIALOG_MIN_WIDTH, right - DIALOG_VIEWPORT_GAP)
+    left = right - width
+  }
+
+  if (direction.includes('s')) {
+    height = clampDialogSize(startRect.height + deltaY, DIALOG_MIN_HEIGHT, window.innerHeight - DIALOG_VIEWPORT_GAP - startRect.top)
+  } else if (direction.includes('n')) {
+    height = clampDialogSize(startRect.height - deltaY, DIALOG_MIN_HEIGHT, bottom - DIALOG_VIEWPORT_GAP)
+    top = bottom - height
+  }
+
+  return { left: Math.round(left), top: Math.round(top), width, height }
+}
+
+function moveDialogRect(session: DialogMoveSession, clientX: number, clientY: number): DialogRect {
+  const left = session.startRect.left + clientX - session.startX
+  const top = session.startRect.top + clientY - session.startY
+  return {
+    left: Math.round(clampDialogSize(left, DIALOG_VIEWPORT_GAP, window.innerWidth - session.startRect.width - DIALOG_VIEWPORT_GAP)),
+    top: Math.round(clampDialogSize(top, DIALOG_VIEWPORT_GAP, window.innerHeight - session.startRect.height - DIALOG_VIEWPORT_GAP)),
+    width: session.startRect.width,
+    height: session.startRect.height,
+  }
+}
+
+function applyDialogRect(element: HTMLDivElement, rect: DialogRect) {
+  element.style.position = 'fixed'
+  element.style.left = `${rect.left}px`
+  element.style.top = `${rect.top}px`
+  element.style.width = `${rect.width}px`
+  element.style.height = `${rect.height}px`
+  element.style.maxWidth = 'calc(100vw - 24px)'
+  element.style.maxHeight = 'calc(100vh - 24px)'
+}
 
 function loadIntradayDays(): number {
   const saved = storage.stockPreviewIntradayDays.get(DEFAULT_INTRADAY_DAYS)
@@ -166,41 +260,147 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
   const [maximized, setMaximized] = useState(false)
   const [dialogWidth, setDialogWidth] = useState<number | null>(() => {
     const saved = storage.stockPreviewWidth.get(0)
-    return saved >= 640 ? saved : null
+    return saved >= DIALOG_MIN_WIDTH ? saved : null
   })
-  const [widthResizing, setWidthResizing] = useState(false)
+  const [dialogHeight, setDialogHeight] = useState<number | null>(() => {
+    const saved = storage.stockPreviewHeight.get(0)
+    return saved >= DIALOG_MIN_HEIGHT ? saved : null
+  })
+  const [dialogRect, setDialogRect] = useState<DialogRect | null>(null)
+  const [dialogResizing, setDialogResizing] = useState(false)
+  const [dialogMoving, setDialogMoving] = useState(false)
   const dialogRef = useRef<HTMLDivElement>(null)
-  const widthResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
+  const dialogResizeRef = useRef<DialogResizeSession | null>(null)
+  const dialogMoveRef = useRef<DialogMoveSession | null>(null)
   const qc = useQueryClient()
   const backdrop = useDialogBackdrop(onClose)
   const findFeelLocked = findFeelOpen && findFeelLock != null && findFeelPhase !== 'setup' && findFeelDate != null
 
-  const clampDialogWidth = useCallback((value: number) => {
-    const max = Math.max(640, window.innerWidth - 24)
-    return Math.round(Math.min(max, Math.max(640, value)))
+  const handleDialogMovePointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (maximized || dialogMoveRef.current || dialogResizeRef.current || (event.pointerType === 'mouse' && event.button !== 0)) return
+    if (event.target instanceof Element && event.target.closest('button, a, input, select, textarea, [role="button"], [role="tab"], [role="combobox"], [role="switch"]')) return
+    const element = dialogRef.current
+    if (!element) return
+
+    event.preventDefault()
+    const bounds = element.getBoundingClientRect()
+    const startRect = {
+      left: bounds.left,
+      top: bounds.top,
+      width: bounds.width,
+      height: bounds.height,
+    }
+    const session: DialogMoveSession = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startRect,
+      currentRect: startRect,
+      lastX: event.clientX,
+      lastY: event.clientY,
+      frameId: null,
+      element,
+    }
+    dialogMoveRef.current = session
+    applyDialogRect(element, startRect)
+    setDialogMoving(true)
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }, [maximized])
+
+  const handleDialogMovePointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const session = dialogMoveRef.current
+    if (!session || session.pointerId !== event.pointerId) return
+
+    session.lastX = event.clientX
+    session.lastY = event.clientY
+    if (session.frameId != null) return
+    session.frameId = requestAnimationFrame(() => {
+      session.frameId = null
+      if (dialogMoveRef.current !== session) return
+      session.currentRect = moveDialogRect(session, session.lastX, session.lastY)
+      applyDialogRect(session.element, session.currentRect)
+    })
   }, [])
 
-  const handleWidthPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    if (maximized || (event.pointerType === 'mouse' && event.button !== 0)) return
-    event.preventDefault()
-    widthResizeRef.current = {
-      startX: event.clientX,
-      startWidth: dialogRef.current?.getBoundingClientRect().width ?? dialogWidth ?? window.innerWidth * 0.92,
+  const handleDialogMovePointerUp = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const session = dialogMoveRef.current
+    if (!session || session.pointerId !== event.pointerId) return
+
+    if (session.frameId != null) cancelAnimationFrame(session.frameId)
+    session.frameId = null
+    const clientX = event.type === 'pointercancel' ? session.lastX : event.clientX
+    const clientY = event.type === 'pointercancel' ? session.lastY : event.clientY
+    session.currentRect = moveDialogRect(session, clientX, clientY)
+    applyDialogRect(session.element, session.currentRect)
+    dialogMoveRef.current = null
+    setDialogRect(session.currentRect)
+    setDialogMoving(false)
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
     }
-    setWidthResizing(true)
+  }, [])
+
+  const handleResizePointerDown = useCallback((direction: ResizeDirection) => (event: React.PointerEvent<HTMLDivElement>) => {
+    if (maximized || dialogMoveRef.current || dialogResizeRef.current || (event.pointerType === 'mouse' && event.button !== 0)) return
+    const element = dialogRef.current
+    if (!element) return
+
+    event.preventDefault()
+    const bounds = element.getBoundingClientRect()
+    const startRect = {
+      left: bounds.left,
+      top: bounds.top,
+      width: bounds.width,
+      height: bounds.height,
+    }
+    const session: DialogResizeSession = {
+      direction,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startRect,
+      currentRect: startRect,
+      lastX: event.clientX,
+      lastY: event.clientY,
+      frameId: null,
+      element,
+    }
+    dialogResizeRef.current = session
+    applyDialogRect(element, startRect)
+    setDialogResizing(true)
     event.currentTarget.setPointerCapture(event.pointerId)
-  }, [dialogWidth, maximized])
+  }, [maximized])
 
-  const handleWidthPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    const start = widthResizeRef.current
-    if (!start) return
-    setDialogWidth(clampDialogWidth(start.startWidth + event.clientX - start.startX))
-  }, [clampDialogWidth])
+  const handleResizePointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const session = dialogResizeRef.current
+    if (!session || session.pointerId !== event.pointerId) return
 
-  const handleWidthPointerUp = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    if (!widthResizeRef.current) return
-    widthResizeRef.current = null
-    setWidthResizing(false)
+    session.lastX = event.clientX
+    session.lastY = event.clientY
+    if (session.frameId != null) return
+    session.frameId = requestAnimationFrame(() => {
+      session.frameId = null
+      if (dialogResizeRef.current !== session) return
+      session.currentRect = resizeDialogRect(session, session.lastX, session.lastY)
+      applyDialogRect(session.element, session.currentRect)
+    })
+  }, [])
+
+  const handleResizePointerUp = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const session = dialogResizeRef.current
+    if (!session || session.pointerId !== event.pointerId) return
+
+    if (session.frameId != null) cancelAnimationFrame(session.frameId)
+    session.frameId = null
+    const clientX = event.type === 'pointercancel' ? session.lastX : event.clientX
+    const clientY = event.type === 'pointercancel' ? session.lastY : event.clientY
+    session.currentRect = resizeDialogRect(session, clientX, clientY)
+    applyDialogRect(session.element, session.currentRect)
+    dialogResizeRef.current = null
+    setDialogRect(session.currentRect)
+    setDialogWidth(session.currentRect.width)
+    setDialogHeight(session.currentRect.height)
+    setDialogResizing(false)
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
@@ -209,6 +409,33 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
   useEffect(() => {
     if (dialogWidth != null) storage.stockPreviewWidth.set(dialogWidth)
   }, [dialogWidth])
+
+  useEffect(() => {
+    if (dialogHeight != null) storage.stockPreviewHeight.set(dialogHeight)
+  }, [dialogHeight])
+
+  useEffect(() => () => {
+    const session = dialogResizeRef.current
+    if (session?.frameId != null) cancelAnimationFrame(session.frameId)
+    const moveSession = dialogMoveRef.current
+    if (moveSession?.frameId != null) cancelAnimationFrame(moveSession.frameId)
+  }, [])
+
+  useEffect(() => {
+    const keepDialogVisible = () => {
+      setDialogRect(rect => {
+        if (!rect) return rect
+        const width = clampDialogSize(rect.width, DIALOG_MIN_WIDTH, window.innerWidth - DIALOG_VIEWPORT_GAP * 2)
+        const height = clampDialogSize(rect.height, DIALOG_MIN_HEIGHT, window.innerHeight - DIALOG_VIEWPORT_GAP * 2)
+        const left = clampDialogSize(rect.left, DIALOG_VIEWPORT_GAP, window.innerWidth - width - DIALOG_VIEWPORT_GAP)
+        const top = clampDialogSize(rect.top, DIALOG_VIEWPORT_GAP, window.innerHeight - height - DIALOG_VIEWPORT_GAP)
+        if (left === rect.left && top === rect.top && width === rect.width && height === rect.height) return rect
+        return { left, top, width, height }
+      })
+    }
+    window.addEventListener('resize', keepDialogVisible)
+    return () => window.removeEventListener('resize', keepDialogVisible)
+  }, [])
 
   const watchlist = useQuery({
     queryKey: QK.watchlist,
@@ -537,6 +764,22 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
         : assetType === 'stock'
           ? '当前仅支持 ETF 模拟交易'
           : '正在识别标的类型'
+  const dialogStyle: React.CSSProperties | undefined = maximized
+    ? undefined
+    : dialogRect
+      ? {
+          position: 'fixed',
+          left: `${dialogRect.left}px`,
+          top: `${dialogRect.top}px`,
+          width: `${dialogRect.width}px`,
+          height: `${dialogRect.height}px`,
+          maxWidth: 'calc(100vw - 24px)',
+          maxHeight: 'calc(100vh - 24px)',
+        }
+      : {
+          ...(dialogWidth != null ? { width: `${dialogWidth}px`, maxWidth: 'calc(100vw - 24px)' } : {}),
+          ...(dialogHeight != null ? { height: `${dialogHeight}px`, maxHeight: 'calc(100vh - 24px)' } : {}),
+        }
 
   return (
     <AnimatePresence>
@@ -559,32 +802,42 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
             exit={{ opacity: 0, scale: 0.97, y: 8 }}
             transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
             ref={dialogRef}
-            style={!maximized && dialogWidth != null ? { width: `${dialogWidth}px`, maxWidth: 'calc(100vw - 24px)' } : undefined}
+            style={dialogStyle}
             className={cn(
               'relative rounded-card border border-border bg-base shadow-2xl overflow-hidden flex flex-col',
-              widthResizing ? 'transition-none' : 'transition-all duration-200 ease-smooth',
+              dialogResizing || dialogMoving ? 'transition-none' : 'transition-all duration-200 ease-smooth',
               maximized ? 'w-screen h-screen max-w-none max-h-none' : 'w-[92vw] h-[95vh] max-w-[1600px] max-h-[95vh]',
             )}
           >
             {!maximized && (
-              <div
-                role="separator"
-                aria-label="调整详情页宽度"
-                className={cn(
-                  'absolute inset-y-0 right-0 z-10 flex w-2 cursor-col-resize items-center justify-center touch-none',
-                  widthResizing ? 'bg-accent/10' : 'hover:bg-accent/10',
-                )}
-                onPointerDown={handleWidthPointerDown}
-                onPointerMove={handleWidthPointerMove}
-                onPointerUp={handleWidthPointerUp}
-                onPointerCancel={handleWidthPointerUp}
-              >
-                <span className="h-10 w-px rounded-full bg-border/80" />
-              </div>
+              RESIZE_HANDLES.map(handle => (
+                <div
+                  key={handle.direction}
+                  role="separator"
+                  aria-label={`调整详情页${handle.label}`}
+                  className={cn(
+                    'absolute z-20 touch-none hover:bg-accent/10 active:bg-accent/10',
+                    handle.className,
+                  )}
+                  onPointerDown={handleResizePointerDown(handle.direction)}
+                  onPointerMove={handleResizePointerMove}
+                  onPointerUp={handleResizePointerUp}
+                  onPointerCancel={handleResizePointerUp}
+                />
+              ))
             )}
             {/* 顶栏 */}
             <div className="flex items-center justify-between gap-3 px-4 py-3 sm:px-5 shrink-0">
-              <div className="flex min-w-0 items-center gap-2">
+              <div
+                className={cn(
+                  'flex min-w-0 flex-1 items-center gap-2',
+                  !maximized && 'cursor-grab active:cursor-grabbing select-none touch-none',
+                )}
+                onPointerDown={handleDialogMovePointerDown}
+                onPointerMove={handleDialogMovePointerMove}
+                onPointerUp={handleDialogMovePointerUp}
+                onPointerCancel={handleDialogMovePointerUp}
+              >
                 {(() => {
                   const board = symbol ? boardTag(symbol) : null
                   return board ? (
