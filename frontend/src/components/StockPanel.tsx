@@ -30,7 +30,7 @@ import { StockAiChatPanel } from '@/components/StockAiChatPanel'
 import { financialMetricsQueryOptions, useFinancialMetrics } from '@/lib/useFinancials'
 import { useCapabilities, useQuoteStatus } from '@/lib/useSharedQueries'
 import { scheduleNeighborPrefetch } from '@/lib/neighborPrefetch'
-import type { ChartMarker, ChartPriceLine, ChartRange } from '@/components/EChartsCandlestick'
+import type { ChartMarker, ChartPriceLine, ChartRange } from '@/lib/kline-chart'
 import {
   loadInfoFields,
   saveInfoFields,

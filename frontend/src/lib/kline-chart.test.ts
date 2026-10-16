@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { chartIndicators, classifyBarUpdate, toChartBars, type OHLC } from './kline-chart'
 
 const rows: OHLC[] = Array.from({ length: 12 }, (_, i) => ({
@@ -33,6 +33,27 @@ describe('KLineChart 数据边界', () => {
     expect(bars[4].vol_ma5).toBe(300)
     expect(bars[3].vol_ma5).toBeUndefined()
     expect(toChartBars(rows.map(r => ({ ...r, volume: 0 })), 1)[1].volume_ratio).toBeUndefined()
+  })
+
+  it('120根视野仍显示柱顶倍数，密集标签避让，关闭量比时隐藏', () => {
+    const bars = toChartBars(Array.from({ length: 120 }, (_, i) => ({
+      ...rows[0], date: new Date(Date.UTC(2026, 0, i + 1)).toISOString().slice(0, 10), volume: (i + 1) * 100,
+    })), 1)
+    const volume = chartIndicators.find(indicator => indicator.name === 'TSP_VOL')!
+    const ctx = { save: vi.fn(), restore: vi.fn(), measureText: () => ({ width: 20 }), fillText: vi.fn() }
+    const draw = (enabled: boolean) => volume.draw!({
+      ctx, chart: { getVisibleRange: () => ({ from: 0, to: bars.length }), getDataList: () => bars, getStyles: () => ({ xAxis: { tickText: { color: '#aaa' } } }) },
+      indicator: { extendData: enabled }, xAxis: { convertToPixel: (i: number) => i * 8 }, yAxis: { convertToPixel: () => 80 },
+    } as never)
+    draw(true)
+    const labels = ctx.fillText.mock.calls
+    expect(labels.length).toBeGreaterThan(0)
+    expect(labels.length).toBeLessThan(bars.length - 1)
+    expect(labels[0]).toEqual(['2.0x', 8, 77])
+    expect(labels.every((call, i) => i === 0 || call[1] - labels[i - 1][1] > 22)).toBe(true)
+    ctx.fillText.mockClear()
+    draw(false)
+    expect(ctx.fillText).not.toHaveBeenCalled()
   })
 
   it('清理无效蜡烛，按日期排序并去重，不将缺失指标伪装成零', () => {

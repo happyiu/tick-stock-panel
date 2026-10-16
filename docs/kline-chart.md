@@ -1,13 +1,14 @@
 # 日 K 图表维护
 
-本次迁移基线为 `dev` 的 `d1b8f4a`，保留该分支全部页面与业务能力。
+基础迁移起点为 `dev` 的 `d1b8f4a`；缠论与调试迁移基线为 `6db7f0e`，保留现有业务能力。
 基础 K 图表使用固定版本 `klinecharts@10.1.0`。入口为
 `frontend/src/components/KLineCandlestick.tsx`，由 `StockDailyKChart` 和指数页复用；
-自选详情与回测弹窗通过 `StockPanel` 接入。单日/多日分时、个股分析图与列表迷你图仍使用各自现有实现。
+自选详情与回测弹窗通过 `StockPanel` 接入；独立个股分析页的 `AnalysisKChart` 也复用该入口。
+单日/多日分时与列表迷你图仍使用各自现有实现。
 
 当前基础蜡烛、MA/BOLL、VOL/MACD/RSI/KDJ，以及天使魔鬼、boll2、KD背离/增强版、ETF波段、多空趋势使用新引擎。
-缠论覆盖层和隐藏日期调试继续由 `EChartsCandlestick` 绘制；任一功能开启时整张图表沿用原实现。
-不要删除这条回退路径，直到缠论和调试在新引擎中完成迁移并通过验证。
+缠论覆盖层和隐藏日期调试也使用同一个 KLineChart 实例，切换不再更换引擎。
+`EChartsCandlestick` 文件仅保留历史导入路径兼容导出，不包含 ECharts 绘图实现。
 30分钟/日/周/月周期、ETF三位价格精度、策略/信号选择和本地指标设置均保留。
 
 ## 数据与指标
@@ -28,9 +29,17 @@
 缺失成交量通过 `source_volume` 保留，不能被原生量柱使用的零值替代；不改动公式预热、确认延迟或信号冷却。
 副图提示随十字线更新并自动换行；窄屏预留更多顶部空间。密集信号文字按可见区域避让，不显示边缘被截断的半个标签。
 
-KLineChart 副图上方分隔线支持上下拖动。拖动后通过统一 `storage.stockPreviewSubChartHeights` 保存各副图的绘图区高度，切换周期、主题、指标排序、关闭重开或刷新页面时保持；窄屏换行仅增加提示区高度，不重置绘图区。主图保留至少120px，副图绘图区保留至少50px。缠论/隐藏日期回退路径仍使用原固定布局。
+KLineChart 副图上方分隔线支持上下拖动。拖动后通过统一 `storage.stockPreviewSubChartHeights` 保存各副图的绘图区高度，切换周期、主题、指标排序、关闭重开或刷新页面时保持；窄屏换行仅增加提示区高度，不重置绘图区。主图保留至少120px，副图绘图区保留至少50px。日期轴固定在主图与副图之间，隐藏日期调试时不显示日期文字。
+
+## 缠论、调试与独立分析页
+
+`lib/kline-chart-chanlun.ts` 将已有 `ChanlunAnalysis` 投影为分型、笔、线段代理、中枢、候选买卖点与背驰代理覆盖物，不重算分析。笔和线段按确认状态区分虚实线；候选买卖点按 `availableDate` 定位，等待状态不显示为候选。悬停说明保留结构发生、最早可知、失效边界及证据；隐藏日期时同时隐藏信息栏、日期轴、十字线和缠论说明中的日期。
+
+独立 `/stock-analysis` 页的关键价位图保留分组开关、枢轴档位、压力支撑与曲线双向高亮。`lib/kline-chart-levels.ts` 绘制水平价位、布林/Keltner/ATR 后端序列，按日期对齐，缺失处不连线；右侧预留标签空间，范围条通过公开 API 控制与同步缩放。不恢复 `d1b8f4a` 已移除的自选详情关键价位功能。
 
 ## 业务交互
+
+自选详情使用与关键价位分析一致的卡片边框、内边距、轻量工具按钮和范围条，默认可见120根K线。OHLC/均线信息、指标选择及副图高度设置继续保留。容器尺寸改变时，等待原生画布布局完成后再适配默认视野；用户已经手动缩放或拖动时保持原有浏览位置。
 
 `lib/kline-chart-overlays.ts` 管理程序生成的买卖/涨停/炸板、自选日、区间和价格线覆盖物。
 业务覆盖物锁定位置并阻止右键删除；涨停标签在可见根数大于 60 时简化为圆点，买卖箭头保留。
@@ -40,7 +49,7 @@ KLineChart 副图上方分隔线支持上下拖动。拖动后通过统一 `stor
 
 ```bash
 cd frontend
-pnpm exec vitest run src/lib/kline-chart.test.ts src/lib/kline-chart-overlays.test.ts src/lib/kline-chart-formulas.test.ts src/components/KLineCandlestick.test.tsx src/components/EChartsCandlestick.test.tsx src/components/StockDailyKChart.test.tsx src/pages/Indices.test.tsx
+pnpm exec vitest run src/lib/kline-chart*.test.ts src/components/KLineCandlestick.test.tsx src/components/EChartsCandlestick.test.tsx src/components/StockDailyKChart.test.tsx src/components/stock-analysis/AnalysisKChart.test.tsx src/pages/Indices.test.tsx
 pnpm build
 ```
 

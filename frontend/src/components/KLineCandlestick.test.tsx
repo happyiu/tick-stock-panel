@@ -2,14 +2,9 @@
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import type { DataLoader, KLineData } from 'klinecharts'
-import { KLineCandlestick, usesLegacyChart, type OHLC } from './KLineCandlestick'
-
-vi.mock('./EChartsCandlestick', async importOriginal => ({
-  ...await importOriginal<typeof import('./EChartsCandlestick')>(),
-  EChartsCandlestick: ({ activeIndicators, hideCurrentDate }: { activeIndicators?: string[]; hideCurrentDate?: boolean }) =>
-    <div data-legacy-chart data-indicators={activeIndicators?.join(',')} data-hidden-date={hideCurrentDate} />,
-}))
+import type { DataLoader, KLineData, OverlayCreate } from 'klinecharts'
+import { KLineCandlestick, type OHLC } from './KLineCandlestick'
+import { analyzeChanlun } from '@/lib/chanlun'
 
 const state = vi.hoisted(() => ({
   handlers: {} as Record<string, (value: unknown) => void>,
@@ -17,17 +12,18 @@ const state = vi.hoisted(() => ({
   bars: [] as KLineData[], symbol: '',
   indicators: [] as { name: string; id: string; paneId: string }[],
   frames: [] as FrameRequestCallback[],
-  panes: {} as Record<string, { height: number; minHeight?: number }>,
+  panes: {} as Record<string, { height: number; minHeight?: number; order?: number }>,
   width: 800,
   resize: null as (() => void) | null,
+  overlays: [] as OverlayCreate[],
 }))
 const chart = vi.hoisted(() => ({
   setSymbol: vi.fn(), setPeriod: vi.fn(), setDataLoader: vi.fn(), resetData: vi.fn(),
   setStyles: vi.fn(), setPaneOptions: vi.fn(), resize: vi.fn(),
   getIndicators: vi.fn(), createIndicator: vi.fn(), overrideIndicator: vi.fn(), removeIndicator: vi.fn(),
-  createOverlay: vi.fn(), removeOverlay: vi.fn(), overrideYAxis: vi.fn(),
+  createOverlay: vi.fn(), getOverlays: vi.fn(), overrideOverlay: vi.fn(), removeOverlay: vi.fn(), overrideYAxis: vi.fn(),
   subscribeAction: vi.fn(), unsubscribeAction: vi.fn(),
-  setBarSpace: vi.fn(), setOffsetRightDistance: vi.fn(), scrollToRealTime: vi.fn(), scrollToTimestamp: vi.fn(),
+  setBarSpace: vi.fn(), setOffsetRightDistance: vi.fn(), scrollToRealTime: vi.fn(), scrollToTimestamp: vi.fn(), scrollToDataIndex: vi.fn(), scrollByDistance: vi.fn(),
   getBarSpace: () => ({ bar: 12 }), getVisibleRange: () => ({ from: 1, to: 3 }),
   getSize: vi.fn(), getPaneOptions: vi.fn(), getDom: vi.fn(),
   convertFromPixel: vi.fn(() => [{ value: 11.25 }]),
@@ -58,15 +54,27 @@ beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   state.handlers = {}; state.indicators = []; state.frames = []; state.loader = null; state.symbol = ''; state.bars = []
   state.panes = {}; state.width = 800; state.resize = null
+  state.overlays = []
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { state.frames.push(cb); return state.frames.length })
   vi.stubGlobal('cancelAnimationFrame', vi.fn())
   vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { state.resize = callback } observe() {} disconnect() {} })
-  engine.init.mockReturnValue(chart)
+  engine.init.mockImplementation(() => {
+    state.panes = { candle_pane: { height: 300, order: 0 }, x_axis_pane: { height: 22, order: Number.MAX_SAFE_INTEGER } }
+    return chart
+  })
   chart.subscribeAction.mockImplementation((name: string, cb: (value: unknown) => void) => { state.handlers[name] = cb })
   chart.setSymbol.mockImplementation(({ ticker }: { ticker: string }) => { state.symbol = ticker; if (state.loader) load() })
   chart.setPeriod.mockImplementation(() => { if (state.loader) load() })
   chart.setDataLoader.mockImplementation((loader: DataLoader) => { state.loader = loader; load() })
   chart.resetData.mockImplementation(load)
+  chart.getOverlays.mockImplementation((filter: { groupId: string }) => state.overlays.filter(overlay => overlay.groupId === filter.groupId))
+  chart.createOverlay.mockImplementation((overlays: OverlayCreate | OverlayCreate[]) => { state.overlays.push(...[overlays].flat()) })
+  chart.removeOverlay.mockImplementation((filter: { groupId?: string; id?: string }) => {
+    state.overlays = state.overlays.filter(overlay => filter.id ? overlay.id !== filter.id : overlay.groupId !== filter.groupId)
+  })
+  chart.overrideOverlay.mockImplementation((overlay: OverlayCreate) => {
+    state.overlays = state.overlays.map(current => current.id === overlay.id ? overlay : current)
+  })
   chart.getIndicators.mockImplementation((filter?: { name: string }) => state.indicators.filter(i => !filter || i.name === filter.name))
   chart.getSize.mockImplementation((id: string) => ({ width: state.width, height: state.panes[id]?.height ?? 300 }))
   chart.getPaneOptions.mockImplementation((id: string) => state.panes[id] ? { id, ...state.panes[id] } : null)
@@ -136,6 +144,24 @@ it('副图开关与顺序、BOLL、量能配置复用同一个实例', async () 
   expect(engine.init).toHaveBeenCalledOnce()
 })
 
+it('日期轴始终排在主图下方，切周期、增删重排副图和关闭缠论后位置不变', async () => {
+  const paneOrder = () => Object.entries(state.panes)
+    .sort(([, a], [, b]) => a.order! - b.order!)
+    .map(([id]) => id)
+  await render()
+  expect(paneOrder()).toEqual(['candle_pane', 'x_axis_pane'])
+  await render({ activeIndicators: ['vol', 'kdj'] })
+  expect(paneOrder()).toEqual(['candle_pane', 'x_axis_pane', 'tsp_vol', 'tsp_kdj'])
+  await render({ activeIndicators: ['kdj', 'vol'], period: '30m' })
+  expect(paneOrder()).toEqual(['candle_pane', 'x_axis_pane', 'tsp_kdj', 'tsp_vol'])
+  await render({ activeIndicators: [] })
+  expect(paneOrder()).toEqual(['candle_pane', 'x_axis_pane'])
+  await render({ chanlunAnalysis: {} as never, chanlunOverlay: { enabled: true } as never })
+  expect(host.querySelector('[data-kline-chart]')).not.toBeNull()
+  await render({ activeIndicators: ['vol'], chanlunAnalysis: {} as never, chanlunOverlay: { enabled: false } as never })
+  expect(paneOrder()).toEqual(['candle_pane', 'x_axis_pane', 'tsp_vol'])
+})
+
 it('日期点击与主图双击使用当前回调，副图区不触发价格预警', async () => {
   const onDateClick = vi.fn(), onPriceDoubleClick = vi.fn()
   await render({ onDateClick, onPriceDoubleClick })
@@ -146,6 +172,19 @@ it('日期点击与主图双击使用当前回调，副图区不触发价格预�
   expect(onPriceDoubleClick).toHaveBeenCalledWith(11.25, 11)
   await act(async () => canvas.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, clientX: 100, clientY: 350 })))
   expect(onPriceDoubleClick).toHaveBeenCalledOnce()
+})
+
+it('展开或收起侧栏后等待画布布局，再按新宽度适配默认可见根数', async () => {
+  const data = Array.from({ length: 200 }, (_, i) => ({
+    ...rows()[0], date: new Date(Date.UTC(2026, 0, i + 1)).toISOString().slice(0, 10),
+  }))
+  await render({ data, visibleBars: 120 })
+  chart.setBarSpace.mockClear()
+  await act(async () => state.resize?.())
+  expect(chart.setBarSpace).not.toHaveBeenCalled()
+  state.width = 400
+  await act(async () => state.frames.splice(0).forEach(callback => callback(0)))
+  expect(chart.setBarSpace).toHaveBeenLastCalledWith((400 - 8) / 120)
 })
 
 it('拖动后的副图高度在切周期、指标重排/重开和窄屏布局时保留', async () => {
@@ -203,10 +242,7 @@ it('预警价线参与纵轴范围；无效数据有空态；卸载销毁图表'
   expect(engine.dispose).toHaveBeenCalledOnce()
 })
 
-it('六个自定义公式迁入同一个新引擎，移除后不残留；隐藏日期仍走原实现', async () => {
-  for (const key of ['angel-devil', 'boll2', 'kd-divergence', 'kd-enhanced', 'etf-swing-v2', 'bull-bear-trend-v2']) {
-    expect(usesLegacyChart({ data: rows(), activeIndicators: [key] })).toBe(false)
-  }
+it('六个自定义公式迁入同一个新引擎，移除后不残留；隐藏日期共用新引擎', async () => {
   await render({ activeIndicators: ['angel-devil', 'boll2', 'kd-divergence', 'kd-enhanced', 'etf-swing-v2', 'bull-bear-trend-v2'] })
   expect(host.querySelector('[data-legacy-chart]')).toBeNull()
   expect(state.indicators.map(i => i.name)).toEqual(['TSP_ANGEL_DEVIL', 'TSP_BOLL2', 'TSP_KD_DIVERGENCE', 'TSP_KD_ENHANCED', 'TSP_ETF_SWING_V2', 'TSP_BULL_BEAR_TREND_V2'])
@@ -219,7 +255,9 @@ it('六个自定义公式迁入同一个新引擎，移除后不残留；隐藏�
   expect(host.querySelector('[data-kline-chart]')).not.toBeNull()
   expect(engine.init).toHaveBeenCalledOnce()
   await render({ hideCurrentDate: true })
-  expect(host.querySelector('[data-legacy-chart]')?.getAttribute('data-hidden-date')).toBe('true')
+  expect(host.querySelector('[data-kline-chart]')).not.toBeNull()
+  expect(host.textContent).not.toContain(rows()[0].date)
+  expect(host.textContent).not.toContain(rows().at(-1)!.date)
 })
 
 it('天使魔鬼按原公式显示空心多头/实心空头，主图信息随悬停更新并在移除时恢复普通MA', async () => {
@@ -241,13 +279,61 @@ it('天使魔鬼按原公式显示空心多头/实心空头，主图信息随悬
   expect(chart.setStyles.mock.calls.at(-1)![0].candle.bar({ current: state.bars[30] })).toMatchObject({ color: '#2D9B65' })
 })
 
-it('缠论开关决定原引擎路径，30分钟切换和ETF三位价格保留', async () => {
-  expect(usesLegacyChart({ data: rows(), chanlunAnalysis: {} as never, chanlunOverlay: { enabled: true } as never })).toBe(true)
-  expect(usesLegacyChart({ data: rows(), chanlunAnalysis: {} as never, chanlunOverlay: { enabled: false } as never })).toBe(false)
+it('30分钟切换和ETF三位价格保留', async () => {
   await render({ assetType: 'etf', data: rows(0.497) })
   expect(chart.setSymbol).toHaveBeenCalledWith(expect.objectContaining({ pricePrecision: 3 }))
   expect(host.textContent).toContain('0.497')
   await render({ assetType: 'etf', period: '30m', data: [{ ...rows(0.497)[0], date: '2026-10-01 10:00' }] })
   expect(chart.setPeriod).toHaveBeenLastCalledWith({ span: 30, type: 'minute' })
   expect(state.bars[0].timestamp).toBe(Date.parse('2026-10-01T10:00:00+08:00'))
+})
+
+it('缠论和隐藏日期切换不重建图表，调试不泄露信息栏和十字线日期', async () => {
+  const chanlunAnalysis = analyzeChanlun(rows())
+  await render({ chanlunAnalysis, activeIndicators: ['vol', 'kdj'] })
+  await render({ chanlunAnalysis, chanlunOverlay: { enabled: true, fractals: true, strokes: true, segments: true, centers: true, candidates: true, divergences: true }, activeIndicators: ['vol', 'kdj'], hideCurrentDate: true })
+  expect(engine.init).toHaveBeenCalledOnce()
+  expect(engine.dispose).not.toHaveBeenCalled()
+  expect(host.textContent).not.toMatch(/2026-10-\d\d/)
+  expect(chart.setStyles).toHaveBeenLastCalledWith(expect.objectContaining({
+    xAxis: expect.objectContaining({ tickText: expect.objectContaining({ show: false }) }),
+    crosshair: expect.objectContaining({ vertical: expect.objectContaining({ text: expect.objectContaining({ show: false }) }) }),
+  }))
+  await render({ chanlunAnalysis, hideCurrentDate: false, activeIndicators: ['vol', 'kdj'] })
+  expect(host.textContent).toContain(rows().at(-1)!.date)
+  expect(engine.init).toHaveBeenCalledOnce()
+})
+
+it('缠论切换不重置缩放或丢失副图；价位高亮更新原覆盖物、关组后清除', async () => {
+  const analysis = analyzeChanlun(rows())
+  analysis.fractals = [{ type: 'bottom', date: rows()[1].date, price: 9, confirmedAt: rows()[2].date, mergedIndex: 1, sourceIndex: 1, confirmedSourceIndex: 2 }]
+  const config = { enabled: true, fractals: true, strokes: false, segments: false, centers: false, candidates: false, divergences: false }
+  const data = rows(), activeIndicators = ['vol', 'kdj']
+  await render({ data, activeIndicators, chanlunAnalysis: analysis, chanlunOverlay: config, priceLines: [{ value: 20, key: 'sr', label: '压力' }] })
+  expect(state.overlays.some(overlay => overlay.groupId === 'tsp-chanlun')).toBe(true)
+  chart.resetData.mockClear(); chart.scrollToRealTime.mockClear()
+  await render({ data, activeIndicators, chanlunAnalysis: analysis, chanlunOverlay: { ...config, enabled: false }, priceLines: [{ value: 20, key: 'sr', label: '压力' }], highlightedKey: 'sr' })
+  expect(state.overlays.filter(overlay => overlay.groupId === 'tsp-chanlun')).toEqual([])
+  expect(chart.overrideOverlay).toHaveBeenCalledWith(expect.objectContaining({ extendData: expect.objectContaining({ highlighted: true }) }))
+  expect(chart.resetData).not.toHaveBeenCalled()
+  expect(chart.scrollToRealTime).not.toHaveBeenCalled()
+  expect(state.indicators.map(indicator => indicator.name)).toEqual(['TSP_MA', 'TSP_VOL', 'TSP_KDJ'])
+  await render({ data, activeIndicators })
+  expect(state.overlays.filter(overlay => overlay.groupId === 'tsp-levels')).toEqual([])
+})
+
+it('分析图范围条与画布缩放联动，拖动端点不重建图表', async () => {
+  await render({ showRangeSelector: true, priceLabelWidth: 144 })
+  await act(async () => state.handlers.onVisibleRangeChange({ from: 1, to: 3 }))
+  const start = host.querySelector<HTMLInputElement>('[aria-label="可见起始K线"]')!
+  const end = host.querySelector<HTMLInputElement>('[aria-label="可见结束K线"]')!
+  expect(start.value).toBe('1')
+  expect(end.value).toBe('3')
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(end, '4')
+    end.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  expect(chart.scrollToDataIndex).toHaveBeenLastCalledWith(3)
+  expect(chart.scrollByDistance).toHaveBeenLastCalledWith(-144)
+  expect(engine.init).toHaveBeenCalledOnce()
 })

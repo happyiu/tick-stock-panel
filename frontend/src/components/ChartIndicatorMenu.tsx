@@ -1,6 +1,6 @@
 import { useId, useState } from 'react'
 import { Check, SlidersHorizontal, X } from 'lucide-react'
-import { OVERLAY_INDICATORS, SUB_CHARTS } from './EChartsCandlestick'
+import { OVERLAY_INDICATORS, SUB_CHARTS } from '@/lib/kline-chart'
 
 export function ChartIndicatorMenu({ activeIndicators, onToggle }: {
   activeIndicators: string[]
@@ -22,7 +22,7 @@ export function ChartIndicatorMenu({ activeIndicators, onToggle }: {
       <button
         type="button" aria-expanded={open} aria-controls={id}
         onClick={() => setOpen(value => !value)}
-        className={`flex items-center gap-1 rounded px-2 py-0.5 text-[10px] transition-colors ${open ? 'bg-accent/20 text-accent' : 'bg-elevated text-secondary hover:text-foreground'}`}
+        className={`flex h-6 items-center gap-1 rounded-md border px-2 text-[10px] font-medium transition-colors ${open ? 'border-accent/40 bg-accent/10 text-accent' : 'border-border/30 bg-base/40 text-muted hover:border-border/60 hover:text-foreground'}`}
       >
         <SlidersHorizontal className="h-3 w-3" />指标
       </button>

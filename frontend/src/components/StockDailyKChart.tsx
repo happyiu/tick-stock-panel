@@ -187,8 +187,8 @@ function ChartPill({
       type="button"
       onClick={onClick}
       title={title}
-      className={`px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors ${
-        active ? activeClass : 'bg-elevated text-muted hover:text-secondary'
+      className={`h-6 px-2 rounded-md border border-border/40 text-[10px] font-mono cursor-pointer transition-colors ${
+        active ? activeClass : 'bg-base/40 text-muted hover:border-border/60 hover:text-secondary'
       }`}
     >
       {label}
@@ -411,9 +411,9 @@ export function StockDailyKChart({
   if (!symbol) return null
 
   return (
-    <div className={className} style={{ minHeight: chartHeight }}>
+    <div className={`rounded-card border border-border/60 bg-surface/40 p-3 ${className ?? ''}`} style={{ minHeight: chartHeight }}>
       {(showIndicatorControls || selectedStrategy || (selectedSignals?.length ?? 0) > 0) && rows.length > 0 && (
-        <div className="px-1 pb-0.5">
+        <div className="mb-2">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           {showIndicatorControls && (<>
             <ChartIndicatorMenu activeIndicators={activeIndicators} onToggle={toggleIndicator} />
@@ -422,7 +422,7 @@ export function StockDailyKChart({
               return indicator && (
                 <button key={key} type="button" onClick={() => toggleIndicator(key)}
                   aria-label={`移除${indicator.label}指标`} title={`移除${indicator.label}指标`}
-                  className="flex shrink-0 items-center gap-1 rounded bg-accent/10 px-2 py-0.5 text-[10px] text-accent hover:bg-accent/20"
+                  className="flex h-6 shrink-0 items-center gap-1 rounded-md border border-accent/40 bg-accent/10 px-2 text-[10px] font-medium text-accent hover:bg-accent/20"
                 >
                   {indicator.label}<X className="h-2.5 w-2.5" />
                 </button>
@@ -438,10 +438,10 @@ export function StockDailyKChart({
               <button
                 type="button"
                 onClick={() => updateChanlunOverlay({ enabled: !chanlunOverlay.enabled })}
-                className={`rounded-l px-2 py-0.5 text-[10px] font-mono transition-colors ${
+                className={`h-6 rounded-l-md border border-border/40 px-2 text-[10px] font-mono transition-colors ${
                   chanlunOverlay.enabled
                     ? 'bg-[#8B5CF6]/20 text-[#A78BFA]'
-                    : 'bg-elevated text-muted hover:text-secondary'
+                    : 'bg-base/40 text-muted hover:text-secondary'
                 }`}
                 aria-pressed={chanlunOverlay.enabled}
                 title={chanlunOverlay.enabled ? '隐藏缠论覆盖层' : '显示缠论覆盖层'}
@@ -451,7 +451,7 @@ export function StockDailyKChart({
               <button
                 type="button"
                 onClick={() => setChanlunMenuOpen(value => !value)}
-                className="rounded-r border-l border-border/60 bg-elevated px-1.5 py-0.5 text-muted transition-colors hover:text-secondary"
+                className="h-6 rounded-r-md border border-l-0 border-border/40 bg-base/40 px-1.5 text-muted transition-colors hover:text-secondary"
                 title="配置缠论覆盖层"
                 aria-label="配置缠论覆盖层"
                 aria-expanded={chanlunMenuOpen}
@@ -487,7 +487,7 @@ export function StockDailyKChart({
             </div>
           )}
           {activeIndicators.includes('vol') && (
-            <div className="ml-0.5 flex h-5 items-center gap-1.5 border-l border-border/70 pl-2">
+            <div className="ml-0.5 flex h-6 items-center gap-1.5 border-l border-border/40 pl-2">
               <span className="text-[10px] text-muted">量比</span>
               <button
                 type="button"
@@ -509,7 +509,7 @@ export function StockDailyKChart({
                 value={volumeCompare.days}
                 disabled={!volumeCompare.enabled}
                 onChange={event => updateVolumeCompare({ days: Number(event.target.value) })}
-                className="h-5 rounded border border-border bg-base px-1 text-[10px] text-secondary outline-none disabled:opacity-40"
+                className="h-6 rounded-md border border-border/40 bg-base/40 px-1 text-[10px] text-secondary outline-none disabled:opacity-40"
               >
                 {Array.from({ length: 20 }, (_, index) => index + 1).map(days => (
                   <option key={days} value={days}>前{days}日均量</option>
@@ -520,7 +520,7 @@ export function StockDailyKChart({
           {showMarkerToggle && effectiveShowLimitMarkers && (
             <button
               onClick={() => setShowMarkers(v => !v)}
-              className={`ml-auto px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors ${
+              className={`ml-auto h-6 px-2 rounded-md border border-border/40 text-[10px] font-mono cursor-pointer transition-colors ${
                 showMarkers
                   ? 'text-[#FACC15] bg-[#FACC15]/10'
                   : 'bg-elevated text-muted hover:text-secondary'
@@ -642,6 +642,7 @@ export function StockDailyKChart({
           chanlunAnalysis={chanlunAnalysis}
           chanlunOverlay={chanlunOverlay}
           hideCurrentDate={hideCurrentDate}
+          showRangeSelector
         />
       )}
     </div>

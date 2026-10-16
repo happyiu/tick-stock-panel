@@ -1,4 +1,7 @@
 import type { IndicatorTemplate, KLineData } from 'klinecharts'
+import type { KlinePeriod } from './api'
+import type { ChanlunAnalysis } from './chanlun'
+import type { StockPreviewChanlunOverlayConfig } from './storage'
 
 export interface OHLC {
   date: string
@@ -9,7 +12,7 @@ export interface OHLC {
   periodEnd?: string | null
   isClosed?: boolean
   volume?: number
-  amount?: number
+  amount?: number | null
   ma5?: number | null
   ma10?: number | null
   ma20?: number | null
@@ -52,6 +55,47 @@ export interface ChartPriceLine {
   color?: string
   start?: string
   end?: string
+  key?: string
+}
+
+export interface ChartPriceCurve {
+  key: string
+  label: string
+  color: string
+  dashed?: boolean
+  data: { date: string; value: number | null }[]
+}
+
+export interface CandlestickProps {
+  data: OHLC[]
+  period?: KlinePeriod
+  markers?: ChartMarker[]
+  ranges?: ChartRange[]
+  priceLines?: ChartPriceLine[]
+  priceCurves?: ChartPriceCurve[]
+  priceLabelWidth?: number
+  highlightedKey?: string | null
+  onHighlightChange?: (key: string | null) => void
+  showRangeSelector?: boolean
+  height?: number
+  showMA?: boolean
+  showInfoBar?: boolean
+  showMarkers?: boolean
+  onToggleMarkers?: () => void
+  stockInfo?: StockInfo
+  symbol?: string
+  linkedPrice?: number | null
+  onDateClick?: (date: string) => void
+  selectedDate?: string | null
+  onPriceDoubleClick?: (price: number, currentPrice: number) => void
+  visibleBars?: number | 'all'
+  activeIndicators?: string[]
+  volumeCompare?: VolumeCompareConfig
+  addedDate?: string | null
+  assetType?: string
+  chanlunAnalysis?: ChanlunAnalysis
+  chanlunOverlay?: StockPreviewChanlunOverlayConfig
+  hideCurrentDate?: boolean
 }
 
 export interface StockInfo {
@@ -77,8 +121,16 @@ export const SUB_CHARTS = [
   { key: 'macd', label: 'MACD', height: 72 },
   { key: 'rsi', label: 'RSI', height: 72 },
   { key: 'kdj', label: 'KDJ', height: 72 },
+  { key: 'kd-divergence', label: 'KD背离', height: 160 },
+  { key: 'kd-enhanced', label: 'K/D精准背离增强版', height: 180 },
+  { key: 'etf-swing-v2', label: 'ETF波段操盘V2', height: 200 },
+  { key: 'bull-bear-trend-v2', label: '多空趋势V2', height: 200 },
 ]
-export const OVERLAY_INDICATORS = [{ key: 'boll', label: 'BOLL' }]
+export const OVERLAY_INDICATORS = [
+  { key: 'angel-devil', label: '天使魔鬼' },
+  { key: 'boll', label: 'BOLL' },
+  { key: 'boll2', label: 'boll2' },
+]
 
 export type ChartBar = KLineData & { date: string }
 type IndicatorValues = Record<string, number | undefined>
@@ -179,7 +231,7 @@ export const chartIndicators: IndicatorTemplate<IndicatorValues>[] = definitions
   ...(def.key === 'VOL' ? {
     draw: ({ ctx, chart, indicator, xAxis, yAxis }) => {
       const range = chart.getVisibleRange()
-      if (!indicator.extendData || range.to - range.from > 60) return false
+      if (!indicator.extendData) return false
       ctx.save()
       ctx.font = '8px JetBrains Mono, monospace'
       ctx.fillStyle = chart.getStyles().xAxis.tickText.color
