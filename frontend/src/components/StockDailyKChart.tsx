@@ -411,7 +411,7 @@ export function StockDailyKChart({
   if (!symbol) return null
 
   return (
-    <div className={`rounded-card border border-border/60 bg-surface/40 p-3 ${className ?? ''}`} style={{ minHeight: chartHeight }}>
+    <div className={`rounded-card border border-border/60 bg-surface/40 p-3 ${className ?? ''}`} style={{ minHeight: height }}>
       {(showIndicatorControls || selectedStrategy || (selectedSignals?.length ?? 0) > 0) && rows.length > 0 && (
         <div className="mb-2">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">

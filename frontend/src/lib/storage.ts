@@ -128,6 +128,9 @@ export const storage = {
   /** KLineChart 各副图的绘图区高度，不含顶部提示区。 */
   stockPreviewSubChartHeights: kv<Record<string, number>>('stock_preview_sub_chart_heights'),
 
+  /** 拖动副图时同步调整画布，保持主图高度的像素偏移。 */
+  stockPreviewChartHeightAdjustment: kv<number>('stock_preview_chart_height_adjustment'),
+
   /** K线主图叠加指标，与已有副图设置独立保存。 */
   stockPreviewMainCharts: kv<string[]>('stock_preview_main_charts'),
 

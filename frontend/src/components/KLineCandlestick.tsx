@@ -51,7 +51,22 @@ export function KLineCandlestick({
   const subKeysRef = useRef<string[]>([])
   const headerHeights = useRef(new Map<string, number>())
   const paneHeights = useRef(new Map<string, number>())
+  const lastPaneResize = useRef<{
+    pointerId: number
+    key: string
+    startY: number
+    startHeight: number
+    startChartHeightAdjustment: number
+    header: number
+    fixedPanes: Array<{ key: string; height: number; header: number }>
+  } | null>(null)
+  const lastPaneResizeFrame = useRef<number | null>(null)
+  const lastPaneResizeY = useRef(0)
   const [minimumChartHeight, setMinimumChartHeight] = useState(150)
+  const [chartHeightAdjustment, setChartHeightAdjustment] = useState(() => {
+    const saved = storage.stockPreviewChartHeightAdjustment.get(0)
+    return Number.isFinite(saved) ? saved : 0
+  })
   const callbacks = useRef({ onDateClick, onPriceDoubleClick, visibleBars, priceLabelWidth, showRangeSelector })
   callbacks.current = { onDateClick, onPriceDoubleClick, visibleBars, priceLabelWidth, showRangeSelector }
   const [structureTooltip, setStructureTooltip] = useState<string | null>(null)
@@ -71,13 +86,20 @@ export function KLineCandlestick({
   const angelRows = useMemo(() => angel ? calculateAngelDevil(bars.map(b => b.close)) : null, [bars, angel])
   const boll2Rows = useMemo(() => boll2 ? calculateBoll2(bars.map(b => b.close)) : null, [bars, boll2])
   const candleTrends = useMemo(() => new Map(bars.map((bar, i) => [bar.timestamp, angelRows?.[i]?.bull])), [bars, angelRows])
-  const chartHeight = Math.max(height - (showInfoBar ? 40 : 0), minimumChartHeight)
+  const chartHeight = Math.max(height - (showInfoBar ? 40 : 0) + (subKey ? chartHeightAdjustment : 0), minimumChartHeight)
   const fitPaneHeights = () => {
     // 恢复较大的副图或窄屏提示换行时，扩展画布，给主图留下120px。
-    setMinimumChartHeight(142 + subKeysRef.current.reduce((total, key) => {
+    const chart = chartRef.current
+    const xAxisHeight = Math.max(22, chart?.getSize('x_axis_pane')?.height ?? 22)
+    setMinimumChartHeight(Math.ceil(xAxisHeight + 142 + subKeysRef.current.reduce((total, key) => {
       const def = SUB_CHARTS.find(d => d.key === key)!
-      return total + (paneHeights.current.get(key) ?? def.height) + (headerHeights.current.get(key) ?? 28) + 4
-    }, 0))
+      const header = headerHeights.current.get(key) ?? 28
+      const options = chart?.getPaneOptions(`tsp_${key.replaceAll('-', '_')}`)
+      const height = options && !Array.isArray(options) && Number.isFinite(options.height)
+        ? Math.max(50, options.height - header)
+        : paneHeights.current.get(key) ?? def.height
+      return total + height + header + 4
+    }, 0)))
   }
 
   // 图表消费现有查询缓存，不另建请求或 SSE 订阅。
@@ -376,6 +398,84 @@ export function KLineCandlestick({
     chart.scrollToDataIndex(to - 1)
     chart.scrollByDistance(-padding)
   }
+  const applyLastPaneResize = (clientY: number) => {
+    const chart = chartRef.current
+    const drag = lastPaneResize.current
+    if (!chart || !drag) return null
+    const height = Math.min(2000, Math.max(50, Math.round(drag.startHeight + clientY - drag.startY)))
+    for (const pane of drag.fixedPanes) {
+      paneHeights.current.set(pane.key, pane.height)
+      chart.setPaneOptions({
+        id: `tsp_${pane.key.replaceAll('-', '_')}`,
+        height: pane.height + pane.header,
+        minHeight: pane.header + 50,
+        dragEnabled: true,
+      })
+    }
+    paneHeights.current.set(drag.key, height)
+    chart.setPaneOptions({
+      id: `tsp_${drag.key.replaceAll('-', '_')}`,
+      height: height + drag.header,
+      minHeight: drag.header + 50,
+      dragEnabled: true,
+    })
+    const adjustment = drag.startChartHeightAdjustment + height - drag.startHeight
+    setChartHeightAdjustment(adjustment)
+    fitPaneHeights()
+    return adjustment
+  }
+  const startLastPaneResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    const chart = chartRef.current
+    const key = subKeysRef.current.at(-1)
+    if (!chart || !key) return
+    const options = chart.getPaneOptions(`tsp_${key.replaceAll('-', '_')}`)
+    const header = headerHeights.current.get(key)
+    if (!options || Array.isArray(options) || header == null) return
+    const fixedPanes = subKeysRef.current.filter(otherKey => otherKey !== key).flatMap(otherKey => {
+      const otherOptions = chart.getPaneOptions(`tsp_${otherKey.replaceAll('-', '_')}`)
+      const otherHeader = headerHeights.current.get(otherKey)
+      if (!otherOptions || Array.isArray(otherOptions) || otherHeader == null) return []
+      const height = Math.max(50, otherOptions.height - otherHeader)
+      paneHeights.current.set(otherKey, height)
+      return [{ key: otherKey, height, header: otherHeader }]
+    })
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    userInteracted.current = true
+    const startHeight = Math.max(50, options.height - header)
+    paneHeights.current.set(key, startHeight)
+    lastPaneResize.current = {
+      pointerId: event.pointerId,
+      key,
+      startY: event.clientY,
+      startHeight,
+      startChartHeightAdjustment: chartHeightAdjustment,
+      header,
+      fixedPanes,
+    }
+  }
+  const moveLastPaneResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (lastPaneResize.current?.pointerId !== event.pointerId) return
+    lastPaneResizeY.current = event.clientY
+    if (lastPaneResizeFrame.current == null) {
+      lastPaneResizeFrame.current = requestAnimationFrame(() => {
+        lastPaneResizeFrame.current = null
+        applyLastPaneResize(lastPaneResizeY.current)
+      })
+    }
+  }
+  const endLastPaneResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (lastPaneResize.current?.pointerId !== event.pointerId) return
+    if (lastPaneResizeFrame.current != null) {
+      cancelAnimationFrame(lastPaneResizeFrame.current)
+      lastPaneResizeFrame.current = null
+    }
+    const adjustment = applyLastPaneResize(event.clientY)
+    lastPaneResize.current = null
+    storage.stockPreviewSubChartHeights.set(Object.fromEntries(paneHeights.current))
+    if (adjustment != null) storage.stockPreviewChartHeightAdjustment.set(adjustment)
+  }
   const turnover = row?.volume && stockInfo?.float_shares ? row.volume * 100 / stockInfo.float_shares * 100 : undefined
   return (
     <div className="w-full relative" onMouseLeave={() => { setHover(null); setStructureTooltip(null); onHighlightChange?.(null) }}>
@@ -409,8 +509,37 @@ export function KLineCandlestick({
           </>}
         </div>
       )}
-      <div ref={containerRef} data-kline-chart className="w-full" style={{ height: chartHeight }} onDoubleClick={doubleClick}
-        onPointerDown={() => { userInteracted.current = true }} onWheel={() => { userInteracted.current = true }} />
+      <div className="relative w-full" style={{ height: chartHeight }}>
+        <div ref={containerRef} data-kline-chart className="h-full w-full" onDoubleClick={doubleClick}
+          onPointerDown={() => { userInteracted.current = true }} onWheel={() => { userInteracted.current = true }} />
+        {subKeysRef.current.length > 0 && <div
+          role="separator" aria-label="调整最后一个副图高度" aria-orientation="horizontal"
+          aria-valuemin={50} aria-valuemax={2000}
+          aria-valuenow={paneHeights.current.get(subKeysRef.current.at(-1)!) ?? SUB_CHARTS.find(def => def.key === subKeysRef.current.at(-1))?.height ?? 90}
+          tabIndex={0} className="group absolute bottom-0 left-0 z-10 h-2 w-full cursor-row-resize touch-none hover:bg-sky-400/10 active:bg-sky-400/20"
+          onPointerDown={startLastPaneResize} onPointerMove={moveLastPaneResize} onPointerUp={endLastPaneResize}
+          onPointerCancel={endLastPaneResize} onLostPointerCapture={endLastPaneResize}
+          onKeyDown={event => {
+            if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+            event.preventDefault()
+            const key = subKeysRef.current.at(-1)
+            const chart = chartRef.current
+            if (!chart || !key) return
+            const def = SUB_CHARTS.find(item => item.key === key)
+            const current = paneHeights.current.get(key) ?? def?.height ?? 90
+            const height = Math.min(2000, Math.max(50, current + (event.key === 'ArrowUp' ? 20 : -20)))
+            const header = headerHeights.current.get(key) ?? 28
+            paneHeights.current.set(key, height)
+            chart.setPaneOptions({ id: `tsp_${key.replaceAll('-', '_')}`, height: height + header, minHeight: header + 50, dragEnabled: true })
+            const adjustment = chartHeightAdjustment + height - current
+            setChartHeightAdjustment(adjustment)
+            storage.stockPreviewChartHeightAdjustment.set(adjustment)
+            storage.stockPreviewSubChartHeights.set(Object.fromEntries(paneHeights.current))
+            fitPaneHeights()
+          }}>
+          <div className="mx-auto h-0.5 w-10 rounded-full bg-transparent transition-colors group-hover:bg-sky-400/70" />
+        </div>}
+      </div>
       {structureTooltip && <div role="status" className="absolute top-10 right-2 z-20 max-w-xs rounded px-2 py-1 text-[10px] whitespace-pre-line pointer-events-none" style={{ color: ct.text, backgroundColor: ct.tooltipBg }}>{structureTooltip}</div>}
       {showRangeSelector && bars.length > 1 && <div className="mt-2 flex gap-3 rounded-md border border-border/30 bg-base/20 px-2 py-1 text-[10px] text-muted">
         <label className="flex min-w-0 flex-1 items-center gap-1 whitespace-nowrap">起点<input aria-label="可见起始K线" className="w-full min-w-0 accent-sky-500" type="range" min={0} max={bars.length - 1} value={Math.min(visibleRange.from, bars.length - 1)} onChange={event => selectRange(Number(event.target.value), Math.max(Number(event.target.value) + 1, visibleRange.to))} /></label>
