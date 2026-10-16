@@ -136,7 +136,7 @@ export function StockPreviewDialogContent({ symbol, name, onClose, triggerInfo, 
     [watchlist.data, symbol],
   )
   const inWatchlist = !!watchlistEntry
-  // 加入自选日 (北京时间)。该日不在当前K线区间内或恰是非交易日时竖线不画, 由工具栏文字兜底。
+  // 加入自选日 (北京时间); 仅在当前K线区间包含该交易日时绘制竖线。
   const addedDate = useMemo(
     () => cnDateFromUtc(watchlistEntry?.added_at) || null,
     [watchlistEntry],
@@ -288,7 +288,7 @@ export function StockPreviewDialogContent({ symbol, name, onClose, triggerInfo, 
                 <NavPager nav={nav} prevLabel="上一只" nextLabel="下一只" />
               </div>
 
-              {/* 视图/区间控件: 原第二行并入顶行, 紧邻操作按钮 (原「自选于」标注位置) */}
+              {/* 视图/区间控件: 与操作按钮并列, 保持紧凑顶部布局 */}
               <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2.5">
                 {/* 日K / 分时 切换 */}
                 <div role="tablist" aria-label="图表视图" className="inline-flex shrink-0 items-center rounded border border-border/60 bg-base/60 p-0.5">

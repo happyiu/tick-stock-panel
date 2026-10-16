@@ -483,7 +483,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
     [watchlist.data, symbol],
   )
   const inWatchlist = !!watchlistEntry
-  // 加入自选日 (北京时间)。该日不在当前 K 线区间或恰是非交易日时竖线不画，由工具栏文字兜底。
+  // 加入自选日 (北京时间); 仅在当前 K 线区间包含该交易日时绘制竖线。
   const addedDate = useMemo(
     () => cnDateFromUtc(watchlistEntry?.added_at) || null,
     [watchlistEntry],

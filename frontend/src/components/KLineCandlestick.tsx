@@ -387,6 +387,9 @@ export function KLineCandlestick({
   }
 
   const change = row && previous?.close > 0 ? (row.close - previous.close) / previous.close : undefined
+  const amplitude = row && previous?.close > 0 && row.high >= row.low
+    ? (row.high - row.low) / previous.close
+    : undefined
   const selectRange = (from: number, to: number) => {
     const chart = chartRef.current
     const width = chart?.getSize('candle_pane', 'main')?.width
@@ -480,7 +483,7 @@ export function KLineCandlestick({
   return (
     <div className="w-full relative" onMouseLeave={() => { setHover(null); setStructureTooltip(null); onHighlightChange?.(null) }}>
       {showInfoBar && (
-        <div className="mb-2 min-h-10 rounded-md border border-border/30 bg-base/20 px-2 font-mono text-[11px]" style={{ color: ct.text }}>
+        <div className="mb-2 min-h-10 rounded-md border border-border/30 bg-base/20 px-2 font-mono text-xs" style={{ color: ct.text }}>
           {row && <>
             <div className="flex min-h-5 flex-wrap items-center gap-x-1.5">
               {!hideCurrentDate && <span>{row.date}</span>}<span>开</span><span style={{ color: row.open >= row.close ? COLORS.bear : COLORS.bull }}>{price(row.open)}</span>
@@ -488,6 +491,7 @@ export function KLineCandlestick({
               <span>低</span><span style={{ color: COLORS.bear }}>{price(row.low)}</span>
               <span>收</span><span style={{ color: (change ?? 0) >= 0 ? COLORS.bull : COLORS.bear }}>{price(row.close)}</span>
               {change != null && <span style={{ color: change >= 0 ? COLORS.bull : COLORS.bear }}>{fmtPct(change)}</span>}
+              {amplitude != null && <><span>振幅</span><span>{(amplitude * 100).toFixed(2)}%</span></>}
               {turnover != null && <span>换手 {turnover.toFixed(2)}%</span>}
               {hoverIndex >= 0 && previous?.close > 0 && <>
                 <span>至今</span><span>{fmtPct((bars.at(-1)!.close - previous.close) / previous.close)}</span>

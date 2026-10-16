@@ -4,7 +4,7 @@ import {
 } from 'react'
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { PanelRightOpen, RefreshCw, X } from 'lucide-react'
-import { type KlinePeriod, type KlineResponse, type KlineRow, type FinancialMetricRecord } from '@/lib/api'
+import { type KlinePeriod, type KlineResponse, type KlineRow } from '@/lib/api'
 import {
   canAutoRefreshAnalysis,
   DEFAULT_30M_DAYS,
@@ -30,15 +30,12 @@ import { StockIntradayChart } from '@/components/StockIntradayChart'
 import { StockTechnicalPanel } from '@/components/StockTechnicalPanel'
 import { StockChanlunPanel } from '@/components/StockChanlunPanel'
 import { StockAiChatPanel } from '@/components/StockAiChatPanel'
-import { financialMetricsQueryOptions, useFinancialMetrics } from '@/lib/useFinancials'
-import { useCapabilities, useQuoteStatus } from '@/lib/useSharedQueries'
+import { useQuoteStatus } from '@/lib/useSharedQueries'
 import { scheduleNeighborPrefetch } from '@/lib/neighborPrefetch'
 import type { ChartMarker, ChartPriceLine, ChartRange } from '@/lib/kline-chart'
 import {
   loadInfoFields,
-  saveInfoFields,
   buildInfoExtColumnsParam,
-  type ColumnConfig,
 } from '@/lib/stock-info-fields'
 import { analyzeChanlun, type ChanlunStructureSource } from '@/lib/chanlun'
 import { storage, type StockPreviewAnalysisSectionsV2, type StockPreviewAnalysisSectionsV3 } from '@/lib/storage'
@@ -373,14 +370,8 @@ export function StockPanel({
   const splitDraggingRef = useRef(false)
   const splitRatioRef = useRef(splitRatio)
   const splitPointerOffsetRef = useRef(0)
-  // 信息条指标配置提升到此层：同时供 StockInfoBar 渲染与 StockDailyKChart 请求 ext 数据
-  const [fields, setFields] = useState<ColumnConfig[]>(loadInfoFields)
-  const extColumns = useMemo(() => buildInfoExtColumnsParam(fields), [fields])
-
-  const handleFieldsChange = useCallback((next: ColumnConfig[]) => {
-    setFields(next)
-    saveInfoFields(next)
-  }, [])
+  // 沿用已保存的信息字段配置，供K线请求包含 ext 数据列。
+  const extColumns = useMemo(() => buildInfoExtColumnsParam(loadInfoFields()), [])
 
   const toggleAnalysisSection = useCallback((key: keyof Omit<StockPreviewAnalysisSectionsV3, 'version'>) => {
     setAnalysisSections(previous => {
@@ -390,19 +381,9 @@ export function StockPanel({
     })
   }, [])
 
-  // 财务指标：仅当信息条配置含可见的财务字段且用户具备财务数据能力 (financial) 时才请求
-  // 无能力时跳过请求, 避免后端抛 CapabilityDenied (403) 导致 free/starter 档弹错误提示
-  const { data: caps } = useCapabilities()
   const { data: quoteStatus } = useQuoteStatus({
     enabled: !!symbol && resolvedRightPaneMode === 'technical',
   })
-  const hasFinancialCap = !!caps?.capabilities?.['financial']
-  const hasFinanceField = useMemo(
-    () => fields.some(f => f.visible && f.source.type === 'builtin'
-      && ['eps', 'bps', 'roe', 'pe_ttm', 'pb', 'gross_margin', 'net_margin', 'debt_ratio', 'revenue_yoy', 'net_income_yoy'].includes(f.source.key)),
-    [fields],
-  )
-  const financials = useFinancialMetrics(hasFinanceField && hasFinancialCap ? symbol : undefined)
 
   const chartDateRange = useMemo(
     () => externalDateRange ?? defaultKlineRange(period),
@@ -737,7 +718,7 @@ export function StockPanel({
   }, [splitDragging])
   // 当前日K就绪后, 等可见查询空闲再串行预取邻股, 避免首屏争抢公网带宽。
   // 日K/分时预取 staleTime 30s 防来回切换重复请求; 成为当前股后 useQuery(staleTime=0) 立即后台刷新,
-  // SSE 也只按焦点股精准失效, 实时性不受影响。财务指标与正式查询同 staleTime, 5min 内不重复拉取。
+  // SSE 也只按焦点股精准失效, 实时性不受影响。
   // prefetchKey 按内容 join: 自选页 navList 随行情 tick 重建但邻股集合通常不变, 避免 effect 每次 tick 重跑。
   const qc = useQueryClient()
   const prefetchKey = prefetchSymbols?.join(',') ?? ''
@@ -759,9 +740,6 @@ export function StockPanel({
       tasks.push(async () => {
         if (lastDate) await qc.prefetchQuery({ ...klineMinuteQueryOptions(s, lastDate, true), staleTime: 30_000 })
       })
-      if (hasFinanceField && hasFinancialCap) {
-        tasks.push(() => qc.prefetchQuery(financialMetricsQueryOptions(s)))
-      }
       // 分时 tab 的多日分时 + 最新分时: 切股后分时图也免 loading。
       tasks.push(() => qc.prefetchQuery({ ...klineMinuteRangeQueryOptions(s, intradayDays), staleTime: 30_000 }))
       tasks.push(() => qc.prefetchQuery({ ...klineMinuteQueryOptions(s, undefined, true), staleTime: 30_000 }))
@@ -773,7 +751,7 @@ export function StockPanel({
       }
     }
     return scheduleNeighborPrefetch(qc, symbol, tasks)
-  }, [prefetchKey, symbol, chartDateRange, infoDateRange, extColumns, hasFinanceField, hasFinancialCap, intradayDays, period, periodDays, includeTechnicalScores, qc, kline.isSuccess, kline.isPlaceholderData])
+  }, [prefetchKey, symbol, chartDateRange, infoDateRange, extColumns, intradayDays, period, periodDays, includeTechnicalScores, qc, kline.isSuccess, kline.isPlaceholderData])
 
   // symbol 变化时重置分时相关状态，避免切股后残留旧日期。
   // 日K信息直接读 query data (切股到已预取邻股首帧即有), 无需清空或门控。
@@ -832,8 +810,6 @@ export function StockPanel({
     ? { flex: `0 0 ${splitRatio * 100}%` }
     : undefined
 
-  // 财务指标最新一期（metrics 按 period_end 排序，取首项）
-  const financialMetrics: FinancialMetricRecord | undefined = financials.data?.data?.[0]
   const rightPaneLabel = resolvedRightPaneMode === 'technical'
     ? '技术指标'
     : resolvedRightPaneMode === 'intraday' ? '分时图' : '右侧面板'
@@ -849,15 +825,11 @@ export function StockPanel({
       period={period}
       onAddStrategy={onAddStrategy}
       onAddSignal={onAddSignal}
-      fields={fields}
-      onFieldsChange={handleFieldsChange}
-      financialMetrics={financialMetrics}
       onMonitor={onMonitor}
       inWatchlist={inWatchlist}
       onAddToWatchlist={onAddToWatchlist}
       onRemoveFromWatchlist={onRemoveFromWatchlist}
       watchlistPending={watchlistPending}
-      addedDate={addedDate}
     />
   )
 

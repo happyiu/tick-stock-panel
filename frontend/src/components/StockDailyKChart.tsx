@@ -417,17 +417,6 @@ export function StockDailyKChart({
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           {showIndicatorControls && (<>
             <ChartIndicatorMenu activeIndicators={activeIndicators} onToggle={toggleIndicator} />
-            {activeIndicators.map(key => {
-              const indicator = [...OVERLAY_INDICATORS, ...SUB_CHARTS].find(item => item.key === key)
-              return indicator && (
-                <button key={key} type="button" onClick={() => toggleIndicator(key)}
-                  aria-label={`移除${indicator.label}指标`} title={`移除${indicator.label}指标`}
-                  className="flex h-6 shrink-0 items-center gap-1 rounded-md border border-accent/40 bg-accent/10 px-2 text-[10px] font-medium text-accent hover:bg-accent/20"
-                >
-                  {indicator.label}<X className="h-2.5 w-2.5" />
-                </button>
-              )
-            })}
           {chanlunAnalysis && (
             <div
               className="relative ml-0.5 flex items-center"
