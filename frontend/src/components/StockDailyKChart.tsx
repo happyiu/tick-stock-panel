@@ -62,7 +62,7 @@ function loadActiveIndicators(): string[] {
   const sub = Array.isArray(saved) && saved.length > 0 && valid.length === 0 ? ['vol'] : valid
   const main = storage.stockPreviewMainCharts.get([])
   return [...sub, ...(Array.isArray(main) ? main.filter((key, index) =>
-    OVERLAY_INDICATORS.some(indicator => indicator.key === key) && main.indexOf(key) === index,
+    key !== 'ma' && OVERLAY_INDICATORS.some(indicator => indicator.key === key) && main.indexOf(key) === index,
   ) : [])]
 }
 
@@ -239,6 +239,7 @@ export function StockDailyKChart({
   onClearSignals,
 }: Props) {
   const [activeIndicators, setActiveIndicators] = useState<string[]>(loadActiveIndicators)
+  const [maVisible, setMaVisible] = useState(() => storage.stockPreviewMaVisible.get(true) !== false)
   const [showMarkers, setShowMarkers] = useState(true)
   // 加入自选日标注（与「异动」标记相互独立）
   const [showAddedMark, setShowAddedMark] = useState(true)
@@ -385,6 +386,13 @@ export function StockDailyKChart({
   ], [effectiveShowLimitMarkers, limitMarkers, markers, signalMarkers, strategyMarkers])
 
   const toggleIndicator = useCallback((key: string) => {
+    if (key === 'ma') {
+      setMaVisible(previous => {
+        storage.stockPreviewMaVisible.set(!previous)
+        return !previous
+      })
+      return
+    }
     setActiveIndicators(prev => {
       const next = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
       storage.stockPreviewSubCharts.set(next.filter(item => SUB_CHARTS.some(chart => chart.key === item)))
@@ -425,7 +433,7 @@ export function StockDailyKChart({
         <div className="mb-2">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           {showIndicatorControls && (<>
-            <ChartIndicatorMenu activeIndicators={activeIndicators} onToggle={toggleIndicator} />
+            <ChartIndicatorMenu allowMA={showMA} activeIndicators={showMA && maVisible ? ['ma', ...activeIndicators] : activeIndicators} onToggle={toggleIndicator} />
           {chanlunAnalysis && (
             <div
               className="relative ml-0.5 flex items-center"
@@ -627,7 +635,7 @@ export function StockDailyKChart({
           onHighlightChange={onHighlightChange}
           priceLabelWidth={priceLabelWidth}
           height={chartHeight - 22}
-          showMA={showMA}
+          showMA={showMA && maVisible}
           showInfoBar={showInfoBar}
           showMarkers={showMarkers}
           stockInfo={stockInfo}

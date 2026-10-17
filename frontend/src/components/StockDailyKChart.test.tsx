@@ -14,8 +14,8 @@ vi.mock('@tanstack/react-query', () => ({
 }))
 vi.mock('./KLineCandlestick', async importOriginal => ({
   ...await importOriginal<typeof import('./KLineCandlestick')>(),
-  KLineCandlestick: ({ activeIndicators, period }: { activeIndicators: string[]; period?: string }) =>
-    <div data-indicators={activeIndicators.join(',')} data-period={period} />,
+  KLineCandlestick: ({ activeIndicators, period, showMA }: { activeIndicators: string[]; period?: string; showMA?: boolean }) =>
+    <div data-indicators={activeIndicators.join(',')} data-period={period} data-show-ma={String(showMA)} />,
 }))
 
 let host: HTMLDivElement
@@ -44,7 +44,7 @@ it('指标按主图叠加和副图分类，切换主图不改变已有副图，�
   localStorage.setItem('stock_preview_sub_charts', JSON.stringify(['vol', 'macd']))
   await render()
   await click('指标')
-  expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('主图叠加')
+  expect(host.querySelector('[aria-label="指标类型"] [role="tab"][aria-selected="true"]')?.textContent).toBe('主图叠加')
   expect(host.querySelector('[role="checkbox"][aria-label="天使魔鬼"]')).not.toBeNull()
   const toggle = host.querySelector('[aria-label="天使魔鬼"]') as HTMLButtonElement
   await act(async () => toggle.click())
@@ -150,4 +150,80 @@ it('多空趋势V2归为副图，图表明确传递30分钟/日线周期并保�
   await act(async () => root.render(<StockDailyKChart symbol="510300.SH" period="1d" />))
   expect(host.querySelector('[data-indicators]')?.getAttribute('data-period')).toBe('1d')
   expect(host.querySelector('[data-indicators]')?.getAttribute('data-indicators')).toBe('vol,bull-bear-trend-v2')
+})
+
+it('内置指标沿用主副图菜单与持久化，重开和切股恢复选择', async () => {
+  await render()
+  await click('指标')
+  expect(host.querySelector('[aria-label="EMA 指数均线"]')).toBeNull()
+  await click('内置')
+  const ema = host.querySelector<HTMLButtonElement>('[aria-label="EMA 指数均线"]')!
+  expect(ema).not.toBeNull()
+  await act(async () => ema.click())
+  await click('副图')
+  const cci = host.querySelector<HTMLButtonElement>('[aria-label="CCI 顺势指标"]')!
+  await act(async () => cci.click())
+  expect(JSON.parse(localStorage.getItem('stock_preview_main_charts')!)).toEqual(['builtin-ema'])
+  expect(JSON.parse(localStorage.getItem('stock_preview_sub_charts')!)).toEqual(['vol', 'builtin-cci'])
+  await act(async () => root.render(null))
+  await render('159915.SZ')
+  expect(host.querySelector('[data-indicators]')?.getAttribute('data-indicators')).toBe('vol,builtin-cci,builtin-ema')
+})
+
+
+it('指标来源默认自编，内置与自编分别保留主副图，重开回到自编且不改选择', async () => {
+  localStorage.setItem('stock_preview_main_charts', JSON.stringify(['builtin-ema', 'boll']))
+  await render()
+  await click('指标')
+  expect(host.querySelector('[aria-label="指标来源"] [aria-selected="true"]')?.textContent).toBe('自编')
+  expect(host.querySelector('[aria-label="BOLL"]')?.getAttribute('aria-checked')).toBe('true')
+  expect(host.querySelector('[aria-label="EMA 指数均线"]')).toBeNull()
+  await click('内置')
+  expect(host.querySelector('[aria-label="BOLL"]')).toBeNull()
+  expect(host.querySelector('[aria-label="EMA 指数均线"]')?.getAttribute('aria-checked')).toBe('true')
+  await click('副图')
+  expect(host.querySelector('[aria-label="CCI 顺势指标"]')).not.toBeNull()
+  expect(host.querySelector('[aria-label="MACD"]')).toBeNull()
+  await click('自编')
+  expect(host.querySelector('[aria-label="MACD"]')).not.toBeNull()
+  expect(host.querySelector('[aria-label="CCI 顺势指标"]')).toBeNull()
+  await click('内置')
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="关闭指标"]')!.click())
+  await click('指标')
+  expect(host.querySelector('[aria-label="指标来源"] [aria-selected="true"]')?.textContent).toBe('自编')
+  expect(host.querySelector('[aria-label="MACD"]')).not.toBeNull()
+  expect(host.querySelector('[data-indicators]')?.getAttribute('data-indicators')).toBe('vol,builtin-ema,boll')
+})
+
+
+it('MA在自编主图中默认选中，关闭与重开保持选择，不影响其他指标', async () => {
+  localStorage.setItem('stock_preview_main_charts', JSON.stringify(['boll']))
+  await render()
+  await click('指标')
+  const ma = () => host.querySelector<HTMLButtonElement>('[aria-label="MA 均线"]')!
+  expect(ma()).not.toBeNull()
+  expect(ma().getAttribute('aria-checked')).toBe('true')
+  expect(host.querySelector('[data-show-ma]')?.getAttribute('data-show-ma')).toBe('true')
+  await act(async () => ma().click())
+  expect(host.querySelector('[data-show-ma]')?.getAttribute('data-show-ma')).toBe('false')
+  expect(JSON.parse(localStorage.getItem('stock_preview_ma_visible')!)).toBe(false)
+  expect(JSON.parse(localStorage.getItem('stock_preview_main_charts')!)).toEqual(['boll'])
+  await act(async () => root.render(null))
+  await render('159915.SZ')
+  await click('指标')
+  expect(ma().getAttribute('aria-checked')).toBe('false')
+  expect(host.querySelector('[data-show-ma]')?.getAttribute('data-show-ma')).toBe('false')
+  await act(async () => ma().click())
+  expect(host.querySelector('[data-show-ma]')?.getAttribute('data-show-ma')).toBe('true')
+  expect(host.querySelector('[data-indicators]')?.getAttribute('data-indicators')).toBe('vol,boll')
+  await click('内置')
+  expect(ma()).toBeNull()
+})
+
+
+it('调用方明确关闭MA时隐藏菜单中的MA开关，保持原有组件契约', async () => {
+  await act(async () => root.render(<StockDailyKChart symbol="A" showMA={false} />))
+  await click('指标')
+  expect(host.querySelector('[aria-label="MA 均线"]')).toBeNull()
+  expect(host.querySelector('[data-show-ma]')?.getAttribute('data-show-ma')).toBe('false')
 })

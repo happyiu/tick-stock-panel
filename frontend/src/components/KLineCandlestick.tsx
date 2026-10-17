@@ -3,7 +3,7 @@ import { dispose, init, registerIndicator, registerOverlay, type Chart, type Cro
 import { chartTheme, useTheme } from '@/lib/theme'
 import { fmtAssetPrice, fmtPct, priceDigits } from '@/lib/format'
 import {
-  chartIndicators, classifyBarUpdate, COLORS, SUB_CHARTS, toChartBars,
+  chartIndicators, classifyBarUpdate, COLORS, SUB_CHARTS, OVERLAY_INDICATORS, toChartBars,
   type ChartBar, type CandlestickProps,
 } from '@/lib/kline-chart'
 import { annotationTemplate, ANNOTATION_GROUP, buildAnnotations } from '@/lib/kline-chart-overlays'
@@ -11,6 +11,8 @@ import { formulaHeaderHeight, formulaIndicators, formulaName } from '@/lib/kline
 import { ANGEL_DEVIL_MA, calculateAngelDevil } from '@/lib/angelDevil'
 import { BOLL2_LINES, calculateBoll2 } from '@/lib/boll2'
 import { storage } from '@/lib/storage'
+import { builtinIndicator } from '@/lib/kline-chart-builtins'
+import { ChartDrawingToolbar, DRAWING_GROUP } from './ChartDrawingToolbar'
 import { buildChanlunOverlays, CHANLUN_GROUP, chanlunTemplate } from '@/lib/kline-chart-chanlun'
 import { buildLevelOverlays, LEVEL_GROUP, levelTemplate } from '@/lib/kline-chart-levels'
 
@@ -38,6 +40,7 @@ export function KLineCandlestick({
   const ct = chartTheme(theme)
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<Chart | null>(null)
+  const [chartInstance, setChartInstance] = useState<Chart | null>(null)
   const userInteracted = useRef(false)
   const bars = useMemo(() => toChartBars(data, volumeCompare.days), [data, volumeCompare.days])
   const barsRef = useRef(bars)
@@ -112,6 +115,7 @@ export function KLineCandlestick({
     })
     if (!chart) return
     chartRef.current = chart
+    setChartInstance(chart)
     const savedHeights = storage.stockPreviewSubChartHeights.get({})
     if (savedHeights && typeof savedHeights === 'object' && !Array.isArray(savedHeights)) {
       for (const { key } of SUB_CHARTS) {
@@ -154,6 +158,7 @@ export function KLineCandlestick({
         ? current : { symbol: previousSymbol.current, date: bar.date })
     }
     const onCandleClick = (value: unknown) => {
+      if (chart.getOverlays({ groupId: DRAWING_GROUP }).some(overlay => overlay.currentStep !== -1)) return
       const event = value as { dataIndex?: number }
       const bar = event?.dataIndex != null ? barsRef.current[event.dataIndex] : undefined
       if (bar) callbacks.current.onDateClick?.(bar.date)
@@ -297,21 +302,24 @@ export function KLineCandlestick({
   useEffect(() => {
     const chart = chartRef.current
     if (!chart) return
-    const wanted = new Set([
-      ...(angel ? ['angel-devil'] : showMA ? ['ma'] : []), ...(boll ? ['boll'] : []), ...(boll2 ? ['boll2'] : []),
-      ...subKey.split(',').filter(Boolean),
-    ].map(formulaName))
+    const keys = [
+      ...(angel ? ['angel-devil'] : showMA ? ['ma'] : []),
+      ...activeIndicators.filter(key => key !== 'ma' && (OVERLAY_INDICATORS.some(def => def.key === key) || SUB_CHARTS.some(def => def.key === key))),
+    ]
+    const nameForKey = (key: string) => builtinIndicator(key)?.name ?? formulaName(key)
+    const wanted = new Set(keys.map(nameForKey))
     for (const indicator of chart.getIndicators()) {
       if (!wanted.has(indicator.name)) chart.removeIndicator({ id: indicator.id })
     }
-    for (const name of wanted) {
+    for (const key of new Set(keys)) {
+      const builtin = builtinIndicator(key)
+      const name = nameForKey(key)
       const existing = chart.getIndicators({ name })[0]
-      const key = name.slice(4)
-      if (!chartIndicators.some(indicator => indicator.name === name) && !formulaIndicators.some(indicator => indicator.name === name)) continue
+      if (!builtin && !chartIndicators.some(indicator => indicator.name === name) && !formulaIndicators.some(indicator => indicator.name === name)) continue
       const options = {
-        name, paneId: ['MA', 'BOLL', 'ANGEL_DEVIL', 'BOLL2'].includes(key) ? 'candle_pane' : `tsp_${key.toLowerCase()}`,
-        ...(key === 'VOL' ? { extendData: volumeCompare.enabled, calcParams: [volumeCompare.days] }
-          : { extendData: { period } }),
+        name, paneId: key === 'ma' || OVERLAY_INDICATORS.some(def => def.key === key) ? 'candle_pane' : `tsp_${key.replaceAll('-', '_')}`,
+        ...(!builtin ? key === 'vol' ? { extendData: volumeCompare.enabled, calcParams: [volumeCompare.days] }
+          : { extendData: { period } } : {}),
       }
       if (existing) chart.overrideIndicator({ ...options, id: existing.id })
       else chart.createIndicator(options, true)
@@ -321,7 +329,7 @@ export function KLineCandlestick({
     })
     fitPaneHeights()
     chart.resize()
-  }, [showMA, angel, boll, boll2, subKey, volumeCompare.enabled, volumeCompare.days, period, theme])
+  }, [showMA, activeIndicators, volumeCompare.enabled, volumeCompare.days, period, theme])
 
   useEffect(() => {
     const chart = chartRef.current
@@ -373,6 +381,7 @@ export function KLineCandlestick({
 
   const doubleClick = (event: React.MouseEvent<HTMLDivElement>) => {
     const chart = chartRef.current
+    if (chart?.getOverlays({ groupId: DRAWING_GROUP }).some(overlay => overlay.currentStep !== -1)) return
     const main = chart?.getDom('candle_pane', 'main')
     if (!chart || !main) return
     const rect = main.getBoundingClientRect()
@@ -482,6 +491,7 @@ export function KLineCandlestick({
   const turnover = row?.volume && stockInfo?.float_shares ? row.volume * 100 / stockInfo.float_shares * 100 : undefined
   return (
     <div className="w-full relative" onMouseLeave={() => { setHover(null); setStructureTooltip(null); onHighlightChange?.(null) }}>
+      <ChartDrawingToolbar chart={chartInstance} symbol={symbol} period={period} ready={bars.length > 0} hidden={hideCurrentDate} />
       {showInfoBar && (
         <div className="mb-2 min-h-10 rounded-md border border-border/30 bg-base/20 px-2 font-mono text-xs" style={{ color: ct.text }}>
           {row && <>

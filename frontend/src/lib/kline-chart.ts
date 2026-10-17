@@ -1,4 +1,5 @@
 import type { IndicatorTemplate, KLineData } from 'klinecharts'
+import { BUILTIN_MAIN_INDICATORS, BUILTIN_SUB_INDICATORS } from './kline-chart-builtins'
 import type { KlinePeriod } from './api'
 import type { ChanlunAnalysis } from './chanlun'
 import type { StockPreviewChanlunOverlayConfig } from './storage'
@@ -125,11 +126,14 @@ export const SUB_CHARTS = [
   { key: 'kd-enhanced', label: 'K/D精准背离增强版', height: 180 },
   { key: 'etf-swing-v2', label: 'ETF波段操盘V2', height: 200 },
   { key: 'bull-bear-trend-v2', label: '多空趋势V2', height: 200 },
+  ...BUILTIN_SUB_INDICATORS,
 ]
 export const OVERLAY_INDICATORS = [
+  { key: 'ma', label: 'MA 均线' },
   { key: 'angel-devil', label: '天使魔鬼' },
   { key: 'boll', label: 'BOLL' },
   { key: 'boll2', label: 'boll2' },
+  ...BUILTIN_MAIN_INDICATORS,
 ]
 
 export type ChartBar = KLineData & { date: string }

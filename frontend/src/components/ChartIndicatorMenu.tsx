@@ -2,14 +2,17 @@ import { useId, useState } from 'react'
 import { Check, SlidersHorizontal, X } from 'lucide-react'
 import { OVERLAY_INDICATORS, SUB_CHARTS } from '@/lib/kline-chart'
 
-export function ChartIndicatorMenu({ activeIndicators, onToggle }: {
+export function ChartIndicatorMenu({ activeIndicators, onToggle, allowMA = true }: {
   activeIndicators: string[]
+  allowMA?: boolean
   onToggle: (key: string) => void
 }) {
   const [open, setOpen] = useState(false)
+  const [source, setSource] = useState<'custom' | 'builtin'>('custom')
   const [category, setCategory] = useState<'main' | 'sub'>('main')
   const id = useId()
-  const indicators = category === 'main' ? OVERLAY_INDICATORS : SUB_CHARTS
+  const indicators = (category === 'main' ? OVERLAY_INDICATORS : SUB_CHARTS)
+    .filter(indicator => (allowMA || indicator.key !== 'ma') && indicator.key.startsWith('builtin-') === (source === 'builtin'))
   return (
     <div className="relative shrink-0" onBlur={event => {
       if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false)
@@ -21,7 +24,10 @@ export function ChartIndicatorMenu({ activeIndicators, onToggle }: {
     }}>
       <button
         type="button" aria-expanded={open} aria-controls={id}
-        onClick={() => setOpen(value => !value)}
+        onClick={() => {
+          if (!open) setSource('custom')
+          setOpen(value => !value)
+        }}
         className={`flex h-6 items-center gap-1 rounded-md border px-2 text-[10px] font-medium transition-colors ${open ? 'border-accent/40 bg-accent/10 text-accent' : 'border-border/30 bg-base/40 text-muted hover:border-border/60 hover:text-foreground'}`}
       >
         <SlidersHorizontal className="h-3 w-3" />指标
@@ -33,6 +39,14 @@ export function ChartIndicatorMenu({ activeIndicators, onToggle }: {
             <button type="button" aria-label="关闭指标" onClick={() => setOpen(false)} className="rounded p-1 text-muted hover:bg-elevated hover:text-foreground">
               <X className="h-3 w-3" />
             </button>
+          </div>
+          <div role="tablist" aria-label="指标来源" className="mb-2 flex rounded bg-base p-0.5">
+            {([['custom', '自编'], ['builtin', '内置']] as const).map(([key, label]) => (
+              <button key={key} type="button" role="tab" aria-selected={source === key}
+                onClick={() => setSource(key)}
+                className={`flex-1 rounded px-2 py-1.5 text-xs ${source === key ? 'bg-elevated text-accent' : 'text-muted hover:text-secondary'}`}
+              >{label}</button>
+            ))}
           </div>
           <div role="tablist" aria-label="指标类型" className="mb-1 flex rounded bg-base p-0.5">
             {([['main', '主图叠加'], ['sub', '副图']] as const).map(([key, label]) => (
@@ -53,7 +67,9 @@ export function ChartIndicatorMenu({ activeIndicators, onToggle }: {
                   <span className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border ${active ? 'border-accent bg-accent' : 'border-border bg-base'}`}>
                     {active && <Check className="h-2.5 w-2.5 text-white" strokeWidth={3} />}
                   </span>
-                  <span>{indicator.label}{indicator.key === 'angel-devil' && (
+                  <span>{indicator.label}{indicator.key === 'ma' && (
+                    <span className="mt-0.5 block text-[10px] text-muted">MA5 / 10 / 20 / 60</span>
+                  )}{indicator.key === 'angel-devil' && (
                     <span className="mt-0.5 block text-[10px] text-muted">MA5 / 13 / 21 / 34 · 进攻 / 撤退</span>
                   )}{indicator.key === 'boll2' && (
                     <span className="mt-0.5 block text-[10px] text-muted">20周期 · 自定义通道 · 延后1根K线</span>
@@ -70,9 +86,6 @@ export function ChartIndicatorMenu({ activeIndicators, onToggle }: {
               )
             })}
           </div>
-          {category === 'main' && <p className="mt-1 border-t border-border px-2 pt-2 text-[10px] leading-relaxed text-muted">
-            天使魔鬼启用后替换默认均线，K线颜色表示多空状态。未收盘K线上的信号可能变化。
-          </p>}
         </div>
       )}
     </div>

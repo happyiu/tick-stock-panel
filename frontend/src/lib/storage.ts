@@ -125,11 +125,17 @@ export const storage = {
   /** 个股预览 K 线副图显隐与顺序 */
   stockPreviewSubCharts: kv<string[]>('stock_preview_sub_charts'),
 
+  /** 手动画线按标的与周期隔离，仅存坐标与工具属性。 */
+  chartDrawings: (symbol: string, period: string) => kv<unknown>(`chart_drawings_v1:${encodeURIComponent(symbol)}:${period}`),
+
   /** KLineChart 各副图的绘图区高度，不含顶部提示区。 */
   stockPreviewSubChartHeights: kv<Record<string, number>>('stock_preview_sub_chart_heights'),
 
   /** 拖动副图时同步调整画布，保持主图高度的像素偏移。 */
   stockPreviewChartHeightAdjustment: kv<number>('stock_preview_chart_height_adjustment'),
+
+  /** MA原本默认显示；独立保存开关，兼容不含MA的旧主图数组。 */
+  stockPreviewMaVisible: kv<boolean>('stock_preview_ma_visible'),
 
   /** K线主图叠加指标，与已有副图设置独立保存。 */
   stockPreviewMainCharts: kv<string[]>('stock_preview_main_charts'),

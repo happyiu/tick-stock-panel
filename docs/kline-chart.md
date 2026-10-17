@@ -20,6 +20,21 @@
 - 同日末根变化与新增一日通过 `setDataLoader.subscribeBar` 的回调更新；历史修订和窗口变化使用 `resetData`，保留浏览位置。切股重置视图和悬停。
 - 当前只显示调用方请求的日期窗口，`getBars` 返回 `more=false`，不额外向边界分页取数。
 
+MA 均线位于“自编 → 主图叠加”，默认勾选；通过 `stockPreviewMaVisible` 独立保存开关，兼容旧主图设置中没有 MA 的情况。图线与信息栏数值同时显隐，天使魔鬼仍优先替换普通均线，移除天使魔鬼后按 MA 开关恢复。
+
+## 内置指标与手动画线
+
+指标菜单先按“自编 / 内置”筛选，每次打开默认“自编”；两类均保留主图/副图分类与原有选择存储，切换分类不修改已启用指标。`lib/kline-chart-builtins.ts` 增加20个原生指标：
+主图 EMA、SMA、BBI、SAR；副图 BIAS、BRAR、CCI、DMI、CR、PSY、DMA、TRIX、OBV、VR、WR、MTM、EMV、AO、ROC、PVT。
+使用 `builtin-*` 选择键与库内公式名，保持原有 `TSP_*` 计算不变；新增指标只在启用时计算，使用库默认参数，不参与后端技术评分。
+AVP 暂不开放：当前前复权价格、原始成交额与按手存储的成交量不能直接相除得到同口径均价。
+
+共享图表上的画线工具栏提供趋势线、水平线/射线、直线、垂直线、平行线/价格通道、斐波那契与自由画笔。
+可吸附K线、锁定/解锁全部手动画线、删除选中线、清空当前上下文；Esc取消未完成绘制。
+完成绘制与拖动修改后通过 `storage.chartDrawings(symbol, period)` 保存到当前浏览器；只恢复工具名、时间戳、价格坐标与锁定状态，不保存回调或系统覆盖物。
+手动画线使用独立 `tsp-user-drawings` 分组，删除/清空不影响缠论、策略信号和关键价位；切股/切周期移除旧图形并恢复对应记录，隐藏日期调试不恢复手动画线。
+图表本身不增加行情请求。升级需核对覆盖物回调顺序、吸附模式、原生指标名及按时间戳恢复行为。
+
 ## 自定义公式
 
 `lib/kline-chart-formulas.ts` 注册六个 `TSP_*` 指标，直接复用现有 `calculate*` 函数。
@@ -49,7 +64,7 @@ KLineChart 副图上方分隔线支持上下拖动。拖动后通过统一 `stor
 
 ```bash
 cd frontend
-pnpm exec vitest run src/lib/kline-chart*.test.ts src/components/KLineCandlestick.test.tsx src/components/EChartsCandlestick.test.tsx src/components/StockDailyKChart.test.tsx src/components/stock-analysis/AnalysisKChart.test.tsx src/pages/Indices.test.tsx
+pnpm exec vitest run src/lib/kline-chart*.test.ts src/components/KLineCandlestick.test.tsx src/components/ChartDrawingToolbar.test.tsx src/components/EChartsCandlestick.test.tsx src/components/StockDailyKChart.test.tsx src/components/stock-analysis/AnalysisKChart.test.tsx src/pages/Indices.test.tsx
 pnpm build
 ```
 

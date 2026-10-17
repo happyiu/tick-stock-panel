@@ -337,3 +337,33 @@ it('分析图范围条与画布缩放联动，拖动端点不重建图表', asyn
   expect(chart.scrollByDistance).toHaveBeenLastCalledWith(-144)
   expect(engine.init).toHaveBeenCalledOnce()
 })
+
+it('新增内置主图与副图直接调用引擎，不覆盖TSP公式，关闭后移除', async () => {
+  await render({ activeIndicators: ['macd', 'builtin-ema', 'builtin-sar', 'builtin-cci', 'builtin-obv'] })
+  expect(state.indicators.map(indicator => indicator.name)).toEqual(['TSP_MA', 'TSP_MACD', 'EMA', 'SAR', 'CCI', 'OBV'])
+  expect(chart.createIndicator).toHaveBeenCalledWith({ name: 'EMA', paneId: 'candle_pane' }, true)
+  expect(chart.createIndicator).toHaveBeenCalledWith({ name: 'CCI', paneId: 'tsp_builtin_cci' }, true)
+  expect(state.panes.tsp_builtin_cci).toMatchObject({ minHeight: 78 })
+  await render({ activeIndicators: ['macd'] })
+  expect(state.indicators.map(indicator => indicator.name)).toEqual(['TSP_MA', 'TSP_MACD'])
+  expect(engine.init).toHaveBeenCalledOnce()
+})
+
+
+it('MA开关同时控制曲线和信息栏，天使魔鬼优先且移除后遵循MA选择', async () => {
+  const data = rows().map(row => ({ ...row, ma5: 10.25, ma10: 10.5, ma20: 10.75, ma60: 11 }))
+  await render({ data, showMA: true })
+  expect(state.indicators.some(indicator => indicator.name === 'TSP_MA')).toBe(true)
+  expect(host.textContent).toContain('MA5:10.25')
+  await render({ data, showMA: false, activeIndicators: ['ma', 'vol'] })
+  expect(state.indicators.map(indicator => indicator.name)).toEqual(['TSP_VOL'])
+  expect(host.textContent).not.toContain('MA5:10.25')
+  await render({ data, showMA: true, activeIndicators: ['angel-devil'] })
+  expect(state.indicators.map(indicator => indicator.name)).toEqual(['TSP_ANGEL_DEVIL'])
+  await render({ data, showMA: false, activeIndicators: ['angel-devil'] })
+  await render({ data, showMA: false, activeIndicators: [] })
+  expect(state.indicators).toEqual([])
+  await render({ data, showMA: true, activeIndicators: [] })
+  expect(state.indicators.map(indicator => indicator.name)).toEqual(['TSP_MA'])
+  expect(engine.init).toHaveBeenCalledOnce()
+})

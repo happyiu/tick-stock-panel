@@ -5,6 +5,9 @@ import { EChartsCandlestick, SUB_CHARTS, INDICATORS } from './EChartsCandlestick
 import { KLineCandlestick } from './KLineCandlestick'
 it('历史导入路径兼容新引擎，指标元数据不再加载ECharts', () => {
   expect(EChartsCandlestick).toBe(KLineCandlestick)
-  expect(SUB_CHARTS).toHaveLength(8)
+  expect(SUB_CHARTS).toHaveLength(24) // 原有8个副图 + 16个新增内置指标
+  expect(SUB_CHARTS.map(indicator => indicator.key)).toEqual(expect.arrayContaining([
+    'vol', 'macd', 'kd-divergence', 'etf-swing-v2', 'builtin-cci', 'builtin-obv',
+  ]))
   expect(INDICATORS.every(indicator => indicator.key !== 'vol')).toBe(true)
 })
