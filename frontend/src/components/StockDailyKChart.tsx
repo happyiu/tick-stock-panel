@@ -14,6 +14,7 @@ import {
   SUB_CHARTS,
   type ChartMarker,
   type ChartPriceLine,
+  type CandlestickProps,
   type ChartRange,
   type OHLC,
   type VolumeCompareConfig,
@@ -73,6 +74,10 @@ interface Props {
   markers?: ChartMarker[]
   ranges?: ChartRange[]
   priceLines?: ChartPriceLine[]
+  priceCurves?: CandlestickProps['priceCurves']
+  highlightedKey?: CandlestickProps['highlightedKey']
+  onHighlightChange?: CandlestickProps['onHighlightChange']
+  priceLabelWidth?: number
   showLimitMarkers?: boolean
   showIndicatorControls?: boolean
   showMarkerToggle?: boolean
@@ -204,6 +209,10 @@ export function StockDailyKChart({
   markers,
   ranges,
   priceLines,
+  priceCurves,
+  highlightedKey,
+  onHighlightChange,
+  priceLabelWidth,
   showLimitMarkers = true,
   showIndicatorControls = true,
   showMarkerToggle = true,
@@ -613,6 +622,10 @@ export function StockDailyKChart({
           markers={allMarkers}
           ranges={ranges}
           priceLines={priceLines}
+          priceCurves={priceCurves}
+          highlightedKey={highlightedKey}
+          onHighlightChange={onHighlightChange}
+          priceLabelWidth={priceLabelWidth}
           height={chartHeight - 22}
           showMA={showMA}
           showInfoBar={showInfoBar}

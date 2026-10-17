@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import json
 import math
-from datetime import timedelta
+from datetime import date, timedelta
+from typing import Annotated
 
 import polars as pl
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -114,6 +115,7 @@ def get_levels(
     request: Request,
     symbol: str = Query(..., description="标的代码,如 000001.SZ"),
     days: int = Query(120, ge=30, le=500, description="计算样本天数"),
+    end_date: Annotated[date | None, Query(description="历史观察截止日期,缺省为北京今天")] = None,
 ):
     """计算 11 类关键价位(成交密集区压力支撑 / 枢轴点 / 前高前低 /
     布林带 / Keltner短中长 / ATR止损 / 缺口 / 斐波那契 / 整数关口)。
@@ -126,11 +128,13 @@ def get_levels(
         raise HTTPException(400, "symbol 不能为空")
 
     repo = request.app.state.repo
-    end = cn_today()
+    end = min(end_date, cn_today()) if end_date else cn_today()
     start = end - timedelta(days=days * 2)
     # 按资产类型分流: ETF/指数走独立 enriched 存储, 股票保持原路径
     asset_type = repo.resolve_asset_type(symbol)
     df = repo.get_daily_asset(asset_type, symbol, start, end)
+    if not df.is_empty():
+        df = df.filter(pl.col("date").cast(pl.Date) <= end)
     if df.is_empty():
         return {"levels": {"sr": [], "pivot": [], "extreme": [],
                            "boll": [], "keltner_s": [], "keltner_m": [], "keltner_l": [],

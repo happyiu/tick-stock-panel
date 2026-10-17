@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { DataLoader, KLineData, OverlayCreate } from 'klinecharts'
 import { KLineCandlestick, type OHLC } from './KLineCandlestick'
-import { analyzeChanlun } from '@/lib/chanlun'
+import { emptyChanlunAnalysis } from '@/lib/chanlun'
 
 const state = vi.hoisted(() => ({
   handlers: {} as Record<string, (value: unknown) => void>,
@@ -228,7 +228,7 @@ it('损坏或非法的副图高度设置使用默认值', async () => {
 it('恢复较高副图时扩展画布，不挤掉主图', async () => {
   localStorage.setItem('stock_preview_sub_chart_heights', JSON.stringify({ vol: 600, 'etf-swing-v2': 700 }))
   await render({ activeIndicators: ['vol', 'etf-swing-v2'] })
-  expect((host.querySelector('[data-kline-chart]') as HTMLElement).style.height).toBe('1518px')
+  expect((host.querySelector('[data-kline-chart]')?.parentElement as HTMLElement).style.height).toBe('1540px')
   expect(state.panes.candle_pane.minHeight).toBe(120)
 })
 
@@ -289,7 +289,7 @@ it('30分钟切换和ETF三位价格保留', async () => {
 })
 
 it('缠论和隐藏日期切换不重建图表，调试不泄露信息栏和十字线日期', async () => {
-  const chanlunAnalysis = analyzeChanlun(rows())
+  const chanlunAnalysis = emptyChanlunAnalysis()
   await render({ chanlunAnalysis, activeIndicators: ['vol', 'kdj'] })
   await render({ chanlunAnalysis, chanlunOverlay: { enabled: true, fractals: true, strokes: true, segments: true, centers: true, candidates: true, divergences: true }, activeIndicators: ['vol', 'kdj'], hideCurrentDate: true })
   expect(engine.init).toHaveBeenCalledOnce()
@@ -305,7 +305,7 @@ it('缠论和隐藏日期切换不重建图表，调试不泄露信息栏和十�
 })
 
 it('缠论切换不重置缩放或丢失副图；价位高亮更新原覆盖物、关组后清除', async () => {
-  const analysis = analyzeChanlun(rows())
+  const analysis = emptyChanlunAnalysis()
   analysis.fractals = [{ type: 'bottom', date: rows()[1].date, price: 9, confirmedAt: rows()[2].date, mergedIndex: 1, sourceIndex: 1, confirmedSourceIndex: 2 }]
   const config = { enabled: true, fractals: true, strokes: false, segments: false, centers: false, candidates: false, divergences: false }
   const data = rows(), activeIndicators = ['vol', 'kdj']

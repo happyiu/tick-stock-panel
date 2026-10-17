@@ -79,6 +79,20 @@ def _rows_and_score_payload(frame, include_technical_scores: bool):
     return visible.to_dicts(), payload
 
 
+def _with_chanlun(payload: dict, enabled: bool, source: str, as_of: str | None) -> dict:
+    if enabled is not True:
+        return payload
+    from app.services.chanlun import analyze_chanlun
+
+    try:
+        payload["chanlun"] = analyze_chanlun(
+            payload["rows"], period=payload.get("period", "1d"), source=source, as_of=as_of,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="缠论观察时间格式错误") from exc
+    return payload
+
+
 def _annotate_bar_closure(rows: list[dict], period: str, requested_end: date) -> list[dict]:
     """Attach an explicit close-state contract without changing stored market data."""
     now = cn_now()
@@ -498,6 +512,9 @@ def get_daily(
     end_date: Optional[str] = Query(None, description="截止日期 YYYY-MM-DD, 默认今天"),
     ext_columns: Optional[str] = Query(None, description="逗号分隔的 ext 列: config_id.field_name"),
     include_technical_scores: bool = Query(False, description="是否附带 technical-score-v8 评分序列"),
+    include_chanlun: bool = Query(False, description="是否附带固定规则的缠论结构"),
+    chanlun_source: Literal["stroke", "segment"] = Query("stroke"),
+    chanlun_as_of: str | None = Query(None, description="缠论最晚可用时间 (北京墙钟)"),
 ):
     """优先读取展示行情快照, 不可用时回退本地 enriched 和当日行情。"""
     import polars as pl
@@ -549,7 +566,7 @@ def get_daily(
             resp["technical_scores"] = score_payload
         return _gzip_payload(
             request,
-            _attach_ext(resp, repo, symbol, ext_columns),
+            _with_chanlun(_attach_ext(resp, repo, symbol, ext_columns), include_chanlun, chanlun_source, chanlun_as_of),
             pref_key="daily_batch_compress",
         )
 
@@ -587,7 +604,7 @@ def get_daily(
             resp["technical_scores"] = {"version": TECHNICAL_SCORE_VERSION, "rows": []}
         return _gzip_payload(
             request,
-            _attach_ext(resp, repo, symbol, ext_columns),
+            _with_chanlun(_attach_ext(resp, repo, symbol, ext_columns), include_chanlun, chanlun_source, chanlun_as_of),
             pref_key="daily_batch_compress",
         )
     # 追加/覆盖今日实时蜡烛. 仅评分路径需要重新构造 Polars 帧; 实时注入的
@@ -622,7 +639,7 @@ def get_daily(
         resp["technical_scores"] = score_payload
     return _gzip_payload(
         request,
-        _attach_ext(resp, repo, symbol, ext_columns),
+        _with_chanlun(_attach_ext(resp, repo, symbol, ext_columns), include_chanlun, chanlun_source, chanlun_as_of),
         pref_key="daily_batch_compress",
     )
 
@@ -635,6 +652,9 @@ def get_period_kline(
     end_date: Optional[str] = Query(None, description="展示截止日期 YYYY-MM-DD,默认今天"),
     days: int = Query(20, ge=1, le=120, description="30分钟K最近交易日数量"),
     include_technical_scores: bool = Query(False, description="是否附带 technical-score-v8 评分序列"),
+    include_chanlun: bool = Query(False, description="是否附带固定规则的缠论结构"),
+    chanlun_source: Literal["stroke", "segment"] = Query("stroke"),
+    chanlun_as_of: str | None = Query(None, description="缠论最晚可用时间 (北京墙钟)"),
 ):
     """优先原生30分钟K和展示日线, 周/月聚合后重算指标, 不落库。"""
     import polars as pl
@@ -712,7 +732,7 @@ def get_period_kline(
                         "requested_days": days, "available_days": len(trade_dates)}
             if score_payload is not None:
                 response["technical_scores"] = score_payload
-            return response
+            return _with_chanlun(response, include_chanlun, chanlun_source, chanlun_as_of)
         # 多取自然日覆盖节假日，最终严格裁成最近 N 个实际交易日。
         scan_start = min(start, end - timedelta(days=days * 3 + 20))
         minute = repo.get_minute_range([symbol], scan_start, end, asset_type=asset_type)
@@ -738,7 +758,7 @@ def get_period_kline(
             response = {**base, "rows": [], "source": source, "requested_days": days, "available_days": 0}
             if include_technical_scores:
                 response["technical_scores"] = {"version": TECHNICAL_SCORE_VERSION, "rows": []}
-            return response
+            return _with_chanlun(response, include_chanlun, chanlun_source, chanlun_as_of)
         minute = minute.with_columns(pl.col("datetime").dt.date().alias("_trade_date"))
         trade_dates = sorted(minute["_trade_date"].unique().to_list())[-days:]
         if include_analysis:
@@ -760,7 +780,7 @@ def get_period_kline(
         }
         if score_payload is not None:
             response["technical_scores"] = score_payload
-        return response
+        return _with_chanlun(response, include_chanlun, chanlun_source, chanlun_as_of)
 
     # 周/月聚合和技术评分需要额外读取预热数据; 只扫描单标的基础列。
     warmup_days = 500 if period == "1w" else 6 * 366
@@ -789,7 +809,7 @@ def get_period_kline(
             response = {**base, "rows": [], "source": "none"}
             if include_technical_scores:
                 response["technical_scores"] = {"version": TECHNICAL_SCORE_VERSION, "rows": []}
-            return response
+            return _with_chanlun(response, include_chanlun, chanlun_source, chanlun_as_of)
         daily = pl.DataFrame(fallback_rows, infer_schema_length=None)
         source = str(fallback.get("source") or "live")
     elif source != "chart":
@@ -813,7 +833,7 @@ def get_period_kline(
     response = {**base, "rows": rows, "source": source}
     if score_payload is not None:
         response["technical_scores"] = score_payload
-    return response
+    return _with_chanlun(response, include_chanlun, chanlun_source, chanlun_as_of)
 
 
 def _attach_ext(resp: dict, repo, symbol: str, ext_columns: Optional[str]) -> dict:

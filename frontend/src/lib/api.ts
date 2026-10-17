@@ -564,6 +564,16 @@ export interface ChartDataStatus {
   amount_estimated: boolean
 }
 
+export interface ChanlunRequest {
+  source: import('./chanlun').ChanlunStructureSource
+  asOf?: string | null
+}
+
+function chanlunParams(options?: ChanlunRequest): string {
+  return options ? `&include_chanlun=true&chanlun_source=${options.source}`
+    + (options.asOf ? `&chanlun_as_of=${encodeURIComponent(options.asOf)}` : '') : ''
+}
+
 export interface KlineResponse {
   data_status?: ChartDataStatus
   symbol: string
@@ -581,6 +591,7 @@ export interface KlineResponse {
   requested_days?: number
   available_days?: number
   technical_scores?: TechnicalScores
+  chanlun?: import('./chanlun').ChanlunAnalysis
 }
 
 /** 详情页 AI 对话首轮捕获的、固定到本次会话的页面快照。 */
@@ -3352,13 +3363,13 @@ export const api = {
   redetectCapabilities: () =>
     request<CapabilitiesResponse>('/api/capabilities/redetect', { method: 'POST' }),
 
-  klineDaily: (symbol: string, days = 120, dateRange?: { start: string; end: string }, extColumns?: string, includeTechnicalScores = false) =>
+  klineDaily: (symbol: string, days = 120, dateRange?: { start: string; end: string }, extColumns?: string, includeTechnicalScores = false, chanlun?: ChanlunRequest) =>
     request<KlineResponse>(
       (dateRange
         ? `/api/kline/daily?symbol=${encodeURIComponent(symbol)}&start_date=${dateRange.start}&end_date=${dateRange.end}`
         : `/api/kline/daily?symbol=${encodeURIComponent(symbol)}&days=${days}`)
       + (extColumns ? `&ext_columns=${encodeURIComponent(extColumns)}` : '')
-      + (includeTechnicalScores ? '&include_technical_scores=true' : ''),
+      + (includeTechnicalScores ? '&include_technical_scores=true' : '') + chanlunParams(chanlun),
     ),
   klineDailyLatest: (symbol: string) =>
     request<KlineDailyLatestResponse>(
@@ -3375,11 +3386,12 @@ export const api = {
     dateRange: { start: string; end: string },
     days = 20,
     includeTechnicalScores = false,
+    chanlun?: ChanlunRequest,
   ) =>
     request<KlineResponse>(
       `/api/kline/period?symbol=${encodeURIComponent(symbol)}&period=${period}`
       + `&start_date=${dateRange.start}&end_date=${dateRange.end}&days=${days}`
-      + (includeTechnicalScores ? '&include_technical_scores=true' : ''),
+      + (includeTechnicalScores ? '&include_technical_scores=true' : '') + chanlunParams(chanlun),
     ),
   klineMinuteBatch: (symbols: string[], date?: string, preferLocal?: boolean, since?: string) =>
     request<{ data: Record<string, MinuteKlineRow[]>; full_minute_local?: boolean; incremental?: boolean }>('/api/kline/minute-batch', {
@@ -4378,8 +4390,8 @@ export const api = {
   },
 
   // ===== 个股分析 =====
-  stockAnalysisLevels: (symbol: string, days = 120) =>
-    request<StockLevels>(`/api/stock-analysis/levels?symbol=${encodeURIComponent(symbol)}&days=${days}`),
+  stockAnalysisLevels: (symbol: string, days = 120, endDate?: string) =>
+    request<StockLevels>(`/api/stock-analysis/levels?symbol=${encodeURIComponent(symbol)}&days=${days}${endDate ? `&end_date=${encodeURIComponent(endDate)}` : ''}`),
 
   stockAnalysisReportsList: () =>
     request<{ reports: AiStockReport[] }>('/api/stock-analysis/reports'),

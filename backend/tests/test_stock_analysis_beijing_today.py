@@ -63,3 +63,46 @@ def test_levels_window_ends_on_beijing_today(monkeypatch) -> None:
     _start, end = repo.windows[0]
     assert end == BJ, f"窗口右端必须是北京日期 {BJ}, 实际 {end} (服务器本地 {date.today()})"
     assert end != date.today()
+
+
+def test_levels_historical_cutoff_excludes_future_rows(monkeypatch) -> None:
+    monkeypatch.setattr(stock_analysis_api, "cn_today", lambda: BJ)
+    cutoff = date(2026, 2, 27)
+
+    class Repo(_Repo):
+        def get_daily_asset(self, asset_type, symbol, start, end, columns=None):
+            self.windows.append((start, end))
+            return pl.DataFrame({
+                "date": [date(2026, 2, 26), cutoff, BJ],
+                "open": [10., 11., 100.], "high": [11., 12., 110.],
+                "low": [9., 10., 90.], "close": [10., 11., 100.],
+            })
+
+    repo = Repo()
+    req = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(repo=repo)))
+    result = stock_analysis_api.get_levels(req, symbol="600000.SH", days=120, end_date=cutoff)
+    assert repo.windows[0][1] == cutoff
+    assert result["dates"] == ["2026-02-26", "2026-02-27"]
+    assert result["close"] == 11.
+    assert all(level["value"] < 100 for group in result["levels"].values() for level in group)
+
+
+def test_levels_api_cutoff_validation_and_empty_response(monkeypatch) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(stock_analysis_api, "cn_today", lambda: BJ)
+    app = FastAPI()
+    app.include_router(stock_analysis_api.router)
+    app.state.repo = _Repo()
+    with TestClient(app) as client:
+        invalid = client.get("/api/stock-analysis/levels", params={"symbol": "A", "end_date": "invalid"})
+        assert invalid.status_code == 422
+        assert not app.state.repo.windows
+        for end_date, expected in [("2026-02-27", date(2026, 2, 27)), ("2099-01-01", BJ)]:
+            response = client.get("/api/stock-analysis/levels", params={"symbol": "A", "end_date": end_date})
+            assert response.status_code == 200
+            assert response.json()["close"] is None
+            assert response.json()["dates"] == []
+            assert all(not group for group in response.json()["levels"].values())
+            assert app.state.repo.windows[-1][1] == expected

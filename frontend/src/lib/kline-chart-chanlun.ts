@@ -32,7 +32,7 @@ export const chanlunTemplate: OverlayTemplate<StructureAnnotation> = {
       if (!end) return []
       return [
         { type: 'rect', attrs: { x: Math.min(point.x, end.x), y: Math.min(point.y, end.y), width: Math.abs(end.x - point.x), height: Math.abs(end.y - point.y) },
-          styles: { color: 'rgba(139,92,246,0.10)', style: 'stroke_fill', borderColor: 'rgba(139,92,246,0.50)', borderSize: 1 }, ignoreEvent: true },
+          styles: { color: 'rgba(139,92,246,0.10)', style: 'stroke_fill', borderColor: 'rgba(139,92,246,0.50)', borderSize: 1, borderStyle: a.confirmed === false ? 'dashed' : 'solid', borderDashedValue: [4, 3] }, ignoreEvent: true },
         { type: 'text', attrs: { x: (point.x + end.x) / 2, y: Math.min(point.y, end.y) + 4, text: '中枢', align: 'center', baseline: 'top' }, styles: { color: '#A78BFA', size: 9, backgroundColor: 'transparent', borderSize: 0 }, ignoreEvent: true },
       ]
     }
@@ -92,7 +92,7 @@ export function buildChanlunOverlays(
     })
   }
   if (config.centers) for (const center of analysis.centers ?? []) {
-    add(`center-${center.id}`, [center.startDate, center.endDate], [center.zd, center.zg], { kind: 'center', color: '#A78BFA' })
+    add(`center-${center.id}`, [center.startDate, center.endDate], [center.zd, center.zg], { kind: 'center', color: '#A78BFA', confirmed: center.confirmed })
   }
   if (config.candidates) for (const signal of analysis.candidateSignals ?? []) {
     if (signal.status !== 'candidate' && signal.status !== 'invalidated') continue
@@ -107,12 +107,13 @@ export function buildChanlunOverlays(
   }
   if (config.divergences) for (const divergence of analysis.divergences ?? []) {
     if (divergence.status !== 'candidate') continue
-    const date = divergence.c.endDate
+    const date = divergence.availableDate
+    if (!date) continue
     const price = analysis.bars.find(bar => bar.date === date)?.close ?? analysis.currentPrice
     if (price == null) continue
     add(`divergence-${divergence.id}`, [date], [price], {
       kind: 'divergence', color: '#F59E0B', label: '背驰候选', above: true,
-      tooltip: `${divergence.kind === 'trend' ? '趋势' : '盘整'}背驰代理\n${divergence.evidence}`,
+      tooltip: `${divergence.kind === 'trend' ? '趋势' : '盘整'}背驰候选\n${divergence.evidence}`,
     })
   }
   return overlays

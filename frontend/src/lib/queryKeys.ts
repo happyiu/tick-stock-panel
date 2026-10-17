@@ -99,7 +99,10 @@ export const QK = {
   klinePeriod:          (symbol: string, period: string, start: string, end: string, days: number, includeTechnicalScores = false) =>
                            ['kline-period', symbol, period, start, end, days, includeTechnicalScores] as const,
   klineLatest:          (symbol: string) => ['kline-latest', symbol] as const,
-  stockLevels:          (symbol: string, days?: number) => ['stock-levels', symbol, days ?? 120] as const,
+  chanlun:              (symbol: string, assetType: string, period: string, start: string, end: string, days: number, source: string, asOf: string | null, revision: number) =>
+                           ['chanlun', symbol, assetType, period, start, end, days, source, asOf, revision] as const,
+  stockLevels:          (symbol: string, days?: number, endDate?: string) =>
+    endDate ? ['stock-levels', symbol, days ?? 120, endDate] as const : ['stock-levels', symbol, days ?? 120] as const,
   klineMinute:          (symbol: string, date: string) =>
                              ['kline-minute', symbol, date] as const,
   klineMinuteRange:     (symbol: string, days: number) =>

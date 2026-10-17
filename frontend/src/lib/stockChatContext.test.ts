@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { analyzeChanlun } from './chanlun'
+import { emptyChanlunAnalysis } from './chanlun'
 import { buildStockChatSnapshot } from './stockChatContext'
 import { stripLegacyStockChatContext } from './stockChatPrimitives'
 
@@ -10,7 +10,7 @@ it('AI快照保留行情与基础结构，不再输出价位区间、风险收�
       symbol: '510300.SH', asset_type: 'etf',
       rows: [{ date: '2026-10-08', open: 4, high: 5, low: 3, close: 4 }],
     },
-    chanlun: analyzeChanlun([], null, { period: '1d' }),
+    chanlun: emptyChanlunAnalysis('1d'),
   })
   expect(snapshot?.bars[0].close).toBe(4)
   expect(snapshot?.structure.chanlun).toBeDefined()

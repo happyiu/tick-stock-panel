@@ -3,8 +3,8 @@ import {
   type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent,
 } from 'react'
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { PanelRightOpen, RefreshCw, X } from 'lucide-react'
-import { type KlinePeriod, type KlineResponse, type KlineRow } from '@/lib/api'
+import { PanelRightClose, PanelRightOpen, RefreshCw } from 'lucide-react'
+import { api, type KlinePeriod, type KlineResponse, type KlineRow } from '@/lib/api'
 import {
   canAutoRefreshAnalysis,
   DEFAULT_30M_DAYS,
@@ -29,6 +29,8 @@ import {
 import { StockIntradayChart } from '@/components/StockIntradayChart'
 import { StockTechnicalPanel } from '@/components/StockTechnicalPanel'
 import { StockChanlunPanel } from '@/components/StockChanlunPanel'
+import { LevelOverview, PriceLevelControls, usePriceLevels } from './stock-analysis/PriceLevels'
+import { QK } from '@/lib/queryKeys'
 import { StockAiChatPanel } from '@/components/StockAiChatPanel'
 import { useQuoteStatus } from '@/lib/useSharedQueries'
 import { scheduleNeighborPrefetch } from '@/lib/neighborPrefetch'
@@ -37,7 +39,8 @@ import {
   loadInfoFields,
   buildInfoExtColumnsParam,
 } from '@/lib/stock-info-fields'
-import { analyzeChanlun, type ChanlunStructureSource } from '@/lib/chanlun'
+import { emptyChanlunAnalysis, type ChanlunStructureSource } from '@/lib/chanlun'
+import { chanlunQueryOptions } from '@/lib/chanlunQuery'
 import { storage, type StockPreviewAnalysisSectionsV2, type StockPreviewAnalysisSectionsV3 } from '@/lib/storage'
 import { buildStockChatSnapshot } from '@/lib/stockChatContext'
 
@@ -205,11 +208,12 @@ function normalizeAnalysisSections(
 }
 
 export type StockPanelRightPaneMode = 'intraday' | 'technical' | 'empty'
-type StockAnalysisTab = 'indicator' | 'structure' | 'ai'
+type StockAnalysisTab = 'indicator' | 'structure' | 'levels' | 'ai'
 
 const STOCK_ANALYSIS_TABS: Array<{ id: StockAnalysisTab; label: string }> = [
   { id: 'indicator', label: '指标分析' },
   { id: 'structure', label: '结构分析' },
+  { id: 'levels', label: '关键价位' },
   { id: 'ai', label: 'AI分析' },
 ]
 
@@ -497,9 +501,42 @@ export function StockPanel({
   const analysisLoading = !analysisResponse && (periodKline.isLoading || periodKline.isFetching)
   const analysisError = analysisRefreshError ?? periodKline.error
 
+  const [levelsRequested, setLevelsRequested] = useState(false)
+  const priceLevelEnd = [effectiveSelectedBarKey, visibleThrough, chartDateRange.end, analysisRows.at(-1)?.date]
+    .filter((value): value is string => !!value).map(value => value.slice(0, 10)).sort()[0]
+  const priceLevelsEnabled = resolvedRightPaneMode === 'technical' && period === '1d'
+  const priceLevelsQuery = useQuery({
+    queryKey: QK.stockLevels(symbol, 250, priceLevelEnd),
+    queryFn: () => api.stockAnalysisLevels(symbol, 250, priceLevelEnd),
+    enabled: !!symbol && priceLevelsEnabled && levelsRequested && !!priceLevelEnd && !!displayAnalysisResponse && analysisRows.length > 0,
+    staleTime: 60_000,
+    refetchInterval: refetchIntervalMs,
+  })
+  const priceLevelData = priceLevelsEnabled && displayAnalysisResponse ? priceLevelsQuery.data : undefined
+  const priceLevelState = usePriceLevels({
+    rows: displayAnalysisResponse?.rows ?? [],
+    levels: priceLevelData?.levels,
+    series: priceLevelData?.series,
+    seriesDates: priceLevelData?.dates,
+    assetType: analysisAssetType,
+  })
+  const chartPriceLines = useMemo(
+    () => [...(priceLines ?? []), ...priceLevelState.priceLines],
+    [priceLines, priceLevelState.priceLines],
+  )
+  const refetchPriceLevels = priceLevelsQuery.refetch
+  const hasPriceLevels = priceLevelData && Object.values(priceLevelData.levels).some(group => group.length > 0)
+
+  const chanlunCutoff = [effectiveSelectedBarKey, visibleThrough, analysisRows.at(-1)?.date]
+    .filter((value): value is string => !!value).sort()[0] ?? null
+  const chanlunQuery = useQuery({
+    ...chanlunQueryOptions(symbol, analysisAssetType ?? 'stock', period, chartDateRange, periodDays,
+      chanlunSource, chanlunCutoff, analysisSnapshot?.contextKey === analysisContextKey ? analysisSnapshot.calculatedAt : 0),
+    enabled: !!symbol && resolvedRightPaneMode === 'technical' && !!displayAnalysisResponse && analysisRows.length > 0,
+  })
   const chanlunAnalysis = useMemo(
-    () => analyzeChanlun(analysisRows, effectiveSelectedBarKey, { period, source: chanlunSource }),
-    [analysisRows, chanlunSource, effectiveSelectedBarKey, period],
+    () => chanlunQuery.data ?? emptyChanlunAnalysis(period, chanlunSource),
+    [chanlunQuery.data, period, chanlunSource],
   )
   const stockChatSnapshot = useMemo(
     () => buildStockChatSnapshot({
@@ -534,6 +571,8 @@ export function StockPanel({
         const latestKey = primaryResult.data.rows.at(-1)?.date
         if (latestKey) setSelectedBarKey(latestKey)
       }
+      if (priceLevelsEnabled && levelsRequested) await refetchPriceLevels()
+      if (analysisRefreshRequestRef.current !== requestId) return
       setAnalysisRefreshError(null)
     } catch (error) {
       if (analysisRefreshRequestRef.current === requestId) {
@@ -542,7 +581,7 @@ export function StockPanel({
     } finally {
       if (analysisRefreshRequestRef.current === requestId) setAnalysisRefreshing(false)
     }
-  }, [analysisContextKey, refetchPeriod])
+  }, [analysisContextKey, refetchPeriod, priceLevelsEnabled, levelsRequested, refetchPriceLevels])
 
   const autoAnalysisEnabled = canAutoRefreshAnalysis(
     quoteStatus?.is_trading_hours === true,
@@ -576,41 +615,26 @@ export function StockPanel({
   const multiPeriodQueries = useQueries({
     queries: CHANLUN_PERIODS.map(candidatePeriod => {
       const endDate = new Date(`${multiObservationEnd}T12:00:00`)
-      const range = defaultKlineRange(candidatePeriod, Number.isNaN(endDate.getTime()) ? new Date() : endDate)
+      const range = candidatePeriod === period
+        ? chartDateRange
+        : defaultKlineRange(candidatePeriod, Number.isNaN(endDate.getTime()) ? new Date() : endDate)
       return {
-        ...klinePeriodQueryOptions(symbol, candidatePeriod, range, periodDays, extColumns, true),
+        ...chanlunQueryOptions(symbol, analysisAssetType ?? 'stock', candidatePeriod, range, periodDays,
+          chanlunSource, chanlunCutoff, analysisSnapshot?.contextKey === analysisContextKey ? analysisSnapshot.calculatedAt : 0),
         enabled: multiPeriodExpanded && !!symbol && (candidatePeriod === '1d' || assetType !== 'index'),
         staleTime: 30_000,
       }
     }),
   })
-  const multiPeriodAnalysis = useMemo(() => CHANLUN_PERIODS.map((candidatePeriod, index) => {
+  const multiPeriodAnalysis = CHANLUN_PERIODS.map((candidatePeriod, index) => {
     const query = multiPeriodQueries[index]
-    const through = effectiveSelectedBarKey
-      ? candidatePeriod === '30m' && effectiveSelectedBarKey.length <= 10
-        ? `${effectiveSelectedBarKey} 23:59`
-        : effectiveSelectedBarKey
-      : null
-    const candidateRawRows = filterKlineRowsThrough(query.data?.rows ?? [], candidatePeriod, through)
-    const closedRows = period === '30m' && candidatePeriod !== '30m' && effectiveSelectedBarKey != null && effectiveSelectedBarKey.length > 10
-      ? candidateRawRows.filter(row => row.is_closed === true)
-      : candidateRawRows
-    const candidateRows = toOHLC(closedRows, candidatePeriod)
     return {
       period: candidatePeriod,
-      analysis: query.data ? analyzeChanlun(candidateRows, null, { period: candidatePeriod, source: chanlunSource }) : undefined,
+      analysis: query.data,
       isLoading: query.isLoading || query.isFetching && !query.data,
       error: query.error,
     }
-  }), [
-    chanlunSource,
-    effectiveSelectedBarKey,
-    period,
-    multiPeriodQueries[0].data, multiPeriodQueries[0].error, multiPeriodQueries[0].isFetching, multiPeriodQueries[0].isLoading,
-    multiPeriodQueries[1].data, multiPeriodQueries[1].error, multiPeriodQueries[1].isFetching, multiPeriodQueries[1].isLoading,
-    multiPeriodQueries[2].data, multiPeriodQueries[2].error, multiPeriodQueries[2].isFetching, multiPeriodQueries[2].isLoading,
-    multiPeriodQueries[3].data, multiPeriodQueries[3].error, multiPeriodQueries[3].isFetching, multiPeriodQueries[3].isLoading,
-  ])
+  })
 
   useEffect(() => {
     if (assetType) onAssetTypeChange?.(assetType)
@@ -874,7 +898,11 @@ export function StockPanel({
                 dateRange={chartDateRange}
                 markers={markers}
                 ranges={ranges}
-                priceLines={priceLines}
+                priceLines={chartPriceLines}
+                priceCurves={priceLevelState.priceCurves}
+                highlightedKey={priceLevelState.hoveredKey}
+                onHighlightChange={priceLevelState.setHoveredKey}
+                priceLabelWidth={priceLevelState.priceLines.length || priceLevelState.priceCurves.length ? 110 : 0}
                 showLimitMarkers={showLimitMarkers}
                 showMarkerToggle={showMarkerToggle}
                 linkedPrice={linkedPrice}
@@ -909,7 +937,7 @@ export function StockPanel({
         </div>
 
         {rightPaneVisible && (
-          <div className={`relative flex-1 min-h-0 min-w-0 border-l border-border pl-3 ${independentPaneScroll ? 'overflow-hidden' : ''}`}>
+          <div className="relative flex-1 min-h-0 min-w-0 border-l border-border pl-3">
             {resizableSplit && (
               <div
                 role="separator"
@@ -931,13 +959,16 @@ export function StockPanel({
               </div>
             )}
             <button
+              type="button"
               onClick={() => setRightPaneDismissed(true)}
-              className="absolute -left-1.5 -top-1.5 z-10 flex h-5 w-5 items-center justify-center rounded-full border border-border bg-surface text-muted shadow-sm transition-colors hover:text-foreground hover:bg-elevated"
+              className="absolute left-0 top-1/2 z-20 flex h-7 w-7 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-surface text-muted shadow-sm transition-colors hover:bg-elevated hover:text-foreground"
               title={`收起${rightPaneLabel}`}
               aria-label={`收起${rightPaneLabel}`}
+              aria-expanded
             >
-              <X className="h-3 w-3" />
+              <PanelRightClose className="h-3.5 w-3.5" />
             </button>
+            <div className={independentPaneScroll ? 'h-full min-h-0 overflow-hidden' : undefined}>
             {resolvedRightPaneMode === 'intraday' && (
               <StockIntradayChart
                 symbol={symbol}
@@ -983,7 +1014,7 @@ export function StockPanel({
                   </button>
                 </div>
                 <div className="sticky top-0 z-10 shrink-0 border-b border-border/70 bg-surface">
-                  <div role="tablist" aria-label="指标详情分析类型" className="flex items-stretch">
+                  <div role="tablist" aria-label="指标详情分析类型" className="grid grid-cols-2 min-[900px]:grid-cols-4">
                     {STOCK_ANALYSIS_TABS.map(tab => {
                       const active = analysisTab === tab.id
                       return (
@@ -994,7 +1025,10 @@ export function StockPanel({
                           id={`stock-analysis-tab-${tab.id}`}
                           aria-selected={active}
                           aria-controls="stock-analysis-tabpanel"
-                          onClick={() => setAnalysisTab(tab.id)}
+                          onClick={() => {
+                            setAnalysisTab(tab.id)
+                            if (tab.id === 'levels') setLevelsRequested(true)
+                          }}
                           className={`relative flex-1 px-2.5 py-2 text-xs transition-colors ${active ? 'font-medium text-accent' : 'text-muted hover:text-secondary'}`}
                         >
                           {tab.label}
@@ -1031,8 +1065,9 @@ export function StockPanel({
                   assetType={analysisAssetType}
                   collapsed={analysisSections.chanlunCollapsed}
                   onToggleCollapsed={() => toggleAnalysisSection('chanlunCollapsed')}
-                  isLoading={analysisLoading}
-                  error={analysisError}
+                  isLoading={analysisLoading || chanlunQuery.isFetching}
+                  error={analysisError ?? chanlunQuery.error}
+                  onRetry={() => { void chanlunQuery.refetch() }}
                   source={chanlunSource}
                   onSourceChange={setChanlunSource}
                   multiPeriodExpanded={multiPeriodExpanded}
@@ -1040,12 +1075,41 @@ export function StockPanel({
                   multiPeriod={multiPeriodAnalysis}
                 />
                 </>}
+                {analysisTab === 'levels' && (
+                  <div className="py-3 pr-1 text-xs">
+                    {!priceLevelsEnabled ? (
+                      <p className="text-muted">关键价位按日K计算，请切换到日K查看和绘制。</p>
+                    ) : !priceLevelData && (priceLevelsQuery.isError || analysisError) ? (
+                      <div className="text-danger" role="alert">
+                        关键价位加载失败
+                        <button type="button" className="ml-2 text-accent" onClick={() => { void (analysisError && !displayAnalysisResponse ? recalculateAnalysis() : priceLevelsQuery.refetch()) }}>重试</button>
+                      </div>
+                    ) : displayAnalysisResponse && analysisRows.length === 0 ? (
+                      <p className="text-muted">暂无日K数据，请先同步行情。</p>
+                    ) : !priceLevelData ? (
+                      <p className="text-muted" role="status">关键价位加载中…</p>
+                    ) : !hasPriceLevels ? (
+                      <p className="text-muted">暂无关键价位，请先同步日K数据。</p>
+                    ) : (
+                      <>
+                        <p className="mb-3 text-[11px] leading-relaxed text-muted">点击指标在K线图上绘制，再次点击移除。价位按当前选中的日K截面计算。</p>
+                        {priceLevelsQuery.isError && <p className="mb-2 text-danger">刷新失败，保留上次价位。<button type="button" className="ml-1 text-accent" onClick={() => { void priceLevelsQuery.refetch() }}>重试</button></p>}
+                        <PriceLevelControls levels={priceLevelData.levels} {...priceLevelState} />
+                        {priceLevelState.activeTypes.size === 0 && <p className="mt-3 text-muted">选择上方关键价位指标后显示价位明细。</p>}
+                        <LevelOverview levels={priceLevelData.levels} {...priceLevelState}
+                          close={priceLevelData.close ?? undefined} assetType={analysisAssetType}
+                          onHover={priceLevelState.setHoveredKey} compact />
+                      </>
+                    )}
+                  </div>
+                )}
                 {analysisTab === 'ai' && (
                   <StockAiChatPanel symbol={symbol} snapshot={stockChatSnapshot} />
                 )}
                 </div>
               </div>
             )}
+            </div>
           </div>
         )}
 
@@ -1056,6 +1120,7 @@ export function StockPanel({
             className="absolute right-0 top-1/2 z-10 flex h-7 w-7 -translate-y-1/2 translate-x-1/2 items-center justify-center rounded-full border border-border bg-surface text-muted shadow-sm transition-colors hover:bg-elevated hover:text-foreground"
             title={`展开${rightPaneLabel}`}
             aria-label={`展开${rightPaneLabel}`}
+            aria-expanded={false}
           >
             <PanelRightOpen className="h-3.5 w-3.5" />
           </button>

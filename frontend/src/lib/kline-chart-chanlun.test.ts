@@ -1,13 +1,14 @@
 import { expect, it, vi } from 'vitest'
-import { analyzeChanlun } from './chanlun'
+import { emptyChanlunAnalysis } from './chanlun'
 import { toChartBars } from './kline-chart'
 import { buildChanlunOverlays, chanlunTemplate } from './kline-chart-chanlun'
 
 const bars = toChartBars(Array.from({ length: 4 }, (_, i) => ({ date: `2026-10-${12 + i}`, open: 10, close: 11, high: 12, low: 9 })), 1)
 const config = { enabled: true, fractals: true, strokes: true, segments: true, centers: true, candidates: true, divergences: true }
 function fixture() {
-  const analysis = analyzeChanlun(bars)
+  const analysis = emptyChanlunAnalysis()
   Object.assign(analysis, {
+    bars,
     fractals: [{ date: bars[0].date, price: 9, type: 'bottom', confirmedAt: bars[1].date }],
     strokes: [{ id: 'bi', startDate: bars[0].date, endDate: bars[1].date, startPrice: 9, endPrice: 12, direction: 'up', confirmed: true }],
     segments: [{ id: 'duan', startDate: bars[0].date, endDate: bars[3].date, startPrice: 9, endPrice: 12, direction: 'up', confirmed: false }],
@@ -17,7 +18,7 @@ function fixture() {
       { id: 'sell', kind: 'third_sell', status: 'invalidated', structureDate: bars[1].date, availableDate: bars[3].date, price: 12, boundary: 13 },
       { id: 'waiting', kind: 'second_buy', status: 'waiting_pullback', structureDate: bars[1].date, availableDate: bars[3].date, price: 12 },
     ],
-    divergences: [{ id: 'bc', status: 'candidate', kind: 'trend', c: { endDate: bars[3].date }, evidence: '力度减弱' }],
+    divergences: [{ id: 'bc', status: 'candidate', kind: 'trend', availableDate: bars[3].date, c: { endDate: bars[0].date }, evidence: '力度减弱' }],
   })
   return analysis
 }
