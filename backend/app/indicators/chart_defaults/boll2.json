@@ -1,0 +1,11 @@
+{
+  "id": "boll2",
+  "name": "boll2",
+  "pane": "main",
+  "source": "custom",
+  "formula": "basis:=MA(CLOSE,20); width:=2*SQRT(MA((CLOSE-basis)^2,20)); mid:REF(basis,1),COLORWHITE; upper:REF(basis+width,1),COLORYELLOW; lower:REF(basis-width,1),COLORMAGENTA;\n",
+  "description": "20周期 · 自定义通道 · 延后1根K线",
+  "height": 100,
+  "revision": 1,
+  "precision": 3
+}

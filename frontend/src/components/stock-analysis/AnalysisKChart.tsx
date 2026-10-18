@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { useLoadedChartIndicators } from '@/lib/useChartIndicators'
 import { useTheme } from '@/lib/theme'
 import { KLineCandlestick } from '../KLineCandlestick'
 import type { KlineRow, LevelSeries, LevelType, PriceLevel } from '@/lib/api'
@@ -56,11 +57,15 @@ export function AnalysisKChart({
 }: Props) {
   useTheme()
   const state = usePriceLevels({ rows, levels, series, seriesDates, defaultLevelTypes, assetType })
+  const indicators = useLoadedChartIndicators(state.data, symbol ?? '', ['vol'])
   const chartMarkers = useMemo(() => markers?.map(marker => ({ ...marker, kind: 'neutral' as const, above: marker.above ?? true })), [markers])
   return (
     <div className={className}>
       {levels && <PriceLevelControls levels={levels} {...state} />}
+      {indicators.isError && <p role="alert" className="text-xs text-danger">指标计算失败，请刷新重试</p>}
+      {indicators.data?.indicator_errors?.map(e => <p key={e.id} role="alert" className="text-xs text-danger">{e.message}</p>)}
       <KLineCandlestick
+        indicatorDefinitions={indicators.definitions} indicatorResults={indicators.data?.indicator_results}
         data={state.data} symbol={symbol} height={height} assetType={assetType}
         showMA={false} showInfoBar={false} visibleBars={120} activeIndicators={['vol']}
         volumeCompare={{ enabled: false, days: 1 }} markers={chartMarkers} ranges={ranges}

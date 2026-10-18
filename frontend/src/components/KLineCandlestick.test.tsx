@@ -51,6 +51,8 @@ const load = () => state.loader?.getBars({
 beforeEach(() => {
   vi.clearAllMocks()
   localStorage.removeItem('stock_preview_sub_chart_heights')
+  localStorage.removeItem('stock_preview_main_chart_height')
+  localStorage.removeItem('stock_preview_chart_height_adjustment')
   localStorage.removeItem('stock_preview_hidden_ma_lines')
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   state.handlers = {}; state.indicators = []; state.frames = []; state.loader = null; state.symbol = ''; state.bars = []
@@ -275,6 +277,39 @@ it('恢复较高副图时扩展画布，不挤掉主图', async () => {
   expect(state.panes.candle_pane.minHeight).toBe(120)
 })
 
+it('主图高度可独立调整，副图不变，重开及关闭副图后恢复主图高度', async () => {
+  await render({ activeIndicators: ['vol'] })
+  const separator = host.querySelector('[aria-label="调整主图高度"]')!
+  await act(async () => separator.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })))
+  expect(localStorage.getItem('stock_preview_main_chart_height')).toBe('320')
+  expect(state.panes.tsp_vol.height).toBe(112)
+  expect((host.querySelector('[data-kline-chart]')?.parentElement as HTMLElement).style.height).toBe('458px')
+  await act(async () => root.render(null))
+  await render({ activeIndicators: ['vol'], period: '30m' })
+  expect((host.querySelector('[data-kline-chart]')?.parentElement as HTMLElement).style.height).toBe('458px')
+  await render({ activeIndicators: [] })
+  expect((host.querySelector('[data-kline-chart]')?.parentElement as HTMLElement).style.height).toBe('342px')
+  expect(host.querySelector('[aria-label="调整主图高度"]')).not.toBeNull()
+})
+
+it('主图拖动支持缩小和最小高度，其他副图保持原高度', async () => {
+  await render({ activeIndicators: ['vol', 'kdj'] })
+  const separator = host.querySelector<HTMLElement>('[aria-label="调整主图高度"]')!
+  separator.setPointerCapture = vi.fn()
+  const pointer = (type: string, clientY: number) => {
+    const event = new MouseEvent(type, { bubbles: true, button: 0, clientY })
+    Object.defineProperty(event, 'pointerId', { value: 1 })
+    separator.dispatchEvent(event)
+  }
+  const vol = state.panes.tsp_vol.height, kdj = state.panes.tsp_kdj.height
+  await act(async () => { pointer('pointerdown', 300); pointer('pointerup', 200) })
+  expect(localStorage.getItem('stock_preview_main_chart_height')).toBe('200')
+  expect(state.panes.tsp_vol.height).toBe(vol)
+  expect(state.panes.tsp_kdj.height).toBe(kdj)
+  await act(async () => { pointer('pointerdown', 200); pointer('pointerup', -1000) })
+  expect(localStorage.getItem('stock_preview_main_chart_height')).toBe('120')
+})
+
 it('预警价线参与纵轴范围；无效数据有空态；卸载销毁图表', async () => {
   await render({ priceLines: [{ value: 50, label: '预警' }] })
   const createRange = chart.overrideYAxis.mock.calls.at(-1)![0].createRange
@@ -433,4 +468,47 @@ it('点击MA数值只切换对应曲线，保留数值入口，可全部隐藏�
   expect(host.querySelector('[aria-label="隐藏 MA10"]')).not.toBeNull()
   expect(host.querySelector('[aria-label="显示 MA5"]')).not.toBeNull()
   expect(engine.init).toHaveBeenCalledOnce()
+})
+
+it('受管自建指标使用后端数据，修改版本失配时不显示旧结果，删除后不恢复默认MA', async () => {
+  const definition = { id: 'user-test', name: '测试线', source: 'custom' as const, pane: 'main' as const, formula: '测试线:MA(CLOSE,2);', description: '', revision: 1, height: 100 }
+  const packet = { name: definition.name, pane: definition.pane, revision: 1, dates: rows().map(r => r.date), rows: rows().map(() => ({ 测试线: 123 })), figures: [{ key: '测试线', color: '#FF0000', width: 2, dash: false, hidden: false }], drawings: [] }
+  await render({ indicatorDefinitions: [definition], indicatorResults: { 'user-test': packet }, activeIndicators: ['user-test'] })
+  expect(state.indicators.map(i => i.name)).toEqual(['SERVER_user-test'])
+  expect(chart.createIndicator).toHaveBeenCalledWith(expect.objectContaining({ name: 'SERVER_user-test', paneId: 'candle_pane', extendData: expect.objectContaining({ values: expect.objectContaining({ '2026-10-01': { 测试线: 123 } }) }) }), true)
+  await render({ indicatorDefinitions: [{ ...definition, revision: 2 }], indicatorResults: { 'user-test': packet }, activeIndicators: ['user-test'] })
+  expect(state.indicators).toEqual([])
+  await render({ indicatorDefinitions: [], indicatorResults: {}, activeIndicators: ['ma', 'user-test'] })
+  expect(state.indicators).toEqual([])
+})
+
+it('受管指标更改主副图位置后移动，并恢复新增副图的持久化高度', async () => {
+  const definition = { id: 'user-pane', name: '测试线', source: 'custom' as const, pane: 'main' as 'main' | 'sub', formula: '线:CLOSE;', description: '', revision: 1, height: 100 }
+  const packet = { name: definition.name, pane: definition.pane, revision: 1, dates: rows().map(r => r.date), rows: rows().map(() => ({ 线: 10 })), figures: [{ key: '线', color: '#FF0000', width: 1, dash: false, hidden: false }], drawings: [] }
+  await render({ indicatorDefinitions: [definition], indicatorResults: { 'user-pane': packet }, activeIndicators: ['user-pane'] })
+  localStorage.setItem('stock_preview_sub_chart_heights', JSON.stringify({ 'user-pane': 200 }))
+  await render({ indicatorDefinitions: [{ ...definition, pane: 'sub', revision: 2 }], indicatorResults: { 'user-pane': { ...packet, pane: 'sub', revision: 2 } }, activeIndicators: ['user-pane'] })
+  expect(state.indicators).toEqual([expect.objectContaining({ name: 'SERVER_user-pane', paneId: 'tsp_user_pane' })])
+  expect(state.panes.tsp_user_pane.height).toBe(228)
+})
+
+it('编辑MA公式后信息栏与后端曲线使用同一组值', async () => {
+  const definition = { id: 'ma', name: 'MA 均线', source: 'custom' as const, pane: 'main' as const, formula: 'ma5:MA(CLOSE,50);', description: '', revision: 2, height: 100 }
+  const packet = { name: definition.name, pane: definition.pane, revision: 2, dates: rows().map(r => r.date), rows: rows().map(() => ({ ma5: 99 })), figures: [{ key: 'ma5', color: '#A1A1AA', width: 1, dash: false, hidden: false }], drawings: [] }
+  await render({ indicatorDefinitions: [definition], indicatorResults: { ma: packet } })
+  const value = host.querySelector<HTMLButtonElement>('[aria-label="隐藏 MA5"]')
+  expect(value?.textContent).toContain('99.00')
+  expect(host.querySelector('[aria-label="隐藏 MA10"]')).toBeNull()
+})
+
+it('启用其他指标不重复克隆或更新未变化的公式结果，数据变化时正常更新', async () => {
+  const definition = { id: 'user-stable', name: '线', source: 'custom' as const, pane: 'sub' as const, formula: '线:CLOSE;', description: '', revision: 1, height: 100 }
+  const packet = { name: '线', pane: 'sub' as const, revision: 1, dates: rows().map(r => r.date), rows: rows().map(() => ({ 线: 10 })), figures: [{ key: '线', color: '#FF0000', width: 1, dash: false, hidden: false }], drawings: [] }
+  const definitions = [definition]
+  await render({ indicatorDefinitions: definitions, indicatorResults: { 'user-stable': packet }, activeIndicators: ['user-stable'] })
+  chart.overrideIndicator.mockClear()
+  await render({ indicatorDefinitions: [...definitions], indicatorResults: { 'user-stable': packet }, activeIndicators: ['user-stable'] })
+  expect(chart.overrideIndicator).not.toHaveBeenCalled()
+  await render({ indicatorDefinitions: definitions, indicatorResults: { 'user-stable': { ...packet, rows: packet.rows.map(() => ({ 线: 20 })) } }, activeIndicators: ['user-stable'] })
+  expect(chart.overrideIndicator).toHaveBeenCalledTimes(1)
 })

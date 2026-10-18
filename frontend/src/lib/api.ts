@@ -574,7 +574,35 @@ function chanlunParams(options?: ChanlunRequest): string {
     + (options.asOf ? `&chanlun_as_of=${encodeURIComponent(options.asOf)}` : '') : ''
 }
 
+export interface ChartIndicatorDefinition {
+  id: string
+  name: string
+  source: 'custom' | 'builtin'
+  pane: 'main' | 'sub'
+  description: string
+  formula: string
+  revision: number
+  height: number
+  min_value?: number
+  max_value?: number
+}
+export interface ChartIndicatorStyle { key: string; color: string; width: number; dash: boolean; hidden: boolean; light_color?: string; dash_size?: number }
+export interface ChartIndicatorDrawing extends ChartIndicatorStyle { kind: string; fields: [number, string][]; text: [number, string][]; constants?: [number, number | null][] }
+export interface ChartIndicatorResult {
+  revision: number; name: string; pane: 'main' | 'sub'
+  min_value?: number | null; max_value?: number | null; precision?: number | null
+  rows: Record<string, number | null>[]
+  dates: string[]
+  figures: ChartIndicatorStyle[]
+  drawings: ChartIndicatorDrawing[]
+}
+export interface ChartIndicatorRequest { ids: string[]; version: string; compareDays: number }
+const chartIndicatorParams = (value?: ChartIndicatorRequest) => value?.ids.length
+  ? `&indicator_ids=${encodeURIComponent(value.ids.join(','))}&indicator_compare_days=${value.compareDays}` : ''
+
 export interface KlineResponse {
+  indicator_results?: Record<string, ChartIndicatorResult>
+  indicator_errors?: { id: string; message: string }[]
   data_status?: ChartDataStatus
   symbol: string
   name?: string
@@ -2840,6 +2868,12 @@ export interface TimelineExecutionsResponse {
 
 // ===== API surface =====
 export const api = {
+  evaluateChartIndicators: (ids: string[], rows: unknown[], symbol: string, period: KlinePeriod) => request<Pick<KlineResponse, 'indicator_results' | 'indicator_errors'>>('/api/indicators/evaluate', { method: 'POST', body: JSON.stringify({ ids, rows, symbol, period }), quiet: true }),
+  chartIndicators: () => request<{ items: ChartIndicatorDefinition[]; errors: { id: string; message: string }[] }>('/api/indicators'),
+  chartIndicatorLanguage: () => request<{ help: string; functions: Record<string, number[]>; drawings: Record<string, number[]> }>('/api/indicators/language'),
+  validateChartIndicator: (value: Pick<ChartIndicatorDefinition, 'name' | 'pane' | 'description' | 'formula'>) => request<{ valid: boolean }>('/api/indicators/validate', { method: 'POST', body: JSON.stringify(value), quiet: true }),
+  saveChartIndicator: (value: Pick<ChartIndicatorDefinition, 'name' | 'pane' | 'description' | 'formula'> & { revision?: number; copy_from?: string }, id?: string) => request<ChartIndicatorDefinition>(`/api/indicators${id ? `/${encodeURIComponent(id)}` : ''}`, { method: id ? 'PUT' : 'POST', body: JSON.stringify(value), quiet: true }),
+  deleteChartIndicator: (id: string, revision: number) => request<{ deleted: boolean }>(`/api/indicators/${encodeURIComponent(id)}?revision=${revision}`, { method: 'DELETE', quiet: true }),
   health: () => request<{ status: string; version: string; mode: string }>('/health'),
 
   timelineExecutions: (date?: string, limit = 500) => {
@@ -3363,13 +3397,13 @@ export const api = {
   redetectCapabilities: () =>
     request<CapabilitiesResponse>('/api/capabilities/redetect', { method: 'POST' }),
 
-  klineDaily: (symbol: string, days = 120, dateRange?: { start: string; end: string }, extColumns?: string, includeTechnicalScores = false, chanlun?: ChanlunRequest) =>
+  klineDaily: (symbol: string, days = 120, dateRange?: { start: string; end: string }, extColumns?: string, includeTechnicalScores = false, chanlun?: ChanlunRequest, chartIndicators?: ChartIndicatorRequest) =>
     request<KlineResponse>(
       (dateRange
         ? `/api/kline/daily?symbol=${encodeURIComponent(symbol)}&start_date=${dateRange.start}&end_date=${dateRange.end}`
         : `/api/kline/daily?symbol=${encodeURIComponent(symbol)}&days=${days}`)
       + (extColumns ? `&ext_columns=${encodeURIComponent(extColumns)}` : '')
-      + (includeTechnicalScores ? '&include_technical_scores=true' : '') + chanlunParams(chanlun),
+      + (includeTechnicalScores ? '&include_technical_scores=true' : '') + chanlunParams(chanlun) + chartIndicatorParams(chartIndicators),
     ),
   klineDailyLatest: (symbol: string) =>
     request<KlineDailyLatestResponse>(
@@ -3387,11 +3421,12 @@ export const api = {
     days = 20,
     includeTechnicalScores = false,
     chanlun?: ChanlunRequest,
+    chartIndicators?: ChartIndicatorRequest,
   ) =>
     request<KlineResponse>(
       `/api/kline/period?symbol=${encodeURIComponent(symbol)}&period=${period}`
       + `&start_date=${dateRange.start}&end_date=${dateRange.end}&days=${days}`
-      + (includeTechnicalScores ? '&include_technical_scores=true' : '') + chanlunParams(chanlun),
+      + (includeTechnicalScores ? '&include_technical_scores=true' : '') + chanlunParams(chanlun) + chartIndicatorParams(chartIndicators),
     ),
   klineMinuteBatch: (symbols: string[], date?: string, preferLocal?: boolean, since?: string) =>
     request<{ data: Record<string, MinuteKlineRow[]>; full_minute_local?: boolean; incremental?: boolean }>('/api/kline/minute-batch', {

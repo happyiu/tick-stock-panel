@@ -1,14 +1,19 @@
 // @vitest-environment jsdom
 import { act } from 'react'
+import { readFileSync, readdirSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { StockDailyKChart } from './StockDailyKChart'
 import type { CandlestickProps } from '@/lib/kline-chart'
 
+const directory = resolve(import.meta.dirname, '../../../backend/app/indicators/chart_defaults')
+const definitions = readdirSync(directory).filter(name => name.endsWith('.json')).map(name => JSON.parse(readFileSync(resolve(directory, name), 'utf8')))
+
 vi.mock('@tanstack/react-query', () => ({
   useQuery: ({ queryKey }: { queryKey: string[] }) => ({
-    isLoading: false, isError: false,
-    data: queryKey[0].startsWith('kline') ? {
+    isLoading: false, isError: false, isSuccess: true,
+    data: queryKey[0] === 'chart-indicators' ? { items: definitions, errors: [] } : queryKey[0].startsWith('kline') ? {
       asset_type: 'etf', rows: [{ date: '2026-10-08', open: 3, high: 4, low: 2, close: 3 }],
     } : undefined,
   }),
@@ -189,11 +194,11 @@ it('内置指标沿用主副图菜单与持久化，重开和切股恢复选择'
 })
 
 
-it('指标来源默认自编，内置与自编分别保留主副图，重开回到自编且不改选择', async () => {
+it('指标来源默认自建，内置与自建分别保留主副图，重开回到自建且不改选择', async () => {
   localStorage.setItem('stock_preview_main_charts', JSON.stringify(['builtin-ema', 'boll']))
   await render()
   await click('指标')
-  expect(host.querySelector('[aria-label="指标来源"] [aria-selected="true"]')?.textContent).toBe('自编')
+  expect(host.querySelector('[aria-label="指标来源"] [aria-selected="true"]')?.textContent).toBe('自建')
   expect(host.querySelector('[aria-label="BOLL"]')?.getAttribute('aria-checked')).toBe('true')
   expect(host.querySelector('[aria-label="EMA 指数均线"]')).toBeNull()
   await click('内置')
@@ -202,19 +207,19 @@ it('指标来源默认自编，内置与自编分别保留主副图，重开回�
   await click('副图')
   expect(host.querySelector('[aria-label="CCI 顺势指标"]')).not.toBeNull()
   expect(host.querySelector('[aria-label="MACD"]')).toBeNull()
-  await click('自编')
+  await click('自建')
   expect(host.querySelector('[aria-label="MACD"]')).not.toBeNull()
   expect(host.querySelector('[aria-label="CCI 顺势指标"]')).toBeNull()
   await click('内置')
   await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="关闭指标"]')!.click())
   await click('指标')
-  expect(host.querySelector('[aria-label="指标来源"] [aria-selected="true"]')?.textContent).toBe('自编')
+  expect(host.querySelector('[aria-label="指标来源"] [aria-selected="true"]')?.textContent).toBe('自建')
   expect(host.querySelector('[aria-label="MACD"]')).not.toBeNull()
   expect(host.querySelector('[data-indicators]')?.getAttribute('data-indicators')).toBe('vol,builtin-ema,boll')
 })
 
 
-it('MA在自编主图中默认选中，关闭与重开保持选择，不影响其他指标', async () => {
+it('MA在自建主图中默认选中，关闭与重开保持选择，不影响其他指标', async () => {
   localStorage.setItem('stock_preview_main_charts', JSON.stringify(['boll']))
   await render()
   await click('指标')

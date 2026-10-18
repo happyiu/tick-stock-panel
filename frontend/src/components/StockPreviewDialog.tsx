@@ -89,9 +89,9 @@ interface PriceAlertDraft {
 }
 const INTRADAY_DAY_OPTIONS = [1, 5, 10, 20] as const
 const DEFAULT_VISIBLE_BARS: Record<KlinePeriod, number> = {
-  '30m': 80,
-  '1d': 100,
-  '1w': 100,
+  '30m': 60,
+  '1d': 80,
+  '1w': 80,
   '1mo': 60,
 }
 const DIALOG_MIN_WIDTH = 640

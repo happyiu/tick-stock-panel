@@ -1,0 +1,11 @@
+{
+  "id": "macd",
+  "name": "MACD",
+  "pane": "sub",
+  "source": "custom",
+  "formula": "macd_dif:EMA(CLOSE,12)-EMA(CLOSE,26),COLORFACC15; macd_dea:EMA(macd_dif,9),COLOR8B5CF6; macd_hist:2*(macd_dif-macd_dea),NODRAW; STICKLINE(macd_hist>=0,0,macd_hist,4,0),COLORC74040; STICKLINE(macd_hist<0,0,macd_hist,4,0),COLOR2D9B65;\nTOOLTIP(macd_dif,'DIF'),COLORFACC15; TOOLTIP(macd_dea,'DEA'),COLOR8B5CF6; TOOLTIP(macd_hist,'MACD'),COLORC74040;\n",
+  "description": "",
+  "height": 72,
+  "revision": 1,
+  "precision": 3
+}

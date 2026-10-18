@@ -1,0 +1,13 @@
+{
+  "id": "kd-enhanced",
+  "name": "K/D精准背离增强版",
+  "pane": "sub",
+  "source": "custom",
+  "formula": "lo:=LLV(LOW,9); hi:=HHV(HIGH,9);\nraw:=IF(hi=lo,50,(CLOSE-lo)/MAX(hi-lo,0.000001)*100);\nrsv:=EMA(raw,3); k:EMA(rsv,3),COLORWHITE,LINETHICK2;\nd:MA(k,3),COLORYELLOW;\ngoldenCross:=CROSS(k,d); deadCross:=CROSS(d,k);\nlowCross:=goldenCross AND k<=50; highCross:=deadCross AND k>=80;\nbuy:=goldenCross AND d<8; sell:=deadCross AND d>85;\nbottomFractal:=REF(LOW,2)<REF(LOW,3) AND REF(LOW,2)<REF(LOW,4) AND REF(LOW,2)<=REF(LOW,1) AND REF(LOW,2)<=LOW;\ntopFractal:=REF(HIGH,2)>REF(HIGH,3) AND REF(HIGH,2)>REF(HIGH,4) AND REF(HIGH,2)>=REF(HIGH,1) AND REF(HIGH,2)>=HIGH;\nbottomDistance:=BARSLAST(REF(bottomFractal,1))+1; topDistance:=BARSLAST(REF(topFractal,1))+1;\nkLow:=LLV(k,5); kHigh:=HHV(k,5);\nbottomDivergence:=bottomFractal AND bottomDistance>=5 AND bottomDistance<=60 AND REF(LOW,2)<REF(LOW,bottomDistance+2) AND kLow>REF(kLow,bottomDistance);\ntopDivergence:=topFractal AND topDistance>=5 AND topDistance<=60 AND REF(HIGH,2)>REF(HIGH,topDistance+2) AND kHigh<REF(kHigh,topDistance);\nbottomWatch:=BARSLAST(bottomDivergence)<25; topWatch:=BARSLAST(topDivergence)<25;\nangel:=EMA(CLOSE,2); devil:=EMA(CLOSE+20*SLOPE(CLOSE,21),42);\nturnBull:=CROSS(angel,devil); turnBear:=CROSS(devil,angel);\ntrial:=bottomWatch AND turnBull AND k>d;\nreduce:=topWatch AND ((deadCross AND k>=50) OR turnBear);\nSTICKLINE(k>d,k,d,2,0),COLORRED;\nSTICKLINE(k<=d,k,d,2,0),COLORGREEN;\nHLINE(90,'逃顶线 90'),COLORGREEN;\nHLINE(50,'中轴线 50'),COLORRED;\nHLINE(10,'抄底线 10'),COLORYELLOW;\nDRAWICON(lowCross,12,1),COLORRED; DRAWICON(highCross,88,2),COLORGREEN;\nDRAWTEXT(bottomDivergence,18,'底背离'),COLORRED;\nDRAWTEXT(topDivergence,82,'顶背离'),COLORGREEN;\nDRAWTEXT(buy,30,'超卖金叉'),COLORRED; DRAWTEXT(sell,70,'超买死叉'),COLORGREEN;\nDRAWTEXT(trial,40,'试仓'),COLORYELLOW; DRAWTEXT(reduce,60,'减仓'),COLORGREEN;\nTOOLTIP(k,'K'),COLORWHITE; TOOLTIP(d,'D'),COLORYELLOW;\n",
+  "description": "分型延后2根确认 · 趋势过滤",
+  "height": 180,
+  "revision": 1,
+  "min_value": 0,
+  "max_value": 100,
+  "precision": 2
+}

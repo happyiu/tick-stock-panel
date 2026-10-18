@@ -2,7 +2,7 @@
  * 日K查询配置 — klineDaily 的唯一权威 options。
  *
  * StockDailyKChart(图表) 与 StockPanel(信息条) 各自 useQuery 共享同一 cache key,
- * React Query 按 key 去重只发一次请求; 邻近预取 prefetchQuery 也复用本配置, 三处不会漂移。
+ * 基础行情由 React Query 按 key 去重; 自建指标请求增加版本/参数维度; 邻近预取 prefetchQuery 也复用本配置, 三处不会漂移。
  *
  * placeholderData 内置"仅同 symbol 占位"守卫: 改日期范围/扩展字段时旧数据可暂显(不闪),
  * 切股时不透传上一只股票的数据(不误显示)。
@@ -10,6 +10,7 @@
 import type { UseQueryOptions } from '@tanstack/react-query'
 import {
   api,
+  type ChartIndicatorRequest,
   type KlineDailyLatestResponse,
   type KlineDailyResponse,
   type KlinePeriod,
@@ -77,10 +78,11 @@ export function klineDailyQueryOptions(
   dateRange: { start: string; end: string },
   extColumns?: string,
   includeTechnicalScores = false,
+  chartIndicators?: ChartIndicatorRequest,
 ) {
   return {
-    queryKey: QK.kline(symbol, dateRange.start, dateRange.end, extColumns, includeTechnicalScores),
-    queryFn: () => api.klineDaily(symbol, undefined, dateRange, extColumns, includeTechnicalScores),
+    queryKey: QK.kline(symbol, dateRange.start, dateRange.end, extColumns, includeTechnicalScores, chartIndicators),
+    queryFn: () => api.klineDaily(symbol, undefined, dateRange, extColumns, includeTechnicalScores, undefined, chartIndicators),
     // 工厂无 TData 泛型, 参数用 any 以便 useQuery/prefetchQuery 共用
     placeholderData: (prev: any, prevQuery: any) => {
       const prevKey = prevQuery?.queryKey as readonly unknown[] | undefined
@@ -96,11 +98,12 @@ export function klinePeriodQueryOptions(
   days = DEFAULT_30M_DAYS,
   extColumns?: string,
   includeTechnicalScores = false,
+  chartIndicators?: ChartIndicatorRequest,
 ): UseQueryOptions<KlineResponse, Error, KlineResponse, readonly unknown[]> {
-  if (period === '1d') return klineDailyQueryOptions(symbol, dateRange, extColumns, includeTechnicalScores)
+  if (period === '1d') return klineDailyQueryOptions(symbol, dateRange, extColumns, includeTechnicalScores, chartIndicators)
   return {
-    queryKey: QK.klinePeriod(symbol, period, dateRange.start, dateRange.end, days, includeTechnicalScores),
-    queryFn: () => api.klinePeriod(symbol, period, dateRange, days, includeTechnicalScores),
+    queryKey: QK.klinePeriod(symbol, period, dateRange.start, dateRange.end, days, includeTechnicalScores, chartIndicators),
+    queryFn: () => api.klinePeriod(symbol, period, dateRange, days, includeTechnicalScores, undefined, chartIndicators),
     placeholderData: (prev: any, prevQuery: any) => {
       const prevKey = prevQuery?.queryKey as readonly unknown[] | undefined
       return prevKey?.[1] === symbol && prevKey?.[2] === period ? prev : undefined

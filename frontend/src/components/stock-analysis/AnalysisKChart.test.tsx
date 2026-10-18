@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QK } from '@/lib/queryKeys'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -7,6 +9,7 @@ import type { CandlestickProps } from '@/lib/kline-chart'
 const state = vi.hoisted(() => ({ props: {} as CandlestickProps }))
 vi.mock('../KLineCandlestick', () => ({ KLineCandlestick: (props: CandlestickProps) => { state.props = props; return <div data-kline-chart /> } }))
 vi.mock('echarts', () => { throw new Error('个股分析K线不应加载ECharts') })
+let client: QueryClient
 let host: HTMLDivElement, root: ReturnType<typeof createRoot>
 const rows = Array.from({ length: 3 }, (_, i) => ({ date: `2026-10-${12 + i}`, open: 0.49, close: 0.497, high: 0.5, low: 0.48, volume: 100, amount: null }))
 const levels = Object.fromEntries(LEVEL_GROUPS.map(group => [group.key, [] as PriceLevel[]])) as Record<LevelType, PriceLevel[]>
@@ -19,12 +22,14 @@ levels.pivot = [
 levels.keltner_s = [{ type: 'keltner_s', value: 0.53, label: 'Keltner', side: 'resistance' }]
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } })
+  client.setQueryData(QK.chartIndicators, { items: [], errors: [] })
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
 })
-afterEach(async () => { await act(async () => root.unmount()); host.remove() })
+afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove() })
 async function render(symbol = 'A') {
-  await act(async () => root.render(<AnalysisKChart rows={rows} symbol={symbol} levels={levels} assetType="etf"
-    seriesDates={[rows[2].date, rows[0].date]} series={{ keltner_s: { upper: [0.55, 0.54], lower: [0.45, 0.44] } }} />))
+  await act(async () => root.render(<QueryClientProvider client={client}><AnalysisKChart rows={rows} symbol={symbol} levels={levels} assetType="etf"
+    seriesDates={[rows[2].date, rows[0].date]} series={{ keltner_s: { upper: [0.55, 0.54], lower: [0.45, 0.44] } }} /></QueryClientProvider>))
 }
 it('个股分析复用新引擎，曲线按日期对齐并保留缺失，枢轴按档位过滤', async () => {
   await render()

@@ -4,25 +4,22 @@ import { Activity, Check, Layers, Loader2, Settings2, X } from 'lucide-react'
 import { api, type KlinePeriod, type KlineRow } from '@/lib/api'
 import type { ChanlunAnalysis } from '@/lib/chanlun'
 import { DEFAULT_30M_DAYS, defaultKlineRange, filterKlineRowsThrough, klinePeriodQueryOptions, normalizeKlineBarKey } from '@/lib/kline'
+import { useChartIndicatorSelection } from '@/lib/useChartIndicators'
 import { QK } from '@/lib/queryKeys'
 import type { ChartSignalSelection as ChartSignalSelectionModel } from '@/lib/signals'
 import { storage, type StockPreviewChanlunOverlayConfig } from '@/lib/storage'
 import { ChartIndicatorMenu } from './ChartIndicatorMenu'
 import {
   KLineCandlestick,
-  OVERLAY_INDICATORS,
-  SUB_CHARTS,
   type ChartMarker,
   type ChartPriceLine,
   type CandlestickProps,
   type ChartRange,
   type OHLC,
-  type VolumeCompareConfig,
 } from '@/components/KLineCandlestick'
 
 const SUB_INFO_H = 16
 const SUB_GAP = 4
-const DEFAULT_VOLUME_COMPARE: VolumeCompareConfig = { enabled: true, days: 1 }
 const DEFAULT_CHANLUN_OVERLAY: StockPreviewChanlunOverlayConfig = {
   enabled: true,
   fractals: false,
@@ -31,13 +28,6 @@ const DEFAULT_CHANLUN_OVERLAY: StockPreviewChanlunOverlayConfig = {
   centers: true,
   candidates: true,
   divergences: false,
-}
-
-function normalizeVolumeCompare(config: VolumeCompareConfig): VolumeCompareConfig {
-  return {
-    enabled: config.enabled !== false,
-    days: Math.max(1, Math.min(20, Math.round(Number(config.days) || 1))),
-  }
 }
 
 function normalizeChanlunOverlay(config: StockPreviewChanlunOverlayConfig): StockPreviewChanlunOverlayConfig {
@@ -52,21 +42,8 @@ function normalizeChanlunOverlay(config: StockPreviewChanlunOverlayConfig): Stoc
   }
 }
 
-function loadActiveIndicators(): string[] {
-  const saved = storage.stockPreviewSubCharts.get(['vol'])
-  const valid = Array.isArray(saved) ? saved.filter((key, index) =>
-    typeof key === 'string'
-      && SUB_CHARTS.some(chart => chart.key === key)
-      && saved.indexOf(key) === index,
-  ) : ['vol']
-  const sub = Array.isArray(saved) && saved.length > 0 && valid.length === 0 ? ['vol'] : valid
-  const main = storage.stockPreviewMainCharts.get([])
-  return [...sub, ...(Array.isArray(main) ? main.filter((key, index) =>
-    key !== 'ma' && OVERLAY_INDICATORS.some(indicator => indicator.key === key) && main.indexOf(key) === index,
-  ) : [])]
-}
-
 interface Props {
+  indicatorSelection?: ReturnType<typeof useChartIndicatorSelection>
   symbol: string
   height?: number
   className?: string
@@ -201,7 +178,19 @@ function ChartPill({
   )
 }
 
-export function StockDailyKChart({
+export function StockDailyKChart(props: Props) {
+  return props.indicatorSelection
+    ? <StockDailyKChartView {...props} indicatorSelection={props.indicatorSelection} />
+    : <StandaloneStockDailyKChart {...props} />
+}
+
+function StandaloneStockDailyKChart(props: Props) {
+  const indicatorSelection = useChartIndicatorSelection(props.showMA)
+  return <StockDailyKChartView {...props} indicatorSelection={indicatorSelection} />
+}
+
+function StockDailyKChartView({
+  indicatorSelection,
   symbol,
   height = 520,
   className,
@@ -237,15 +226,12 @@ export function StockDailyKChart({
   onAddSignal,
   selectedSignals,
   onClearSignals,
-}: Props) {
-  const [activeIndicators, setActiveIndicators] = useState<string[]>(loadActiveIndicators)
-  const [maVisible, setMaVisible] = useState(() => storage.stockPreviewMaVisible.get(true) !== false)
+}: Props & { indicatorSelection: ReturnType<typeof useChartIndicatorSelection> }) {
+  const { catalog, activeIndicators, effectiveMA, volumeCompare, indicatorRequest, toggleIndicator, updateVolumeCompare } = indicatorSelection
+  const SUB_CHARTS = catalog.sub
   const [showMarkers, setShowMarkers] = useState(true)
   // 加入自选日标注（与「异动」标记相互独立）
   const [showAddedMark, setShowAddedMark] = useState(true)
-  const [volumeCompare, setVolumeCompare] = useState<VolumeCompareConfig>(() =>
-    normalizeVolumeCompare(storage.stockVolumeCompare.get(DEFAULT_VOLUME_COMPARE)),
-  )
   const [chanlunMenuOpen, setChanlunMenuOpen] = useState(false)
   const [chanlunOverlay, setChanlunOverlay] = useState<StockPreviewChanlunOverlayConfig>(() =>
     normalizeChanlunOverlay(storage.stockPreviewChanlunOverlay.get(DEFAULT_CHANLUN_OVERLAY)),
@@ -254,8 +240,8 @@ export function StockDailyKChart({
 
   // 日K仍与 StockPanel 信息条共享 cache key；其余周期走独立、含 period 的查询键。
   const kline = useQuery({
-    ...klinePeriodQueryOptions(symbol, period, dateRange, periodDays, extColumns, includeTechnicalScores),
-    enabled: !!symbol,
+    ...klinePeriodQueryOptions(symbol, period, dateRange, periodDays, extColumns, includeTechnicalScores, indicatorRequest),
+    enabled: !!symbol && indicatorSelection.ready,
     refetchInterval: refetchIntervalMs,
   })
 
@@ -385,30 +371,6 @@ export function StockDailyKChart({
     ...signalMarkers,
   ], [effectiveShowLimitMarkers, limitMarkers, markers, signalMarkers, strategyMarkers])
 
-  const toggleIndicator = useCallback((key: string) => {
-    if (key === 'ma') {
-      setMaVisible(previous => {
-        storage.stockPreviewMaVisible.set(!previous)
-        return !previous
-      })
-      return
-    }
-    setActiveIndicators(prev => {
-      const next = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
-      storage.stockPreviewSubCharts.set(next.filter(item => SUB_CHARTS.some(chart => chart.key === item)))
-      storage.stockPreviewMainCharts.set(next.filter(item => OVERLAY_INDICATORS.some(chart => chart.key === item)))
-      return next
-    })
-  }, [])
-
-  const updateVolumeCompare = useCallback((patch: Partial<VolumeCompareConfig>) => {
-    setVolumeCompare(prev => {
-      const next = normalizeVolumeCompare({ ...prev, ...patch })
-      storage.stockVolumeCompare.set(next)
-      return next
-    })
-  }, [])
-
   const updateChanlunOverlay = useCallback((patch: Partial<StockPreviewChanlunOverlayConfig>) => {
     setChanlunOverlay(previous => {
       const next = normalizeChanlunOverlay({ ...previous, ...patch })
@@ -417,7 +379,7 @@ export function StockDailyKChart({
     })
   }, [])
 
-  const activeSubDefs = activeIndicators
+  const activeSubDefs = [...(effectiveMA && catalog.sub.some(i => i.id === 'ma') ? ['ma'] : []), ...activeIndicators]
     .map(key => SUB_CHARTS.find(s => s.key === key))
     .filter((d): d is typeof SUB_CHARTS[number] => !!d)
   let subExtraH = 0
@@ -429,7 +391,7 @@ export function StockDailyKChart({
         <div className="max-w-full flex-none">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           {showIndicatorControls && (<>
-            <ChartIndicatorMenu allowMA={showMA} activeIndicators={showMA && maVisible ? ['ma', ...activeIndicators] : activeIndicators} onToggle={toggleIndicator} />
+            <ChartIndicatorMenu allowMA={showMA} activeIndicators={effectiveMA ? ['ma', ...activeIndicators] : activeIndicators} onToggle={toggleIndicator} />
           {chanlunAnalysis && (
             <div
               className="relative ml-0.5 flex items-center"
@@ -587,6 +549,7 @@ export function StockDailyKChart({
     <div className={`rounded-card border border-border/60 bg-surface/40 p-3 ${className ?? ''}`} style={{ minHeight: height }}>
 
       {kline.isLoading && <div className="text-sm text-muted py-4">加载中…</div>}
+      {kline.data?.indicator_errors?.map(error => <p key={error.id} role="alert" className="py-1 text-xs text-danger">{catalog.items.find(i => i.id === error.id)?.name ?? error.id}：{error.message}</p>)}
       {kline.isError && <div className="text-sm text-danger py-2">K线加载失败</div>}
       {!kline.isLoading && !kline.isError && displayRawRows.length === 0 && (
         <div className="flex items-center justify-center text-sm text-muted" style={{ height }}>
@@ -609,7 +572,9 @@ export function StockDailyKChart({
           onHighlightChange={onHighlightChange}
           priceLabelWidth={priceLabelWidth}
           height={chartHeight - 22}
-          showMA={showMA && maVisible}
+          showMA={effectiveMA}
+          indicatorResults={kline.data?.indicator_results}
+          indicatorDefinitions={catalog.items}
           showInfoBar={showInfoBar}
           showMarkers={showMarkers}
           stockInfo={stockInfo}

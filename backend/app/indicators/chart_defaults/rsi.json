@@ -1,0 +1,13 @@
+{
+  "id": "rsi",
+  "name": "RSI",
+  "pane": "sub",
+  "source": "custom",
+  "formula": "delta:=CLOSE-REF(CLOSE,1); gain:=IF(delta>0,delta,0); loss:=IF(delta<0,-delta,0);\navgGain6:=SMA(gain,6,1); avgLoss6:=SMA(loss,6,1); rsi_6:100-100/(1+avgGain6/IF(avgLoss6=0,0.000000000001,avgLoss6)),COLORFACC15;\navgGain14:=SMA(gain,14,1); avgLoss14:=SMA(loss,14,1); rsi_14:100-100/(1+avgGain14/IF(avgLoss14=0,0.000000000001,avgLoss14)),COLOR3B82F6;\navgGain24:=SMA(gain,24,1); avgLoss24:=SMA(loss,24,1); rsi_24:100-100/(1+avgGain24/IF(avgLoss24=0,0.000000000001,avgLoss24)),COLOR8B5CF6;\nTOOLTIP(rsi_6,'RSI6'),COLORFACC15; TOOLTIP(rsi_14,'RSI14'),COLOR3B82F6; TOOLTIP(rsi_24,'RSI24'),COLOR8B5CF6;\n",
+  "description": "",
+  "height": 72,
+  "revision": 1,
+  "min_value": 0,
+  "max_value": 100,
+  "precision": 2
+}

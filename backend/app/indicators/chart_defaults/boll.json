@@ -1,0 +1,11 @@
+{
+  "id": "boll",
+  "name": "BOLL",
+  "pane": "main",
+  "source": "custom",
+  "formula": "mid:=MA(CLOSE,20); sd:=STD(CLOSE,20); boll_upper:mid+2*sd,COLORE879F9; boll_lower:mid-2*sd,COLORE879F9;\n",
+  "description": "",
+  "height": 100,
+  "revision": 1,
+  "precision": 2
+}

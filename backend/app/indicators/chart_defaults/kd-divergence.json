@@ -1,0 +1,13 @@
+{
+  "id": "kd-divergence",
+  "name": "KD背离",
+  "pane": "sub",
+  "source": "custom",
+  "formula": "lo:=LLV(LOW,9); hi:=HHV(HIGH,9);\nraw:=IF(hi=lo,DRAWNULL,(CLOSE-lo)/(hi-lo)*100);\nrsv:=EMA(raw,3); k:EMA(rsv,3),COLORYELLOW;\nd:MA(k,3),COLORWHITE,LIGHTCOLOR2563EB;\ngoldenCross:=CROSS(k,d); deadCross:=CROSS(d,k);\nlowCross:=goldenCross AND k<=50; highCross:=deadCross AND k>=80;\nbuy:=goldenCross AND d<8; sell:=deadCross AND d>85;\nga:=BARSLAST(REF(goldenCross,1))+1; da:=BARSLAST(REF(deadCross,1))+1;\nbottomDivergence:goldenCross AND ga<BARSCOUNT(raw) AND REF(CLOSE,ga)>CLOSE AND k>REF(k,ga),COLORRED;\ntopDivergence:deadCross AND da<BARSCOUNT(raw) AND REF(CLOSE,da)<CLOSE AND REF(d,da)>d,COLORGREEN;\nbottomLineStart:=IF(bottomDivergence,BARSCOUNT(CLOSE)-1-ga+1,DRAWNULL);\ntopLineStart:=IF(topDivergence,BARSCOUNT(CLOSE)-1-da+1,DRAWNULL);\nSTICKLINE(k>d,k,d,2.5,0),COLORRED;\nSTICKLINE(k<=d,k,d,2.5,0),COLORGREEN;\nHLINE(90,'逃顶线 90'),COLORGREEN;\nHLINE(50,'中轴线 50'),COLORRED;\nHLINE(10,'抄底线 10'),COLORYELLOW;\nDRAWICON(lowCross,12,1),COLORRED; DRAWICON(highCross,88,2),COLORGREEN;\nDRAWTEXT(bottomDivergence,d-5,'加仓'),COLORRED;\nDRAWTEXT(topDivergence,d-5,'减仓'),COLORGREEN;\nDRAWTEXT(buy,30,'买'),COLORRED; DRAWTEXT(sell,70,'卖'),COLORGREEN;\nSTICKLINE(buy,3,20,8,0),COLORRED; STICKLINE(sell,85,70,8,0),COLORGREEN; DRAWSEGMENT(bottomDivergence,bottomLineStart,d),COLORRED; DRAWSEGMENT(topDivergence,topLineStart,d),COLORGREEN;\nTOOLTIP(k,'K'),COLORYELLOW; TOOLTIP(d,'D'),COLORWHITE; TOOLTIP(bottomDivergence,'底背离',0),COLORRED; TOOLTIP(topDivergence,'顶背离',0),COLORGREEN;\n",
+  "description": "9 / 3 / 3 · 背离出现后补画连线",
+  "height": 160,
+  "revision": 1,
+  "min_value": -10,
+  "max_value": 110,
+  "precision": 2
+}

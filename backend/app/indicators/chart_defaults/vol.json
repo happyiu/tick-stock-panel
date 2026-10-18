@@ -1,0 +1,12 @@
+{
+  "id": "vol",
+  "name": "成交量",
+  "pane": "sub",
+  "source": "custom",
+  "formula": "volValue:=NZ(VOL); vol_ma5:MA(volValue,5),COLORFACC15; vol_ma10:MA(volValue,10),COLOR8B5CF6; volume_ratio:IF(REF(MA(volValue,COMPARE_DAYS),1)>0,volValue/REF(MA(volValue,COMPARE_DAYS),1),DRAWNULL),NODRAW; STICKLINE(CLOSE>=OPEN,0,volValue,4,0),COLORC74040; STICKLINE(CLOSE<OPEN,0,volValue,4,0),COLOR2D9B65;\n",
+  "description": "",
+  "height": 84,
+  "revision": 1,
+  "min_value": 0,
+  "precision": 0
+}

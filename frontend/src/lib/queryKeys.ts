@@ -5,9 +5,17 @@
  * - SSE invalidation 基于 SSE_INVALIDATE_PREFIXES 列表，新增 key 无需改 useQuoteStream。
  */
 
+import type { ChartIndicatorRequest } from './api'
+
+const indicatorQuerySuffix = (value?: ChartIndicatorRequest) => value?.ids.length
+  ? [value.ids.join(','), value.version, value.compareDays] : []
+
 // ===== Query Key 工厂 =====
 
 export const QK = {
+  chartIndicatorValues: (symbol: string, period: string, version: string, rows: unknown) => ['chart-indicator-values', symbol, period, version, rows] as const,
+  chartIndicators: ['chart-indicators'] as const,
+  chartIndicatorLanguage: ['chart-indicator-language'] as const,
   // 全局 / 共享 (Layout 预取)
   capabilities:   ['capabilities'] as const,
   settings:       ['settings'] as const,
@@ -94,10 +102,10 @@ export const QK = {
   analysisMenu:         (id: string) => ['analysis-menu', id] as const,
 
   // Kline
-  kline:                (symbol: string, start: string, end: string, extColumns?: string, includeTechnicalScores = false) =>
-                           ['kline', symbol, start, end, extColumns ?? '', includeTechnicalScores] as const,
-  klinePeriod:          (symbol: string, period: string, start: string, end: string, days: number, includeTechnicalScores = false) =>
-                           ['kline-period', symbol, period, start, end, days, includeTechnicalScores] as const,
+  kline:                (symbol: string, start: string, end: string, extColumns?: string, includeTechnicalScores = false, indicators?: ChartIndicatorRequest) =>
+                           ['kline', symbol, start, end, extColumns ?? '', includeTechnicalScores, ...indicatorQuerySuffix(indicators)] as const,
+  klinePeriod:          (symbol: string, period: string, start: string, end: string, days: number, includeTechnicalScores = false, indicators?: ChartIndicatorRequest) =>
+                           ['kline-period', symbol, period, start, end, days, includeTechnicalScores, ...indicatorQuerySuffix(indicators)] as const,
   klineLatest:          (symbol: string) => ['kline-latest', symbol] as const,
   chanlun:              (symbol: string, assetType: string, period: string, start: string, end: string, days: number, source: string, asOf: string | null, revision: number) =>
                            ['chanlun', symbol, assetType, period, start, end, days, source, asOf, revision] as const,

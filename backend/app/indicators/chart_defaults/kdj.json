@@ -1,0 +1,11 @@
+{
+  "id": "kdj",
+  "name": "KDJ",
+  "pane": "sub",
+  "source": "custom",
+  "formula": "lo:=LLV(LOW,9); hi:=HHV(HIGH,9); raw:=(CLOSE-lo)/(hi-lo)*100; kdj_k:SMA(raw,3,1,1),COLORFACC15; kdj_d:SMA(kdj_k,3,1,1),COLOR8B5CF6; kdj_j:3*kdj_k-2*kdj_d,COLOR3B82F6;\nTOOLTIP(kdj_k,'K'),COLORFACC15; TOOLTIP(kdj_d,'D'),COLOR8B5CF6; TOOLTIP(kdj_j,'J'),COLOR3B82F6;\n",
+  "description": "",
+  "height": 72,
+  "revision": 1,
+  "precision": 2
+}

@@ -1,3 +1,4 @@
+import { useChartIndicatorSelection } from '@/lib/useChartIndicators'
 import {
   useEffect, useState, useCallback, useRef, useMemo, useId,
   type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent,
@@ -345,6 +346,10 @@ export function StockPanel({
   const resolvedRightPaneMode: StockPanelRightPaneMode = rightPaneMode
     ?? (showIntradayChart ? 'intraday' : 'empty')
   const includeTechnicalScores = resolvedRightPaneMode === 'technical'
+  const indicatorSelection = useChartIndicatorSelection()
+  const chartIndicators = infoBarOnly ? undefined : indicatorSelection.indicatorRequest
+  const dailyIndicators = period === '1d' ? chartIndicators : undefined
+  const indicatorsReady = infoBarOnly || indicatorSelection.ready
   const [linkedPrice, setLinkedPrice] = useState<number | null>(null)
   const [selectedBarKey, setSelectedBarKey] = useState<string | null>(null)
   const effectiveSelectedBarKey = lockedSelectedDate ?? selectedBarKey
@@ -402,8 +407,8 @@ export function StockPanel({
   // 信息条直接读 query data: 切股到已预取邻股时首帧即有数据, 配合 StockInfoBar 加载态占位,
   // 弹窗整体高度在切换瞬间不塌陷 (不抖动)。
   const kline = useQuery({
-    ...klineDailyQueryOptions(symbol, infoDateRange, extColumns, includeTechnicalScores),
-    enabled: !!symbol,
+    ...klineDailyQueryOptions(symbol, infoDateRange, extColumns, includeTechnicalScores, dailyIndicators),
+    enabled: !!symbol && (period !== '1d' || indicatorsReady),
     refetchInterval: refetchIntervalMs,
   })
   const rawRows: KlineRow[] = kline.data?.rows ?? []
@@ -416,8 +421,8 @@ export function StockPanel({
   const rows = useMemo(() => toOHLC(visibleRawRows, '1d'), [visibleRawRows])
   // 技术面板观察与左侧 K 线完全相同的 period query; 1d 时会与上面的日K query 共享缓存。
   const periodKline = useQuery({
-    ...klinePeriodQueryOptions(symbol, period, chartDateRange, periodDays, extColumns, includeTechnicalScores),
-    enabled: !!symbol && (
+    ...klinePeriodQueryOptions(symbol, period, chartDateRange, periodDays, extColumns, includeTechnicalScores, chartIndicators),
+    enabled: !!symbol && indicatorsReady && (
       period === '30m'
       || resolvedRightPaneMode === 'technical'
     ),
@@ -754,7 +759,7 @@ export function StockPanel({
       let lastDate: string | undefined
       tasks.push(async () => {
         const res = await qc.fetchQuery({
-          ...klineDailyQueryOptions(s, infoDateRange, extColumns, includeTechnicalScores),
+          ...klineDailyQueryOptions(s, infoDateRange, extColumns, includeTechnicalScores, dailyIndicators),
           staleTime: 30_000,
         })
         const date = res?.rows?.at(-1)?.date
@@ -769,13 +774,13 @@ export function StockPanel({
       tasks.push(() => qc.prefetchQuery({ ...klineMinuteQueryOptions(s, undefined, true), staleTime: 30_000 }))
       if (period !== '1d') {
         tasks.push(() => qc.prefetchQuery({
-          ...klinePeriodQueryOptions(s, period, chartDateRange, periodDays, extColumns, includeTechnicalScores),
+          ...klinePeriodQueryOptions(s, period, chartDateRange, periodDays, extColumns, includeTechnicalScores, chartIndicators),
           staleTime: 30_000,
         }))
       }
     }
     return scheduleNeighborPrefetch(qc, symbol, tasks)
-  }, [prefetchKey, symbol, chartDateRange, infoDateRange, extColumns, intradayDays, period, periodDays, includeTechnicalScores, qc, kline.isSuccess, kline.isPlaceholderData])
+  }, [prefetchKey, symbol, chartDateRange, infoDateRange, extColumns, intradayDays, period, periodDays, includeTechnicalScores, dailyIndicators, chartIndicators, qc, kline.isSuccess, kline.isPlaceholderData])
 
   // symbol 变化时重置分时相关状态，避免切股后残留旧日期。
   // 日K信息直接读 query data (切股到已预取邻股首帧即有), 无需清空或门控。
@@ -893,6 +898,7 @@ export function StockPanel({
               className={splitInfoBar ? 'stock-panel-chart-scroll absolute inset-0 overflow-y-auto' : undefined}
             >
               <StockDailyKChart
+                indicatorSelection={indicatorSelection}
                 symbol={symbol}
                 height={height}
                 dateRange={chartDateRange}

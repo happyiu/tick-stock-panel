@@ -18,6 +18,7 @@ const fixtures = vi.hoisted(() => ({
 
 vi.mock('@/lib/api', () => ({
   api: {
+    chartIndicators: async () => ({ items: [], errors: [] }),
     indexQuotes: async () => ({ rows: [] }),
     indexDaily: async (symbol: string) => ({
       symbol,

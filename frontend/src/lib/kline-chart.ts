@@ -1,7 +1,7 @@
 import type { IndicatorTemplate, KLineData } from 'klinecharts'
 import type { ReactNode } from 'react'
 import { BUILTIN_MAIN_INDICATORS, BUILTIN_SUB_INDICATORS } from './kline-chart-builtins'
-import type { KlinePeriod } from './api'
+import type { KlinePeriod, ChartIndicatorResult, ChartIndicatorDefinition } from './api'
 import type { ChanlunAnalysis } from './chanlun'
 import type { StockPreviewChanlunOverlayConfig } from './storage'
 
@@ -69,6 +69,8 @@ export interface ChartPriceCurve {
 }
 
 export interface CandlestickProps {
+  indicatorDefinitions?: ChartIndicatorDefinition[]
+  indicatorResults?: Record<string, ChartIndicatorResult>
   data: OHLC[]
   toolbarControls?: ReactNode
   period?: KlinePeriod

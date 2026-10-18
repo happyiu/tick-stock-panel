@@ -1,0 +1,11 @@
+{
+  "id": "angel-devil",
+  "name": "天使魔鬼",
+  "pane": "main",
+  "source": "custom",
+  "formula": "ma5:MA(CLOSE,5),COLORWHITE,LINETHICK2;\nma13:MA(CLOSE,13),COLORGREEN;\nma21:MA(CLOSE,21),COLORYELLOW,LINETHICK2;\nma34:MA(CLOSE,34),COLORMAGENTA;\nangel:=EMA(CLOSE,2);\ndevil:=EMA(CLOSE+20*SLOPE(CLOSE,21),42);\nbull:IF(ISVALID(angel) AND ISVALID(devil),angel>=devil,DRAWNULL),NODRAW;\nattack:=CROSS(angel,devil); retreat:=CROSS(devil,angel);\nDRAWICON(attack,LOW*0.97,1,5),COLORRED;\nDRAWTEXT(attack,LOW*0.92,'进攻'),COLORYELLOW;\nDRAWICON(retreat,HIGH*1.03,2,5),COLORCYAN;\nDRAWTEXT(retreat,HIGH*1.08,'撤退'),COLORWHITE;\n",
+  "description": "MA5 / 13 / 21 / 34 · 进攻 / 撤退",
+  "height": 100,
+  "revision": 1,
+  "precision": 3
+}

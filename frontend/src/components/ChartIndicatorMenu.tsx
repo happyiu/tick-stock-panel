@@ -1,18 +1,19 @@
 import { useId, useState } from 'react'
 import { Check, SlidersHorizontal, X } from 'lucide-react'
-import { OVERLAY_INDICATORS, SUB_CHARTS } from '@/lib/kline-chart'
+import { useChartIndicators } from '@/lib/useChartIndicators'
 
 export function ChartIndicatorMenu({ activeIndicators, onToggle, allowMA = true }: {
   activeIndicators: string[]
   allowMA?: boolean
   onToggle: (key: string) => void
 }) {
+  const catalog = useChartIndicators()
   const [open, setOpen] = useState(false)
   const [source, setSource] = useState<'custom' | 'builtin'>('custom')
   const [category, setCategory] = useState<'main' | 'sub'>('main')
   const id = useId()
-  const indicators = (category === 'main' ? OVERLAY_INDICATORS : SUB_CHARTS)
-    .filter(indicator => (allowMA || indicator.key !== 'ma') && indicator.key.startsWith('builtin-') === (source === 'builtin'))
+  const indicators = (category === 'main' ? catalog.main : catalog.sub)
+    .filter(indicator => (allowMA || indicator.key !== 'ma') && indicator.source === source)
   return (
     <div className="relative shrink-0" onBlur={event => {
       if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false)
@@ -41,7 +42,7 @@ export function ChartIndicatorMenu({ activeIndicators, onToggle, allowMA = true 
             </button>
           </div>
           <div role="tablist" aria-label="指标来源" className="mb-2 flex rounded bg-base p-0.5">
-            {([['custom', '自编'], ['builtin', '内置']] as const).map(([key, label]) => (
+            {([['custom', '自建'], ['builtin', '内置']] as const).map(([key, label]) => (
               <button key={key} type="button" role="tab" aria-selected={source === key}
                 onClick={() => setSource(key)}
                 className={`flex-1 rounded px-2 py-1.5 text-xs ${source === key ? 'bg-elevated text-accent' : 'text-muted hover:text-secondary'}`}
@@ -57,6 +58,8 @@ export function ChartIndicatorMenu({ activeIndicators, onToggle, allowMA = true 
             ))}
           </div>
           <div role="tabpanel" aria-label={category === 'main' ? '主图叠加' : '副图'} className="max-h-60 overflow-y-auto">
+            {catalog.isLoading && <p className="p-2 text-xs text-muted">加载指标…</p>}
+            {catalog.isError && <button className="p-2 text-xs text-danger" onClick={() => catalog.refetch()}>加载失败，重试</button>}
             {indicators.map(indicator => {
               const active = activeIndicators.includes(indicator.key)
               return (
@@ -67,21 +70,7 @@ export function ChartIndicatorMenu({ activeIndicators, onToggle, allowMA = true 
                   <span className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border ${active ? 'border-accent bg-accent' : 'border-border bg-base'}`}>
                     {active && <Check className="h-2.5 w-2.5 text-white" strokeWidth={3} />}
                   </span>
-                  <span>{indicator.label}{indicator.key === 'ma' && (
-                    <span className="mt-0.5 block text-[10px] text-muted">MA5 / 10 / 20 / 60</span>
-                  )}{indicator.key === 'angel-devil' && (
-                    <span className="mt-0.5 block text-[10px] text-muted">MA5 / 13 / 21 / 34 · 进攻 / 撤退</span>
-                  )}{indicator.key === 'boll2' && (
-                    <span className="mt-0.5 block text-[10px] text-muted">20周期 · 自定义通道 · 延后1根K线</span>
-                  )}{indicator.key === 'kd-divergence' && (
-                    <span className="mt-0.5 block text-[10px] text-muted">9 / 3 / 3 · 背离出现后补画连线</span>
-                  )}{indicator.key === 'kd-enhanced' && (
-                    <span className="mt-0.5 block text-[10px] text-muted">分型延后2根确认 · 趋势过滤</span>
-                  )}{indicator.key === 'etf-swing-v2' && (
-                    <span className="mt-0.5 block text-[10px] text-muted">建议30分钟 · 66根起标信号 · 未收盘信号可能变化</span>
-                  )}{indicator.key === 'bull-bear-trend-v2' && (
-                    <span className="mt-0.5 block text-[10px] text-muted">30分钟 / 日线自适应 · 81根起标信号 · 未收盘信号可能变化</span>
-                  )}</span>
+                  <span>{indicator.label}{indicator.description && <span className="mt-0.5 block text-[10px] text-muted">{indicator.description}</span>}</span>
                 </button>
               )
             })}

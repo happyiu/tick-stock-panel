@@ -5,6 +5,7 @@ import { Activity, Loader2, Lock, RefreshCw } from 'lucide-react'
 import { api, type IndexInstrument, type KlineRow, type MinuteKlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { useCapabilities } from '@/lib/useSharedQueries'
+import { useLoadedChartIndicators } from '@/lib/useChartIndicators'
 import { KLineCandlestick, type OHLC } from '@/components/KLineCandlestick'
 import { EChartsIntraday } from '@/components/EChartsIntraday'
 
@@ -127,6 +128,7 @@ export function Indices() {
   const selectedQuotePct = selectedQuote?.change_pct ?? selectedQuote?.pct
 
   const chartRows = useMemo(() => toOHLC(daily.data?.rows ?? []), [daily.data?.rows])
+  const indicators = useLoadedChartIndicators(chartRows, selectedSymbol, ['ma', 'vol', 'macd'])
   const selectedInfo = topRows.find(r => r.symbol === selectedSymbol) || daily.data?.index_info
   const minuteRows: MinuteKlineRow[] = minute.data?.symbol === selectedSymbol
     && minute.data?.date === selectedDate && daily.data?.symbol === selectedSymbol
@@ -243,7 +245,10 @@ export function Indices() {
           {chartRows.length > 0 && (
             <div className="flex items-start gap-3">
               <div className="min-w-0 flex-1">
+                {indicators.isError && <p role="alert" className="text-xs text-danger">指标计算失败，请刷新重试</p>}
+                {indicators.data?.indicator_errors?.map(e => <p key={e.id} role="alert" className="text-xs text-danger">{e.message}</p>)}
                 <KLineCandlestick
+                  indicatorDefinitions={indicators.definitions} indicatorResults={indicators.data?.indicator_results}
                   data={chartRows}
                   height={620}
                   showMA={true}

@@ -8,21 +8,22 @@ import type { CandlestickProps } from '@/lib/kline-chart'
 import type { StockLevels } from '@/lib/api'
 import { emptyChanlunAnalysis } from '@/lib/chanlun'
 import type { StockChanlunPanelProps } from './StockChanlunPanel'
-const state = vi.hoisted(() => ({ chart: {} as CandlestickProps, levels: vi.fn(), chanlun: vi.fn(), structure: {} as StockChanlunPanelProps }))
+const state = vi.hoisted(() => ({ chart: {} as CandlestickProps, levels: vi.fn(), chanlun: vi.fn(), structure: {} as StockChanlunPanelProps, daily: vi.fn(), catalog: vi.fn() }))
 vi.mock('@/lib/api', async importOriginal => ({
   ...await importOriginal<typeof import('@/lib/api')>(),
   api: {
-    klineDaily: async (symbol: string, _days: unknown, _range: unknown, _ext: unknown, _scores: unknown, chanlun: unknown) => ({ asset_type: 'etf', chanlun: chanlun ? await state.chanlun(symbol, '1d', chanlun) : undefined, rows: [
+    chartIndicators: state.catalog,
+    klineDaily: async (symbol: string, _days: unknown, _range: unknown, _ext: unknown, _scores: unknown, chanlun: unknown, indicators: unknown) => { if (!chanlun) state.daily(symbol, indicators); return ({ asset_type: 'etf', chanlun: chanlun ? await state.chanlun(symbol, '1d', chanlun) : undefined, rows: [
       { date: '2026-10-14', open: 0.49, high: 0.5, low: 0.48, close: 0.49 },
       { date: '2026-10-15', open: 0.49, high: 0.5, low: 0.48, close: 0.497 },
-    ] }),
+    ] }) },
     klinePeriod: async (symbol: string, period: string, _range: unknown, _days: unknown, _scores: unknown, chanlun: unknown) => ({ asset_type: 'etf', chanlun: chanlun ? await state.chanlun(symbol, period, chanlun) : undefined, rows: [{ date: '2026-10-15', open: 0.49, high: 0.5, low: 0.48, close: 0.497 }] }),
     stockAnalysisLevels: state.levels,
   },
 }))
 vi.mock('./KLineCandlestick', async importOriginal => ({
   ...await importOriginal<typeof import('./KLineCandlestick')>(),
-  KLineCandlestick: (props: CandlestickProps) => { state.chart = props; return <div /> },
+  KLineCandlestick: (props: CandlestickProps) => { state.chart = props; return <div>{props.toolbarControls}</div> },
 }))
 vi.mock('./StockInfoBar', () => ({ StockInfoBar: () => null }))
 vi.mock('./StockIntradayChart', () => ({ StockIntradayChart: () => null }))
@@ -41,9 +42,9 @@ const levels: StockLevels = {
 let host: HTMLDivElement, root: ReturnType<typeof createRoot>, client: QueryClient
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
-  localStorage.clear(); state.levels.mockReset().mockResolvedValue(levels)
+  localStorage.clear(); state.daily.mockClear(); state.catalog.mockReset().mockResolvedValue({ items: ['ma', 'vol'].map(id => ({ id, name: id === 'ma' ? 'MA 均线' : '成交量', source: 'custom', pane: id === 'ma' ? 'main' : 'sub', revision: 1, formula: '', description: '', height: 100 })), errors: [] }); state.levels.mockReset().mockResolvedValue(levels)
   state.chanlun.mockReset().mockResolvedValue(emptyChanlunAnalysis())
-  client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
+  client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 5_000 } } })
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
 })
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove() })
@@ -125,4 +126,19 @@ it('缠论使用后端结果，切历史、结构来源和标的时隔离结果�
   state.chanlun.mockResolvedValue({ ...emptyChanlunAnalysis(), currentPrice: 2 })
   await act(async () => state.structure.onRetry?.()); await settle(); await settle()
   expect(state.chart.chanlunAnalysis?.currentPrice).toBe(2)
+})
+
+it('目录加载后信息条与图表只发一次行情请求，切换指标共享更新后的缓存键', async () => {
+  let finish!: (value: unknown) => void
+  const definitions = await state.catalog()
+  state.catalog.mockImplementation(() => new Promise(resolve => { finish = resolve }))
+  await render()
+  expect(state.daily).not.toHaveBeenCalled()
+  await act(async () => finish(definitions)); await settle(); await settle()
+  expect(state.daily).toHaveBeenCalledTimes(1)
+  expect(state.daily).toHaveBeenLastCalledWith('512000.SH', expect.objectContaining({ ids: ['ma', 'vol'] }))
+  await click('指标'); await click('MA 均线')
+  await settle(); await settle()
+  expect(state.daily).toHaveBeenCalledTimes(2)
+  expect(state.daily).toHaveBeenLastCalledWith('512000.SH', expect.objectContaining({ ids: ['vol'] }))
 })
