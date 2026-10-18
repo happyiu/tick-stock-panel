@@ -138,7 +138,7 @@ def _prepare_30m_strategy_frame(df: pl.DataFrame) -> pl.DataFrame:
     if aggregated.is_empty() or "period_end" not in aggregated.columns:
         return pl.DataFrame()
     # kline_periods 为图表使用的 date 保留了字符串桶标签; 策略需要可比较的
-    # Datetime, 以便指标排序、历史过滤和矩阵取当前最后一根 K。
+    # Datetime, 以便指标排序、历史过滤和按交易日汇总命中。
     aggregated = aggregated.with_columns(pl.col("period_end").alias("date"))
     return _compute_strategy_indicators(aggregated)
 
@@ -641,7 +641,7 @@ class ScreenerService:
                         subset=["symbol"], keep="last"
                     )
                     history = history.join(snapshot, on="symbol", how="left")
-            current = self._latest_30m_rows(history) if not history.is_empty() else history
+            current = history.filter(pl.col("date").cast(pl.Date) == as_of) if not history.is_empty() else history
             return StrategyDataContext(
                 asset_type=self.asset_type,
                 timeframe=timeframe,
@@ -716,19 +716,6 @@ class ScreenerService:
                 "无 30F 分钟K数据 — 请先在 数据→分钟K 完成对应资产的历史同步"
             )
         return frame
-
-    @staticmethod
-    def _latest_30m_rows(history: pl.DataFrame) -> pl.DataFrame:
-        """取每个标的最新 30F K, 保留 Datetime date 以便评分列对齐历史。"""
-        if history.is_empty() or "date" not in history.columns:
-            return history
-        latest = history.group_by("symbol").agg(pl.col("date").max().alias("_latest"))
-        return (
-            history.join(latest, on="symbol", how="inner")
-            .filter(pl.col("date") == pl.col("_latest"))
-            .drop("_latest")
-            .sort(["symbol", "date"])
-        )
 
     def _load_minute_history(self, as_of: date, current: pl.DataFrame | None) -> pl.DataFrame:
         """分钟策略数据源: 优先 as_of 当日分钟分区, 缺失时回退全市场最近分区。

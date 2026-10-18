@@ -1047,6 +1047,8 @@ class StrategyEngine:
         # Stage 3: 评分
         df = self._apply_scoring(df, scoring, scoring_directions)
         entry_signal_hits = self._collect_signal_hits(df, entry_signals)
+        if context.timeframe == "30m" and "date" in df.columns:
+            df = df.sort("date").unique(subset=["symbol"], keep="last", maintain_order=True)
         if not entry_signals and (
             s.filter_history_fn or s.filter_fn or s.execution_backend == "minute_filter"
         ):
@@ -1110,6 +1112,10 @@ class StrategyEngine:
         if not available:
             return []
         hit_df = df.filter(pl.any_horizontal(pl.col(column).fill_null(False) for _, column in available))
+        signal_columns = dict.fromkeys(column for _, column in available)
+        hit_df = hit_df.group_by("symbol", maintain_order=True).agg(
+            pl.col(column).fill_null(False).any() for column in signal_columns
+        )
         return [
             {
                 "symbol": str(row["symbol"]),
@@ -1361,21 +1367,26 @@ class StrategyEngine:
         ]
         if not target_ids:
             return StrategyResult(as_of=as_of, strategy_id=strategy_id)
-        target_time = target_ids[-1]
-        entry_active = signals.entry[target_time]
-        exit_active = signals.exit[target_time]
+        # 30F 选股保留当天任意一根命中; 其他周期仍只检查最后一根。
+        if context.timeframe != "30m":
+            target_ids = target_ids[-1:]
+        entry_window = signals.entry[target_ids] != 0
+        entry_active = entry_window.any(axis=0)
+        exit_active = (signals.exit[target_ids] != 0).any(axis=0)
+        last_entry_offsets = len(target_ids) - 1 - entry_window[::-1].argmax(axis=0)
+        entry_times = np.asarray(target_ids)[last_entry_offsets]
         if asset_mask is not None:
             entry_active = entry_active & asset_mask
             exit_active = exit_active & asset_mask
         entry_signal_hits = self._matrix_signal_hits(
             entry_active,
-            signals.entry_signal_code[target_time],
+            signals.entry_signal_code[target_ids],
             signals.entry_signal_ids,
             market.symbols,
         )
         exit_signal_hits = self._matrix_signal_hits(
             exit_active,
-            signals.exit_signal_code[target_time],
+            signals.exit_signal_code[target_ids],
             signals.exit_signal_ids,
             market.symbols,
         )
@@ -1389,15 +1400,18 @@ class StrategyEngine:
                 exit_signal_hits=exit_signal_hits,
             )
 
-        target_frame = self._matrix_target_frame(source_panel, as_of)
-        row_by_symbol = {
-            str(row["symbol"]): row
+        target_frame = self._matrix_target_frame(source_panel, as_of, latest_only=context.timeframe != "30m")
+        timestamp_col = "datetime" if "datetime" in target_frame.columns else "date"
+        row_by_symbol_time = {
+            (str(row["symbol"]), str(row[timestamp_col]).replace(" ", "T")[:19]): row
             for row in target_frame.iter_rows(named=True)
         }
         ranked: list[tuple[float, dict]] = []
         for asset_id in selected_assets:
             symbol = market.symbols[int(asset_id)]
-            row = row_by_symbol.get(symbol)
+            target_time = int(entry_times[int(asset_id)])
+            label = market.timestamp_labels[target_time].replace(" ", "T")[:19]
+            row = row_by_symbol_time.get((symbol, label))
             if row is None:
                 continue
             score = float(signals.score[target_time, int(asset_id)])
@@ -1538,27 +1552,31 @@ class StrategyEngine:
         symbols: tuple[str, ...],
     ) -> list[dict]:
         hits = []
+        codes = np.atleast_2d(codes)
         for asset_id in np.flatnonzero(active != 0):
-            code = int(codes[int(asset_id)])
-            signals = [signal_ids[code]] if 0 <= code < len(signal_ids) else []
+            signals = [
+                signal_ids[int(code)] for code in np.unique(codes[:, int(asset_id)])
+                if 0 <= code < len(signal_ids)
+            ]
             hits.append({"symbol": symbols[int(asset_id)], "signals": signals})
         return hits
 
     @staticmethod
-    def _matrix_target_frame(panel: pl.DataFrame, as_of: date) -> pl.DataFrame:
+    def _matrix_target_frame(panel: pl.DataFrame, as_of: date, *, latest_only: bool = True) -> pl.DataFrame:
         if "datetime" in panel.columns:
             target = panel.filter(pl.col("datetime").cast(pl.Date) == as_of)
             if target.is_empty():
                 return target
-            latest = target["datetime"].max()
-            target = target.filter(pl.col("datetime") == latest)
+            if latest_only:
+                latest = target["datetime"].max()
+                target = target.filter(pl.col("datetime") == latest)
         elif "date" in panel.columns:
             target = panel.filter(
                 pl.col("date").cast(pl.Date, strict=False) == as_of
             )
         else:
             return panel.head(0)
-        return target.unique(subset=["symbol"], keep="last")
+        return target.unique(subset=["symbol"], keep="last") if latest_only else target
 
     # ================================================================
     # 内部: 基础过滤

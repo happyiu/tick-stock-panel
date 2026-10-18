@@ -52,7 +52,7 @@ export function Indicators() {
   const catalog = useChartIndicators()
   const qc = useQueryClient()
   const [search, setSearch] = useState('')
-  const [source, setSource] = useState('all')
+  const [source, setSource] = useState('custom')
   const [pane, setPane] = useState('all')
   const [editor, setEditor] = useState<Editor | null>(null)
   const [deleting, setDeleting] = useState<ChartIndicatorDefinition | null>(null)
@@ -72,7 +72,21 @@ export function Indicators() {
   const items = catalog.items.filter(i => (source === 'all' || i.source === source) && (pane === 'all' || i.pane === pane) && `${i.name} ${i.description}`.toLowerCase().includes(search.toLowerCase().trim()))
   return <div className="space-y-5 p-4 sm:p-6">
     <div className="flex flex-wrap items-center justify-between gap-3"><div><h1 className="text-xl font-semibold text-foreground">指标</h1><p className="mt-1 text-sm text-muted">管理主图叠加与副图指标，自建公式保存后应用于 K 线。</p></div><button onClick={() => setEditor({ readOnly: false })} className="flex items-center gap-2 rounded-btn bg-accent px-4 py-2 text-sm text-white"><Plus size={16} />新建指标</button></div>
-    <div className="flex flex-wrap gap-3"><label className="relative min-w-48 flex-1"><Search size={16} className="absolute left-3 top-2.5 text-muted" /><input aria-label="搜索指标" placeholder="搜索指标名称或说明" value={search} onChange={e => setSearch(e.target.value)} className={`${field} pl-9`} /></label><select aria-label="指标来源筛选" value={source} onChange={e => setSource(e.target.value)} className={`${field} !w-auto`}><option value="all">全部来源</option><option value="custom">自建</option><option value="builtin">内置</option></select><select aria-label="主副图筛选" value={pane} onChange={e => setPane(e.target.value)} className={`${field} !w-auto`}><option value="all">全部类型</option><option value="main">主图叠加</option><option value="sub">副图</option></select></div>
+    <div className="flex flex-wrap gap-3">
+      <label className="relative min-w-48 flex-1"><Search size={16} className="absolute left-3 top-2.5 text-muted" /><input aria-label="搜索指标" placeholder="搜索指标名称或说明" value={search} onChange={e => setSearch(e.target.value)} className={`${field} pl-9`} /></label>
+      {[
+        { label: '来源', ariaLabel: '指标来源筛选', value: source, setValue: setSource, options: [['custom', '自建'], ['builtin', '内置']] },
+        { label: '类型', ariaLabel: '主副图筛选', value: pane, setValue: setPane, options: [['main', '主图叠加'], ['sub', '副图']] },
+      ].map(group => <div key={group.label} role="radiogroup" aria-label={group.ariaLabel} title="再次点击已选项可取消筛选" className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-base px-3 py-2 text-sm">
+        <span className="text-muted">{group.label}</span>
+        {group.options.map(([value, label]) => <button key={value} type="button" role="radio" aria-checked={group.value === value}
+          onClick={() => group.setValue(previous => previous === value ? 'all' : value)}
+          className={`inline-flex items-center gap-1.5 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-accent ${group.value === value ? 'text-accent' : 'text-secondary hover:text-foreground'}`}>
+          <span aria-hidden="true" className={`flex h-3.5 w-3.5 items-center justify-center rounded-full border ${group.value === value ? 'border-accent' : 'border-muted'}`}>{group.value === value && <span className="h-1.5 w-1.5 rounded-full bg-accent" />}</span>
+          {label}
+        </button>)}
+      </div>)}
+    </div>
     {catalog.isLoading && <p role="status" className="py-6 text-muted">加载指标…</p>}
     {catalog.isError && <div role="alert" className="text-danger">指标加载失败 <button onClick={() => catalog.refetch()} className="underline">重试</button></div>}
     {catalog.data?.errors.map(e => <p key={e.id} role="alert" className="text-sm text-danger">{e.id}：{e.message}</p>)}

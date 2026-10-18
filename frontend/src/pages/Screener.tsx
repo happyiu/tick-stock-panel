@@ -82,6 +82,8 @@ export function Screener() {
   const [activeStrategy, setActiveStrategy] = useState<string | null>(null)
   const [result, setResult] = useState<ScreenerResult | null>(null)
   const [asOf, setAsOf] = useState<string>('')
+  const resultContextRef = useRef('')
+  resultContextRef.current = `${assetType}|${asOf}|${tfFilter}`
   const [batchMsg, setBatchMsg] = useState<string>('')
   const [previewSymbol, setPreviewSymbol] = useState<string | null>(null)
   const [previewName, setPreviewName] = useState<string>('')
@@ -360,7 +362,9 @@ export function Screener() {
         timeframe ?? runAllTimeframe,
         summaryOnly,
       ),
-    onSuccess: (data) => {
+    onMutate: vars => `${assetType}|${vars?.date || asOf}|${tfFilter}`,
+    onSuccess: (data, _vars, context) => {
+      if (context !== resultContextRef.current) return
       if (data.as_of) setAsOf(data.as_of)
       const counts: Record<string, number> = {}
       for (const [id, item] of Object.entries(data.results)) {
@@ -662,21 +666,23 @@ export function Screener() {
 
   // 周线/30F 没有日线缓存，按当前筛选周期直接批量计算一次，结果只用于本页面。
   useEffect(() => {
-    if (assetType !== 'stock' || (tfFilter !== '1w' && tfFilter !== '30m')) return
+    if ((assetType !== 'stock' && !showAll) || (tfFilter !== '1w' && tfFilter !== '30m')) return
     if (!asOf || strategyPresets.length === 0 || runAll.isPending || dailyPoolIds.length === 0) return
-    if (!screenerAutoRun) return
+    if (!screenerAutoRun && assetType === 'stock') return
     const runKey = `${runAllTimeframe}|${asOf}|${dailyPoolIds.join(',')}`
     if (runAllDateRef.current === runKey) return
     runAllDateRef.current = runKey
-    requestRunAll({ date: asOf, strategyIds: dailyPoolIds, timeframe: runAllTimeframe })
-  }, [asOf, strategyPresets.length, dailyPoolIds, screenerAutoRun, assetType, tfFilter, runAllTimeframe, runAll.isPending, requestRunAll])
+    requestRunAll({ date: asOf, strategyIds: dailyPoolIds, timeframe: runAllTimeframe, summaryOnly: showAll ? false : undefined })
+  }, [asOf, strategyPresets.length, dailyPoolIds, screenerAutoRun, assetType, showAll, tfFilter, runAllTimeframe, runAll.isPending, requestRunAll])
 
   // 执行周期由策略自身声明决定: 日线走缓存/单跑, 周线和 30F 走聚合周期数据,
   // 1m 仍走原有本地分钟K分区路径。
   const run = useMutation({
     mutationFn: ({ id, date, timeframe: tf }: { id: string; date: string; timeframe: StrategyTimeframe }) =>
       api.screenerRunPreset(id, undefined, date || undefined, extColumnsParam || undefined, assetType, tf),
-    onSuccess: (data, vars) => {
+    onMutate: vars => `${assetType}|${vars.date || asOf}|${tfFilter}`,
+    onSuccess: (data, vars, context) => {
+      if (context !== resultContextRef.current) return
       setResult(data)
       // 同步更新卡片上的命中数
       setHitCounts(prev => ({ ...prev, [vars.id]: data.total }))
@@ -691,10 +697,10 @@ export function Screener() {
     setShowAll(false)
     if (result?.strategy !== s.id || result.as_of !== asOf) setResult(null)
     const tf = resolveStrategyTimeframe(s, tfFilter)
-    // ETF 模式无股票盘后缓存、非日线策略走对应周期数据 → 始终实时单跑。
-    // 传空日期让后端用自身的最新交易日 (ETF 与分钟分区跟股票 enriched 可能不同日)。
+    // ETF 无股票盘后缓存，非日线策略也单独计算；统一使用当前所选日期。
+    // 未选择日期时传空值，由后端确定对应资产的最新交易日。
     if (assetType !== 'stock' || tf !== '1d') {
-      run.mutate({ id: s.id, date: assetType === 'stock' ? asOf : '', timeframe: tf })
+      run.mutate({ id: s.id, date: asOf, timeframe: tf })
       return
     }
     // 摘要命中时由 singleCachedQuery 按需加载明细；缺失时才单独计算。
@@ -702,12 +708,19 @@ export function Screener() {
     run.mutate({ id: s.id, date: asOf, timeframe: tf })
   }
 
-  // 日期变化交给统一 effect 计算一次，避免这里与 effect 重复请求。
+  // 股票由 effect 重算；ETF 没有日线缓存，需主动刷新当前视图。
   const handleDateChange = (newDate: string) => {
+    if (newDate === asOf) return
     setAsOf(newDate)
     runAllDateRef.current = null
     setResult(null)
     setBatchResultRows({})
+    setHitCounts({})
+    setExpiredCounts({})
+    setPendingRun(null)
+    if (assetType === 'etf' && !showAll && activeStrategy) {
+      run.mutate({ id: activeStrategy, date: newDate, timeframe: activeStrategyTimeframe })
+    }
   }
 
   const minDate = dataStatus.data?.enriched?.earliest_date ?? ''
@@ -967,6 +980,9 @@ export function Screener() {
       />
 
       <div className="px-8 py-4 space-y-3">
+        {tfFilter === '30m' && (
+          <p className="text-xs text-muted">30F 扫描所选日期的全部 K 线，任意一根满足即命中；同一标的仅显示一次，展示最近一次命中的 K 线。</p>
+        )}
         {/* 策略卡片 */}
         {cardSize !== 'hidden' && (
         <section>
@@ -1233,7 +1249,7 @@ export function Screener() {
             qc.invalidateQueries({ queryKey: ['screener-strategies'] })
             // 按策略自身周期重跑: 日线使用缓存口径，其它周期走对应聚合数据。
             const tf = resolveStrategyTimeframe(strategyMap.get(settingsStrategyId), tfFilter)
-            run.mutate({ id: settingsStrategyId, date: tf === '1m' ? '' : asOf, timeframe: tf })
+            run.mutate({ id: settingsStrategyId, date: assetType === 'stock' && tf === '1m' ? '' : asOf, timeframe: tf })
           }
         }}
         onAiModify={async () => {
