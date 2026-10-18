@@ -53,6 +53,7 @@ it('坐标恢复拒绝未知工具、损坏数据和非有限值', () => {
 it('绘制、修改、吸附、锁定和删除只操作用户组，并保存最终坐标', async () => {
   overlays.push({ id: 'system', groupId: 'tsp-chanlun', name: 'system' })
   await render()
+  expect(host.querySelector('[role="status"]')?.textContent).toBe('0 条')
   await click('画线'); await click('趋势线')
   const line = overlays.find(overlay => overlay.groupId === DRAWING_GROUP)!
   expect(line).toMatchObject({ name: 'segment', paneId: 'candle_pane', mode: 'normal' })

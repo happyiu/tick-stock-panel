@@ -51,6 +51,7 @@ const load = () => state.loader?.getBars({
 beforeEach(() => {
   vi.clearAllMocks()
   localStorage.removeItem('stock_preview_sub_chart_heights')
+  localStorage.removeItem('stock_preview_hidden_ma_lines')
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   state.handlers = {}; state.indicators = []; state.frames = []; state.loader = null; state.symbol = ''; state.bars = []
   state.panes = {}; state.width = 800; state.resize = null
@@ -116,6 +117,25 @@ it('同日更新和追加新日不重置视图，历史修订恢复浏览位置'
   expect(engine.init).toHaveBeenCalledOnce()
 })
 
+it('MA单线选择立即保存，关闭重开及新图表切股切周期后恢复，非法配置安全回退', async () => {
+  const data = rows().map(row => ({ ...row, ma5: 10, ma10: 11, ma20: 12, ma60: 13 }))
+  await render({ data })
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="隐藏 MA20"]')!.click())
+  expect(JSON.parse(localStorage.getItem('stock_preview_hidden_ma_lines')!)).toEqual(['ma20'])
+  await act(async () => root.render(null))
+  await render({ data, symbol: 'B', period: '1w' })
+  expect(host.querySelector('[aria-label="显示 MA20"]')?.getAttribute('aria-pressed')).toBe('false')
+  expect(chart.overrideIndicator.mock.calls.at(-1)![0].figures.map((figure: { key: string }) => figure.key)).toEqual(['ma5', 'ma10', 'ma60'])
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="显示 MA20"]')!.click())
+  expect(JSON.parse(localStorage.getItem('stock_preview_hidden_ma_lines')!)).toEqual([])
+  for (const value of [null, {}, ['unknown', 10], 'broken']) {
+    await act(async () => root.render(null))
+    localStorage.setItem('stock_preview_hidden_ma_lines', JSON.stringify(value))
+    await render({ data })
+    expect(host.querySelector('[aria-label="隐藏 MA20"]')).not.toBeNull()
+  }
+})
+
 it('切股清掉旧悬停和标记，当前十字线命中后恢复至今/周期', async () => {
   await render({ markers: [{ date: rows()[1].date, kind: 'buy', label: 'A买' }] })
   await act(async () => state.handlers.onCrosshairChange({ dataIndex: 2 }))
@@ -141,6 +161,29 @@ it('副图开关与顺序、BOLL、量能配置复用同一个实例', async () 
   expect(state.indicators.map(i => i.name)).toEqual(expect.arrayContaining(['TSP_RSI', 'TSP_KDJ', 'TSP_BOLL']))
   expect(chart.setPaneOptions).toHaveBeenCalledWith(expect.objectContaining({ id: 'tsp_rsi', order: 1 }))
   expect(chart.overrideIndicator).toHaveBeenCalledWith(expect.objectContaining({ name: 'TSP_VOL', extendData: false, calcParams: [5] }))
+  expect(engine.init).toHaveBeenCalledOnce()
+})
+
+it('量能控件放在成交量副图内，留出独立一行，移除副图时隐藏，重开恢复', async () => {
+  const pane = document.createElement('div')
+  pane.setAttribute('data-volume-pane', '')
+  chart.getDom.mockImplementation((id?: string) => {
+    if (id !== 'tsp_vol') return host
+    if (!pane.isConnected) host.querySelector('[data-kline-chart]')!.append(pane)
+    return pane
+  })
+  const change = vi.fn()
+  const volumeCompareControls = <button onClick={change}>量能设置</button>
+  await render({ activeIndicators: ['vol', 'macd'], volumeCompareControls })
+  expect(pane.textContent).toContain('量能设置')
+  expect(state.panes.tsp_vol.height).toBe(138)
+  expect(chart.overrideYAxis).toHaveBeenCalledWith(expect.objectContaining({ paneId: 'tsp_vol', gap: { top: 54, bottom: 4 } }))
+  await act(async () => pane.querySelector('button')!.click())
+  expect(change).toHaveBeenCalledOnce()
+  await render({ activeIndicators: ['macd'], volumeCompareControls })
+  expect(pane.textContent).toBe('')
+  await render({ activeIndicators: ['macd', 'vol'], volumeCompareControls })
+  expect(pane.textContent).toContain('量能设置')
   expect(engine.init).toHaveBeenCalledOnce()
 })
 
@@ -365,5 +408,29 @@ it('MA开关同时控制曲线和信息栏，天使魔鬼优先且移除后遵�
   expect(state.indicators).toEqual([])
   await render({ data, showMA: true, activeIndicators: [] })
   expect(state.indicators.map(indicator => indicator.name)).toEqual(['TSP_MA'])
+  expect(engine.init).toHaveBeenCalledOnce()
+})
+
+it('点击MA数值只切换对应曲线，保留数值入口，可全部隐藏再恢复，不重置图表', async () => {
+  const data = rows().map(row => ({ ...row, ma5: 10.25, ma10: 10.5, ma20: 10.75, ma60: 11 }))
+  await render({ data })
+  chart.resetData.mockClear(); chart.scrollToRealTime.mockClear()
+  const toggle = async (label: string) => {
+    await act(async () => host.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!.click())
+  }
+  await toggle('隐藏 MA10')
+  expect(chart.overrideIndicator).toHaveBeenLastCalledWith(expect.objectContaining({ name: 'TSP_MA', figures: expect.any(Array) }))
+  expect(chart.overrideIndicator.mock.calls.at(-1)![0].figures.map((figure: { key: string }) => figure.key)).toEqual(['ma5', 'ma20', 'ma60'])
+  expect(host.querySelector('[aria-label="显示 MA10"]')?.getAttribute('aria-pressed')).toBe('false')
+  expect(host.textContent).toContain('MA10:10.50')
+  for (const period of [5, 20, 60]) await toggle(`隐藏 MA${period}`)
+  expect(chart.overrideIndicator.mock.calls.at(-1)![0].figures).toEqual([])
+  await toggle('显示 MA10')
+  expect(chart.overrideIndicator.mock.calls.at(-1)![0].figures.map((figure: { key: string }) => figure.key)).toEqual(['ma10'])
+  expect(chart.resetData).not.toHaveBeenCalled()
+  expect(chart.scrollToRealTime).not.toHaveBeenCalled()
+  await render({ data, symbol: 'B', period: '1w' })
+  expect(host.querySelector('[aria-label="隐藏 MA10"]')).not.toBeNull()
+  expect(host.querySelector('[aria-label="显示 MA5"]')).not.toBeNull()
   expect(engine.init).toHaveBeenCalledOnce()
 })

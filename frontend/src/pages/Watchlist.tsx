@@ -2069,6 +2069,7 @@ export function Watchlist({ assetType }: { assetType: WatchlistScope }) {
         name={previewName}
         onClose={closePreview}
         navList={previewNavList.length > 0 ? previewNavList : previewNavItems}
+        watchlistRows={sortedRows}
         onNavigate={(sym, n) => { setPreviewSymbol(sym); setPreviewName(n ?? '') }}
       />
 

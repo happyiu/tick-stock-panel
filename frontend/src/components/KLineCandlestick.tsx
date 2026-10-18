@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { dispose, init, registerIndicator, registerOverlay, type Chart, type Crosshair, type KLineData } from 'klinecharts'
+import { createPortal } from 'react-dom'
+import { dispose, init, registerIndicator, registerOverlay, type Chart, type Crosshair, type IndicatorFigure, type KLineData } from 'klinecharts'
 import { chartTheme, useTheme } from '@/lib/theme'
 import { fmtAssetPrice, fmtPct, priceDigits } from '@/lib/format'
 import {
@@ -29,10 +30,10 @@ const EMPTY: never[] = []
 const DEFAULT_COMPARE = { enabled: true, days: 1 }
 
 export function KLineCandlestick({
-  data, markers = EMPTY, ranges = EMPTY, priceLines = EMPTY, height = 480,
+  data, toolbarControls, markers = EMPTY, ranges = EMPTY, priceLines = EMPTY, height = 480,
   showMA = true, showInfoBar = true, showMarkers = true, stockInfo, symbol = '', linkedPrice,
   onDateClick, onPriceDoubleClick, visibleBars = 60, activeIndicators = EMPTY,
-  volumeCompare = DEFAULT_COMPARE, addedDate, assetType, period = '1d', selectedDate,
+  volumeCompare = DEFAULT_COMPARE, volumeCompareControls, addedDate, assetType, period = '1d', selectedDate,
   chanlunAnalysis, chanlunOverlay, hideCurrentDate = false,
   priceCurves = EMPTY, priceLabelWidth = 0, highlightedKey, onHighlightChange, showRangeSelector = false,
 }: CandlestickProps) {
@@ -41,6 +42,10 @@ export function KLineCandlestick({
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<Chart | null>(null)
   const [chartInstance, setChartInstance] = useState<Chart | null>(null)
+  const [volumePane, setVolumePane] = useState<HTMLElement | null>(null)
+  const hasVolumeControls = Boolean(volumeCompareControls)
+  const volumeControlsRef = useRef(hasVolumeControls)
+  volumeControlsRef.current = hasVolumeControls
   const userInteracted = useRef(false)
   const bars = useMemo(() => toChartBars(data, volumeCompare.days), [data, volumeCompare.days])
   const barsRef = useRef(bars)
@@ -77,9 +82,15 @@ export function KLineCandlestick({
   const precision = priceDigits(assetType)
   const price = (value: unknown) => fmtAssetPrice(typeof value === 'number' ? value : null, assetType)
   const [hover, setHover] = useState<{ symbol: string; date: string } | null>(null)
+  const [hiddenMaLines, setHiddenMaLines] = useState<string[]>(() => {
+    const saved = storage.stockPreviewHiddenMaLines.get([])
+    return Array.isArray(saved) ? ['ma5', 'ma10', 'ma20', 'ma60'].filter(key => saved.includes(key)) : []
+  })
+  useEffect(() => { storage.stockPreviewHiddenMaLines.set(hiddenMaLines) }, [hiddenMaLines])
   const hoverIndex = hover?.symbol === symbol ? bars.findIndex(bar => bar.date === hover.date) : -1
   const infoIndex = hoverIndex >= 0 ? hoverIndex : bars.length - 1
   const row = bars[infoIndex]
+
   const previous = bars[infoIndex - 1]
   const subKey = activeIndicators.filter(key => SUB_CHARTS.some(def => def.key === key)).join(',')
   subKeysRef.current = subKey.split(',').filter(Boolean)
@@ -142,7 +153,7 @@ export function KLineCandlestick({
     // 右侧分时在日K就绪后才展开，首次布局宽度会再次变化。
     const observer = new ResizeObserver(() => {
       chart.resize()
-      for (const key of subKeysRef.current) layoutSubPane(chart, key, element.clientWidth, headerHeights.current, paneHeights.current)
+      for (const key of subKeysRef.current) layoutSubPane(chart, key, element.clientWidth, headerHeights.current, paneHeights.current, undefined, volumeControlsRef.current)
       fitPaneHeights()
       // resize 的布局异步完成，下一帧才能读到新的绘图区宽度。
       cancelAnimationFrame(resizeFrame)
@@ -325,11 +336,18 @@ export function KLineCandlestick({
       else chart.createIndicator(options, true)
     }
     subKey.split(',').filter(Boolean).forEach((key, index) => {
-      layoutSubPane(chart, key, containerRef.current?.clientWidth ?? 600, headerHeights.current, paneHeights.current, index)
+      layoutSubPane(chart, key, containerRef.current?.clientWidth ?? 600, headerHeights.current, paneHeights.current, index, hasVolumeControls)
     })
+    setVolumePane(activeIndicators.includes('vol') && hasVolumeControls ? chart.getDom('tsp_vol', 'main') : null)
     fitPaneHeights()
     chart.resize()
-  }, [showMA, activeIndicators, volumeCompare.enabled, volumeCompare.days, period, theme])
+  }, [showMA, activeIndicators, volumeCompare.enabled, volumeCompare.days, period, theme, hasVolumeControls])
+
+  useEffect(() => {
+    if (!showMA || angel) return
+    const figures = chartIndicators.find(indicator => indicator.name === 'TSP_MA')!.figures!
+    chartRef.current?.overrideIndicator({ name: 'TSP_MA', figures: figures.filter(figure => !hiddenMaLines.includes(figure.key)) as IndicatorFigure[] })
+  }, [hiddenMaLines, showMA, angel])
 
   useEffect(() => {
     const chart = chartRef.current
@@ -491,7 +509,10 @@ export function KLineCandlestick({
   const turnover = row?.volume && stockInfo?.float_shares ? row.volume * 100 / stockInfo.float_shares * 100 : undefined
   return (
     <div className="w-full relative" onMouseLeave={() => { setHover(null); setStructureTooltip(null); onHighlightChange?.(null) }}>
-      <ChartDrawingToolbar chart={chartInstance} symbol={symbol} period={period} ready={bars.length > 0} hidden={hideCurrentDate} />
+      <div className="mb-2 flex flex-wrap items-start gap-x-3 gap-y-2">
+        {toolbarControls}
+        <ChartDrawingToolbar chart={chartInstance} symbol={symbol} period={period} ready={bars.length > 0} hidden={hideCurrentDate} />
+      </div>
       {showInfoBar && (
         <div className="mb-2 min-h-10 rounded-md border border-border/30 bg-base/20 px-2 font-mono text-xs" style={{ color: ct.text }}>
           {row && <>
@@ -510,7 +531,16 @@ export function KLineCandlestick({
             </div>
             <div className="flex min-h-5 flex-wrap items-center gap-x-2.5">
               {showMA && !angel && (['ma5', 'ma10', 'ma20', 'ma60'] as const).map(key => row[key] != null && (
-                <span key={key} style={{ color: COLORS[key] }}>{key.toUpperCase()}:{price(row[key])}</span>
+                <button
+                  key={key}
+                  type="button"
+                  aria-label={`${hiddenMaLines.includes(key) ? '显示' : '隐藏'} ${key.toUpperCase()}`}
+                  aria-pressed={!hiddenMaLines.includes(key)}
+                  title={`${hiddenMaLines.includes(key) ? '显示' : '隐藏'} ${key.toUpperCase()}均线`}
+                  onClick={() => setHiddenMaLines(previous => previous.includes(key) ? previous.filter(item => item !== key) : [...previous, key])}
+                  className={`rounded-sm transition-opacity hover:opacity-80 focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent ${hiddenMaLines.includes(key) ? 'opacity-40' : ''}`}
+                  style={{ color: COLORS[key] }}
+                >{key.toUpperCase()}:{price(row[key])}</button>
               ))}
               {boll && row.boll_upper != null && <span style={{ color: '#E879F9' }}>BOLL:{price(row.boll_upper)}/{price(row.ma20)}/{price(row.boll_lower)}</span>}
               {angelRows && ANGEL_DEVIL_MA.map(ma => angelRows[infoIndex]?.[ma.key] != null && (
@@ -524,6 +554,11 @@ export function KLineCandlestick({
         </div>
       )}
       <div className="relative w-full" style={{ height: chartHeight }}>
+        {volumePane && activeIndicators.includes('vol') && volumeCompareControls && createPortal(
+          <div className="absolute inset-x-0 top-7 z-10 flex h-[26px] items-center justify-end px-1" aria-label="成交量副图设置" onPointerDown={event => event.stopPropagation()} onWheel={event => event.stopPropagation()}>
+            {volumeCompareControls}
+          </div>, volumePane,
+        )}
         <div ref={containerRef} data-kline-chart className="h-full w-full" onDoubleClick={doubleClick}
           onPointerDown={() => { userInteracted.current = true }} onWheel={() => { userInteracted.current = true }} />
         {subKeysRef.current.length > 0 && <div
@@ -569,11 +604,11 @@ function chartPeriod(period: NonNullable<CandlestickProps['period']>) {
     : { span: 1, type: period === '1w' ? 'week' as const : period === '1mo' ? 'month' as const : 'day' as const }
 }
 
-function layoutSubPane(chart: Chart, key: string, width: number, headers: Map<string, number>, heights: Map<string, number>, order?: number) {
+function layoutSubPane(chart: Chart, key: string, width: number, headers: Map<string, number>, heights: Map<string, number>, order?: number, volumeControls = false) {
   const paneId = `tsp_${key.replaceAll('-', '_')}`
   const def = SUB_CHARTS.find(d => d.key === key)
   if (!def || !chart.getDom(paneId)) return
-  const header = formulaHeaderHeight(key, chart.getSize(paneId, 'main')?.width ?? width)
+  const header = formulaHeaderHeight(key, chart.getSize(paneId, 'main')?.width ?? width) + (key === 'vol' && volumeControls ? 26 : 0)
   if (order == null && headers.get(key) === header) return
   headers.set(key, header)
   chart.setPaneOptions({ id: paneId, height: (heights.get(key) ?? def.height) + header, minHeight: header + 50, ...(order == null ? {} : { order: order + 1 }), dragEnabled: true })

@@ -425,12 +425,8 @@ export function StockDailyKChart({
   if (activeSubDefs.length > 0) subExtraH += activeSubDefs.length * SUB_GAP + 14
   const chartHeight = height + subExtraH
 
-  if (!symbol) return null
-
-  return (
-    <div className={`rounded-card border border-border/60 bg-surface/40 p-3 ${className ?? ''}`} style={{ minHeight: height }}>
-      {(showIndicatorControls || selectedStrategy || (selectedSignals?.length ?? 0) > 0) && rows.length > 0 && (
-        <div className="mb-2">
+  const toolbarControls = ((showIndicatorControls || selectedStrategy || (selectedSignals?.length ?? 0) > 0) && rows.length > 0 && (
+        <div className="max-w-full flex-none">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           {showIndicatorControls && (<>
             <ChartIndicatorMenu allowMA={showMA} activeIndicators={showMA && maVisible ? ['ma', ...activeIndicators] : activeIndicators} onToggle={toggleIndicator} />
@@ -492,37 +488,7 @@ export function StockDailyKChart({
               )}
             </div>
           )}
-          {activeIndicators.includes('vol') && (
-            <div className="ml-0.5 flex h-6 items-center gap-1.5 border-l border-border/40 pl-2">
-              <span className="text-[10px] text-muted">量比</span>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={volumeCompare.enabled}
-                aria-label="开启量能对比"
-                title={volumeCompare.enabled ? '关闭量能对比' : '开启量能对比'}
-                onClick={() => updateVolumeCompare({ enabled: !volumeCompare.enabled })}
-                className={`relative h-3.5 w-6 shrink-0 rounded-full transition-colors ${
-                  volumeCompare.enabled ? 'bg-accent' : 'bg-elevated'
-                }`}
-              >
-                <span className={`absolute left-0 top-0.5 h-2.5 w-2.5 rounded-full bg-white transition-transform ${
-                  volumeCompare.enabled ? 'translate-x-3' : 'translate-x-0.5'
-                }`} />
-              </button>
-              <select
-                aria-label="量能对比周期"
-                value={volumeCompare.days}
-                disabled={!volumeCompare.enabled}
-                onChange={event => updateVolumeCompare({ days: Number(event.target.value) })}
-                className="h-6 rounded-md border border-border/40 bg-base/40 px-1 text-[10px] text-secondary outline-none disabled:opacity-40"
-              >
-                {Array.from({ length: 20 }, (_, index) => index + 1).map(days => (
-                  <option key={days} value={days}>前{days}日均量</option>
-                ))}
-              </select>
-            </div>
-          )}
+
           {showMarkerToggle && effectiveShowLimitMarkers && (
             <button
               onClick={() => setShowMarkers(v => !v)}
@@ -612,7 +578,14 @@ export function StockDailyKChart({
           )}
           </div>
         </div>
-      )}
+      )
+  )
+
+  if (!symbol) return null
+
+  return (
+    <div className={`rounded-card border border-border/60 bg-surface/40 p-3 ${className ?? ''}`} style={{ minHeight: height }}>
+
       {kline.isLoading && <div className="text-sm text-muted py-4">加载中…</div>}
       {kline.isError && <div className="text-sm text-danger py-2">K线加载失败</div>}
       {!kline.isLoading && !kline.isError && displayRawRows.length === 0 && (
@@ -626,6 +599,7 @@ export function StockDailyKChart({
       {rows.length > 0 && (
         <KLineCandlestick
           data={rows}
+          toolbarControls={toolbarControls}
           period={period}
           markers={allMarkers}
           ranges={ranges}
@@ -648,6 +622,37 @@ export function StockDailyKChart({
           visibleBars={visibleBars}
           activeIndicators={activeIndicators}
           volumeCompare={volumeCompare}
+          volumeCompareControls={
+            <div className="flex h-6 items-center gap-1.5">
+              <span className="text-[10px] text-muted">量比</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={volumeCompare.enabled}
+                aria-label="开启量能对比"
+                title={volumeCompare.enabled ? '关闭量能对比' : '开启量能对比'}
+                onClick={() => updateVolumeCompare({ enabled: !volumeCompare.enabled })}
+                className={`relative h-3.5 w-6 shrink-0 rounded-full transition-colors ${
+                  volumeCompare.enabled ? 'bg-accent' : 'bg-elevated'
+                }`}
+              >
+                <span className={`absolute left-0 top-0.5 h-2.5 w-2.5 rounded-full bg-white transition-transform ${
+                  volumeCompare.enabled ? 'translate-x-3' : 'translate-x-0.5'
+                }`} />
+              </button>
+              <select
+                aria-label="量能对比周期"
+                value={volumeCompare.days}
+                disabled={!volumeCompare.enabled}
+                onChange={event => updateVolumeCompare({ days: Number(event.target.value) })}
+                className="h-6 rounded-md border border-border/40 bg-base px-1 text-[10px] text-secondary outline-none [color-scheme:light] dark:[color-scheme:dark] disabled:opacity-40"
+              >
+                {Array.from({ length: 20 }, (_, index) => index + 1).map(days => (
+                  <option key={days} value={days} className="bg-base text-secondary">前{days}日均量</option>
+                ))}
+              </select>
+            </div>
+          }
           addedDate={showAddedMark ? addedDate : null}
           chanlunAnalysis={chanlunAnalysis}
           chanlunOverlay={chanlunOverlay}

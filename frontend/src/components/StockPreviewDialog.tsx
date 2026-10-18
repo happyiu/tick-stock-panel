@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, RefreshCw, Clock, Gamepad2, LineChart, Star, RadioTower, Maximize2, Minimize2, Activity, ChevronLeft, ChevronRight, ArrowLeftRight } from 'lucide-react'
+import { X, RefreshCw, Clock, Gamepad2, LineChart, Star, RadioTower, Maximize2, Minimize2, Activity, ArrowLeftRight } from 'lucide-react'
 import { api, type KlinePeriod, type KlineRow, type StrategyDetail } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { cn } from '@/lib/cn'
@@ -9,6 +9,7 @@ import { cnSignal, type ChartSignalSelection } from '@/lib/signals'
 import { useCustomSignalNames } from '@/lib/useCustomSignalNames'
 import { fmtAssetPrice, fmtPct, cnDateFromUtc } from '@/lib/format'
 import { StockPanel } from '@/components/StockPanel'
+import { StockPreviewWatchlist, type PreviewWatchlistRow } from '@/components/StockPreviewWatchlist'
 import { WatchlistAddMenu } from '@/components/WatchlistAddMenu'
 import { StockMultiDayIntradayChart } from '@/components/StockMultiDayIntradayChart'
 import { DatePicker } from '@/components/DatePicker'
@@ -45,8 +46,10 @@ interface Props {
     message?: string
     asset_type?: 'stock' | 'etf' | 'index'
   } | null
-  /** 有序候选列表: 提供后支持左右键/顶栏按钮切股, 标题栏显示 n/N */
+  /** 有序候选列表: 提供后支持左右键切股和邻近预取 */
   navList?: NavItem[]
+  /** 打开详情前自选页当前展示的列表，行情与来源页面共享。 */
+  watchlistRows?: PreviewWatchlistRow[]
   /** 切股回调: 收到目标 symbol/name, 由调用方更新预览状态 */
   onNavigate?: (symbol: string, name?: string) => void
 }
@@ -85,6 +88,12 @@ interface PriceAlertDraft {
   currentPrice: number
 }
 const INTRADAY_DAY_OPTIONS = [1, 5, 10, 20] as const
+const DEFAULT_VISIBLE_BARS: Record<KlinePeriod, number> = {
+  '30m': 80,
+  '1d': 100,
+  '1w': 100,
+  '1mo': 60,
+}
 const DIALOG_MIN_WIDTH = 640
 const DIALOG_MIN_HEIGHT = 360
 const DIALOG_VIEWPORT_GAP = 12
@@ -233,7 +242,7 @@ function fmtQuoteTime(timestampMs: number | null | undefined): string {
   }).format(new Date(timestampMs))
 }
 
-export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList: navListSource, onNavigate }: Props) {
+export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList: navListSource, watchlistRows, onNavigate }: Props) {
   const [view, setView] = useState<PreviewView>('daily')
   const [assetType, setAssetType] = useState<'stock' | 'etf' | 'index' | undefined>(triggerInfo?.asset_type)
   const [intradayDays, setIntradayDays] = useState<number | null>(loadIntradayDays)
@@ -517,7 +526,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
   // ===== 切股导航 =====
   const navList = useMemo(() => uniqueNavItems(navListSource ?? []), [navListSource])
 
-  // 当前 symbol 在 navList 中的位置 (不在列表则为 -1, 此时不显示计数/按钮)
+  // 当前 symbol 在 navList 中的位置 (不在列表则为 -1, 此时禁用键盘切股)
   const navIdx = navList.findIndex(n => n.symbol === symbol)
   const navTotal = navList.length
   const navEnabled = navTotal >= 2 && navIdx >= 0
@@ -855,33 +864,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                   <span>行情更新 {fmtQuoteTime(quoteStatus?.last_fetch_ms)}</span>
                 </span>
 
-                {/* 切股导航: 上一只 / n·N / 下一只 */}
-                {navEnabled && (
-                  <>
-                    <span className="mx-0.5 shrink-0 text-muted/20">|</span>
-                    <button
-                      onClick={() => go(-1)}
-                      disabled={findFeelLocked}
-                      title="上一只 (←)"
-                      aria-label="上一只"
-                      className="p-1 rounded-btn text-secondary hover:text-foreground hover:bg-elevated transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      <ChevronLeft className="h-3.5 w-3.5" />
-                    </button>
-                    <span className="shrink-0 font-mono text-[11px] text-secondary tabular-nums whitespace-nowrap">
-                      {navIdx + 1} / {navTotal}
-                    </span>
-                    <button
-                      onClick={() => go(1)}
-                      disabled={findFeelLocked}
-                      title="下一只 (→)"
-                      aria-label="下一只"
-                      className="p-1 rounded-btn text-secondary hover:text-foreground hover:bg-elevated transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      <ChevronRight className="h-3.5 w-3.5" />
-                    </button>
-                  </>
-                )}
+
               </div>
 
               <div className="flex shrink-0 items-center gap-1">
@@ -1173,7 +1156,9 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
             })()}
 
             {/* 图表内容 */}
-            <div className={cn('relative flex-1 min-h-0 px-4 pb-4 pt-2', view === 'daily' ? 'overflow-hidden' : 'overflow-auto')}>
+            <div className={cn('flex flex-1 min-h-0 min-w-0 pr-4', !watchlistRows && 'pl-4')}>
+              {watchlistRows && <StockPreviewWatchlist rows={watchlistRows} symbol={symbol} onNavigate={onNavigate} disabled={findFeelLocked} />}
+            <div className={cn('relative flex-1 min-h-0 min-w-0 pb-4 pt-2', view === 'daily' ? 'overflow-hidden' : 'overflow-auto')}>
               {view === 'daily' ? (
                 <div className={cn(
                   'flex h-full min-h-0 min-w-0 gap-3',
@@ -1209,7 +1194,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                     <StockPanel
                       symbol={symbol}
                       height={420}
-                      visibleBars={120}
+                      visibleBars={DEFAULT_VISIBLE_BARS[period]}
                       // 日K视图右侧展示跟随当前周期的技术指标卡片。
                       showIntraday
                       rightPaneMode="technical"
@@ -1265,6 +1250,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
               )}
             </div>
 
+            </div>
             {/* 扩展插槽: 对话框底部二开区 (无注册时不渲染) */}
             <div className="shrink-0">
               <ExtensionSlot

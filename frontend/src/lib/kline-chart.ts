@@ -1,4 +1,5 @@
 import type { IndicatorTemplate, KLineData } from 'klinecharts'
+import type { ReactNode } from 'react'
 import { BUILTIN_MAIN_INDICATORS, BUILTIN_SUB_INDICATORS } from './kline-chart-builtins'
 import type { KlinePeriod } from './api'
 import type { ChanlunAnalysis } from './chanlun'
@@ -69,6 +70,7 @@ export interface ChartPriceCurve {
 
 export interface CandlestickProps {
   data: OHLC[]
+  toolbarControls?: ReactNode
   period?: KlinePeriod
   markers?: ChartMarker[]
   ranges?: ChartRange[]
@@ -92,6 +94,7 @@ export interface CandlestickProps {
   visibleBars?: number | 'all'
   activeIndicators?: string[]
   volumeCompare?: VolumeCompareConfig
+  volumeCompareControls?: ReactNode
   addedDate?: string | null
   assetType?: string
   chanlunAnalysis?: ChanlunAnalysis

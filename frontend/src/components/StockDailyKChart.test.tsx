@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { StockDailyKChart } from './StockDailyKChart'
+import type { CandlestickProps } from '@/lib/kline-chart'
 
 vi.mock('@tanstack/react-query', () => ({
   useQuery: ({ queryKey }: { queryKey: string[] }) => ({
@@ -14,8 +15,8 @@ vi.mock('@tanstack/react-query', () => ({
 }))
 vi.mock('./KLineCandlestick', async importOriginal => ({
   ...await importOriginal<typeof import('./KLineCandlestick')>(),
-  KLineCandlestick: ({ activeIndicators, period, showMA }: { activeIndicators: string[]; period?: string; showMA?: boolean }) =>
-    <div data-indicators={activeIndicators.join(',')} data-period={period} data-show-ma={String(showMA)} />,
+  KLineCandlestick: ({ activeIndicators = [], period, showMA, toolbarControls, volumeCompareControls }: CandlestickProps) =>
+    <div data-indicators={activeIndicators.join(',')} data-period={period} data-show-ma={String(showMA)}>{toolbarControls}{activeIndicators.includes('vol') && volumeCompareControls}</div>,
 }))
 
 let host: HTMLDivElement
@@ -39,6 +40,23 @@ async function click(text: string) {
 async function render(symbol = '510300.SH') {
   await act(async () => root.render(<StockDailyKChart symbol={symbol} />))
 }
+
+it('量比控件传入成交量副图，周期和开关沿用原有持久化，关闭副图时不残留', async () => {
+  await render()
+  expect(host.querySelectorAll('[aria-label="开启量能对比"]')).toHaveLength(1)
+  expect(host.querySelector('[data-indicators] [aria-label="量能对比周期"]')).not.toBeNull()
+  const select = host.querySelector<HTMLSelectElement>('[aria-label="量能对比周期"]')!
+  await act(async () => { select.value = '5'; select.dispatchEvent(new Event('change', { bubbles: true })) })
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="开启量能对比"]')!.click())
+  expect(select.disabled).toBe(true)
+  await act(async () => root.render(null))
+  await render('159915.SZ')
+  expect(host.querySelector('[aria-label="开启量能对比"]')?.getAttribute('aria-checked')).toBe('false')
+  expect(host.querySelector<HTMLSelectElement>('[aria-label="量能对比周期"]')?.value).toBe('5')
+  await click('指标'); await click('副图')
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="成交量"]')!.click())
+  expect(host.querySelector('[aria-label="量能对比周期"]')).toBeNull()
+})
 
 it('指标按主图叠加和副图分类，切换主图不改变已有副图，关闭恢复默认', async () => {
   localStorage.setItem('stock_preview_sub_charts', JSON.stringify(['vol', 'macd']))

@@ -136,6 +136,7 @@ export const storage = {
 
   /** MA原本默认显示；独立保存开关，兼容不含MA的旧主图数组。 */
   stockPreviewMaVisible: kv<boolean>('stock_preview_ma_visible'),
+  stockPreviewHiddenMaLines: kv<string[]>('stock_preview_hidden_ma_lines'),
 
   /** K线主图叠加指标，与已有副图设置独立保存。 */
   stockPreviewMainCharts: kv<string[]>('stock_preview_main_charts'),

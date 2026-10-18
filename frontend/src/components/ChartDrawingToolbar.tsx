@@ -115,7 +115,7 @@ export function ChartDrawingToolbar({ chart, symbol, period, ready, hidden }: {
   }
   const buttonClass = 'inline-flex h-6 items-center justify-center gap-1 rounded border border-border/40 px-2 text-[10px] text-muted hover:bg-elevated hover:text-foreground aria-pressed:bg-accent/10 aria-pressed:text-accent aria-pressed:border-accent/40 disabled:opacity-40 disabled:cursor-not-allowed'
   return (
-    <div className="mb-2 flex flex-wrap items-center gap-1" aria-label="画线工具栏">
+    <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-1" aria-label="画线工具栏">
       <div className="relative" onBlur={event => {
         if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false)
       }} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); setOpen(false) } }}>
@@ -142,7 +142,7 @@ export function ChartDrawingToolbar({ chart, symbol, period, ready, hidden }: {
       <button type="button" className={buttonClass} disabled={!count && !tool} title="仅清空当前标的和周期的手动画线" onClick={() => {
         cancel(); chart?.removeOverlay({ groupId: DRAWING_GROUP }); setSelected(null); setLocked(false); callbacks.current?.save()
       }}><X className="h-3 w-3" />清空</button>
-      <span role="status" className="text-[10px] text-muted">{error ?? (tool ? `${DRAWING_TOOLS.find(item => item.name === tool)?.label} · Esc取消` : `${count} 条 · 自动保存`)}</span>
+      <span role="status" className="whitespace-nowrap text-[10px] text-muted">{error ?? (tool ? `${DRAWING_TOOLS.find(item => item.name === tool)?.label} · Esc取消` : `${count} 条`)}</span>
     </div>
   )
 }
