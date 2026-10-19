@@ -129,7 +129,6 @@ class LoginIn(BaseModel):
 
 
 class ChangePasswordIn(BaseModel):
-    old_password: str = Field(min_length=1, max_length=128)
     new_password: str = Field(min_length=6, max_length=128)
 
 
@@ -206,22 +205,13 @@ def logout(request: Request, response: Response) -> dict:
 
 @router.post("/change-password")
 def change_password(req: ChangePasswordIn, request: Request) -> dict:
-    """修改密码: 需验证旧密码, 成功后所有会话失效(含当前, 需重新登录)。"""
+    """修改密码: 需已登录, 成功后所有会话失效(含当前, 需重新登录)。"""
     token = request.cookies.get(COOKIE_NAME)
     if not (token and auth.is_valid_session(token)):
         raise HTTPException(status_code=401, detail="请先登录")
 
     if not auth.is_configured():
         raise HTTPException(status_code=409, detail="尚未设置访问密码")
-
-    # 验证旧密码
-    new_token = auth.verify_and_create_session(req.old_password)
-    if not new_token:
-        ip = _client_ip(request)
-        _record_login_fail(ip)
-        raise HTTPException(status_code=401, detail="旧密码错误")
-    # 临时 token 用完即弃
-    auth.revoke_session(new_token)
 
     # 改密码(set_password 会清空所有会话)
     auth.set_password(req.new_password)

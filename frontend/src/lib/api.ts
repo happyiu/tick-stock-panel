@@ -1,3 +1,4 @@
+import type { PaperTradingStepMinutes } from '@/lib/paper-trading-time'
 // 后端 API 客户端 — 全项目统一入口
 //
 // Dev: Vite 按启动脚本解析出的 BACKEND_HOST/BACKEND_PORT 代理 /api
@@ -315,7 +316,7 @@ export interface KlineRow {
   [key: string]: any
 }
 
-export type TechnicalScoreKind = 'direction' | 'risk' | 'activity' | 'position'
+export type TechnicalScoreKind = 'direction' | 'position'
 
 export type TechnicalMacdState =
   | 'STRONG_BULL'
@@ -462,8 +463,6 @@ export interface TechnicalScoreIndicator {
   id: string
   name: string
   score: number | null
-  group?: 'volatility' | 'downside' | 'extreme' | string
-  score_label?: string
   value?: number | null
   weight: number | null
   status: string
@@ -515,16 +514,6 @@ export interface TechnicalScoreCategory {
   phase?: string
   alert?: string | null
   conclusion?: string
-  oversold_score?: number | null
-  overheat_score?: number | null
-  volatility_score?: number | null
-  volatility_coverage?: number
-  downside_score?: number | null
-  downside_coverage?: number
-  volatility_weight?: number
-  downside_weight?: number
-  risk_change_5?: number | null
-  risk_trend?: string | null
   indicators: TechnicalScoreIndicator[]
 }
 
@@ -537,21 +526,15 @@ export interface TechnicalScoreRow {
   momentum: number | null
   volume_price: number | null
   state_confirmation?: number | null
-  volatility_risk: number | null
-  activity: number | null
   available: boolean
   category_direction_score?: number | null
   category_direction_coverage?: number
   direction_available?: boolean
-  category_risk_score?: number | null
-  risk_available?: boolean
-  category_activity_score?: number | null
-  activity_available?: boolean
   categories?: TechnicalScoreCategory[]
 }
 
 export interface TechnicalScores {
-  version: 'technical-score-v1' | 'technical-score-v2' | 'technical-score-v3' | 'technical-score-v4' | 'technical-score-v5' | 'technical-score-v6' | 'technical-score-v7' | 'technical-score-v8' | string
+  version: 'technical-score-v1' | 'technical-score-v2' | 'technical-score-v3' | 'technical-score-v4' | 'technical-score-v5' | 'technical-score-v6' | 'technical-score-v7' | 'technical-score-v8' | 'technical-score-v9' | 'technical-score-v10' | string
   rows: TechnicalScoreRow[]
 }
 
@@ -2537,6 +2520,7 @@ export interface Preferences {
   limit_ladder_monitor_enabled: boolean
   depth_polling_interval: number
   depth_finalize_time: { hour: number; minute: number }
+  timeline_schedule: PaperTradingTimelineSettings | null
   seekhub_daily_prompt: string
   seekhub_daily_prompts: Record<string, string>
   review_schedule: { enabled: boolean; hour: number; minute: number }
@@ -2847,6 +2831,19 @@ export interface SectorRotationUniverseItem {
   excluded?: boolean
 }
 
+export type PaperTradingTimelineCustomPoint = {
+  id: number
+  time: string
+  description: string
+  timerMethod: string
+}
+
+export type PaperTradingTimelineSettings = {
+  stepMinutes: PaperTradingStepMinutes
+  timerMethods: string[]
+  customPoints: PaperTradingTimelineCustomPoint[]
+}
+
 export interface TimelineExecution {
   id: string
   timeline_date: string
@@ -2973,10 +2970,10 @@ export const api = {
     }),
   authLogout: () =>
     request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
-  authChangePassword: (oldPassword: string, newPassword: string) =>
+  authChangePassword: (newPassword: string) =>
     request<{ ok: boolean }>('/api/auth/change-password', {
       method: 'POST',
-      body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+      body: JSON.stringify({ new_password: newPassword }),
     }),
 
   settings: () => request<SettingsState>('/api/settings'),
@@ -3357,6 +3354,10 @@ export const api = {
     request<{ hour: number; minute: number }>('/api/settings/preferences/instruments-schedule', {
       method: 'PUT',
       body: JSON.stringify({ hour, minute }),
+    }),
+  updateTimelineSchedule: (config: PaperTradingTimelineSettings, prompts: Record<string, string>) =>
+    request<PaperTradingTimelineSettings>('/api/settings/preferences/timeline-schedule', {
+      method: 'PUT', body: JSON.stringify({ ...config, prompts }),
     }),
   updateSeekhubDailyPrompt: (method: string, prompt: string) =>
     request<{ method: string; prompt: string }>('/api/settings/preferences/seekhub-daily-prompt', {

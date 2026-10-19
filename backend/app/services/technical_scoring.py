@@ -4,8 +4,7 @@
 引擎的截面评分. 模块只生成运行时列, 不修改持久化数据.
 
 评分只使用已有图表指标: MA, MACD, RSI, KDJ, momentum/ROC, 量比,
-ATR, BOLL 和 K 线成交额. 旧版顶层字段形状保持兼容; v8 另外输出 ETF 优先的
-类别/子指标评分, 方向、市场风险和成交活跃度彼此独立.
+ATR 和 BOLL. v10 输出 ETF 优先的方向及价格位置类别/子指标评分.
 """
 from __future__ import annotations
 
@@ -19,7 +18,7 @@ import polars as pl
 
 from app.indicators.pipeline import compute_indicators
 
-TECHNICAL_SCORE_VERSION = "technical-score-v8"
+TECHNICAL_SCORE_VERSION = "technical-score-v10"
 
 # 供 API/前端使用的运行时列. 列名带 technical_ 前缀, 避免与策略 score 混淆.
 TECHNICAL_SCORE_COLUMNS = (
@@ -30,23 +29,17 @@ TECHNICAL_SCORE_COLUMNS = (
     "technical_momentum_score",
     "technical_volume_price_score",
     "technical_state_confirmation_score",
-    "technical_volatility_risk",
-    "technical_activity_score",
     "technical_score_available",
     "technical_category_direction_score",
     "technical_category_direction_coverage",
     "technical_category_direction_available",
-    "technical_category_risk_score",
-    "technical_category_risk_available",
-    "technical_category_activity_score",
-    "technical_category_activity_available",
 )
 
 # 分类详情只在单次请求的运行时帧中传递, API 返回 K 线 rows 前会移除。
 # 这样评分列和详情 payload 共用同一次分类计算, 避免复杂动能分析重复执行。
 TECHNICAL_SCORE_INTERNAL_COLUMNS = ("_technical_score_categories",)
 
-# 方向分的顶层权重; ATR/BOLL 只参与独立风险分, 活跃度并入量价分.
+# 方向分的顶层权重.
 _DIRECTION_WEIGHTS = {
     "trend": 0.35,
     "momentum": 0.30,
@@ -81,19 +74,6 @@ _CATEGORY_INDICATOR_WEIGHTS = {
         "price_volume": 0.40,
         "obv": 0.30,
     },
-    "volatility_risk": {
-        # 波动风险组内部权重 40/40/20; 下行风险组内部权重 60/40.
-        "atr_relative": 0.40,
-        "realized_volatility": 0.40,
-        "boll_width_relative": 0.20,
-        "ma20_deviation_risk": None,
-        "downside_volatility": 0.60,
-        "rolling_drawdown": 0.40,
-    },
-    "activity": {
-        "amount_ratio_20": 0.60,
-        "amount_ma5_ma20": 0.40,
-    },
 }
 
 _CATEGORY_META = {
@@ -101,8 +81,6 @@ _CATEGORY_META = {
     "momentum": {"name": "动能", "kind": "direction", "weight": 0.30},
     "volume_price": {"name": "量价确认", "kind": "direction", "weight": 0.20},
     "price_position": {"name": "价格位置", "kind": "position", "weight": None},
-    "volatility_risk": {"name": "市场风险", "kind": "risk", "weight": None},
-    "activity": {"name": "成交活跃度", "kind": "activity", "weight": None},
 }
 
 _REQUIRED_INDICATORS = {
@@ -144,32 +122,6 @@ _OBV_TREND_SCORES = {
     "STRONG_OUTFLOW": 10.0,
 }
 
-_RISK_HISTORY_WINDOW = 250
-_RISK_MIN_HISTORY = 20
-_BOLL_CHANGE_WINDOW = 5
-_DOWNSIDE_VOLATILITY_WINDOW = 20
-_DRAWDOWN_SHORT_WINDOW = 20
-_DRAWDOWN_MEDIUM_WINDOW = 60
-_RISK_GROUP_WEIGHTS = {
-    "volatility": 0.45,
-    "downside": 0.55,
-}
-_RISK_GROUP_INDICATOR_IDS = {
-    "volatility": ("atr_relative", "realized_volatility", "boll_width_relative"),
-    "downside": ("downside_volatility", "rolling_drawdown"),
-}
-_RISK_PERCENTILE_ANCHORS = (
-    (0.0, 10.0),
-    (50.0, 10.0),
-    (60.0, 20.0),
-    (70.0, 30.0),
-    (80.0, 45.0),
-    (85.0, 55.0),
-    (90.0, 68.0),
-    (95.0, 82.0),
-    (98.0, 92.0),
-    (100.0, 100.0),
-)
 
 _MACD_STATE_LABELS = {
     "STRONG_BULL": "强多",
@@ -385,19 +337,6 @@ class _RocContext:
     pivots: dict[tuple[int, str], list[int]]
 
 
-@dataclass(frozen=True)
-class _RiskMetricContext:
-    """一次评分请求内复用的风险基础序列, 避免逐日期重复扫描历史窗口."""
-
-    atr_pct: list[float | None]
-    realized_volatility: list[float | None]
-    boll_width: list[float | None]
-    downside_volatility: list[float | None]
-    drawdown_20: list[float | None]
-    drawdown_60: list[float | None]
-    negative_return_count: list[int]
-
-
 def _number(value: object) -> float | None:
     if value is None or value == "":
         return None
@@ -499,24 +438,6 @@ def _window_consistency(records: list[dict], index: int) -> float:
         prior = _number(previous.get(key))
         values.append(_sign_score(current - prior) if current is not None and prior is not None else None)
     return _consistency_score(values)
-
-
-def _relative_level_score(relative: float | None) -> float | None:
-    """历史相对水平 -> 波动风险分.
-
-    采用固定线性映射而非截面 min-max, 保证同一标的在不同日期和不同数据集上可比.
-    历史中位数为 50 分, 相对水平每增加 1 倍提高 50 分.
-    """
-    if relative is None or relative < 0 or not math.isfinite(relative):
-        return None
-    return _clamp(50.0 + (relative - 1.0) * 50.0)
-
-
-def _activity_level_score(relative: float | None) -> float | None:
-    """相对量能 -> 活跃度分; 1x 为常态 50 分."""
-    if relative is None or relative < 0 or not math.isfinite(relative):
-        return None
-    return _clamp(50.0 + (relative - 1.0) * 50.0)
 
 
 def _rsi_score(value: float | None) -> float | None:
@@ -1965,60 +1886,6 @@ def _volume_price_score(records: list[dict], index: int) -> tuple[float | None, 
     return analysis["score"], analysis["coverage"]
 
 
-def _volatility_risk(records: list[dict], index: int) -> float | None:
-    return _risk_category_score(records, index)
-
-
-def _activity_metrics(records: list[dict], index: int) -> dict[str, float | None]:
-    """Return the two amount-based activity ratios used by every score surface."""
-    amount = _number(records[index].get("amount"))
-    previous_amounts = [_number(item.get("amount")) for item in records[max(0, index - 20):index]]
-    amount_average = (
-        sum(value for value in previous_amounts if value is not None) / len(previous_amounts)
-        if len(previous_amounts) == 20 and all(value is not None for value in previous_amounts)
-        else None
-    )
-    amount_ratio = (
-        amount / amount_average
-        if amount is not None and amount > 0 and amount_average is not None and amount_average > 0
-        else None
-    )
-
-    amount_values_5 = [_number(item.get("amount")) for item in records[max(0, index - 4):index + 1]]
-    amount_values_20 = [_number(item.get("amount")) for item in records[max(0, index - 19):index + 1]]
-    amount_ma5 = (
-        sum(value for value in amount_values_5 if value is not None) / len(amount_values_5)
-        if len(amount_values_5) == 5 and all(value is not None for value in amount_values_5)
-        else None
-    )
-    amount_ma20 = (
-        sum(value for value in amount_values_20 if value is not None) / len(amount_values_20)
-        if len(amount_values_20) == 20 and all(value is not None for value in amount_values_20)
-        else None
-    )
-    amount_ma_ratio = (
-        amount_ma5 / amount_ma20
-        if amount_ma5 is not None and amount_ma20 is not None and amount_ma20 > 0
-        else None
-    )
-    return {
-        "amount": amount,
-        "amount_average": amount_average,
-        "amount_ratio": amount_ratio,
-        "amount_ma5": amount_ma5,
-        "amount_ma20": amount_ma20,
-        "amount_ma_ratio": amount_ma_ratio,
-    }
-
-
-def _activity_score(records: list[dict], index: int) -> float | None:
-    metrics = _activity_metrics(records, index)
-    amount_score = _activity_level_score(metrics["amount_ratio"])
-    amount_ma_score = _activity_level_score(metrics["amount_ma_ratio"])
-    score, _ = _weighted_mean(((amount_score, 0.60), (amount_ma_score, 0.40)))
-    return score
-
-
 def _median(values: Iterable[float]) -> float | None:
     ordered = sorted(value for value in values if math.isfinite(value))
     if not ordered:
@@ -2048,22 +1915,6 @@ def _score_status(score: float | None, *, high: str = "偏强", low: str = "偏�
     if score <= 40:
         return low
     return "中性"
-
-
-def _activity_indicator_status(
-    score: float | None,
-    *,
-    high: str,
-    low: str,
-    middle: str,
-) -> str:
-    if score is None:
-        return "数据不足"
-    if score >= 60:
-        return high
-    if score <= 40:
-        return low
-    return middle
 
 
 def _trend_score_status(score: float | None) -> str:
@@ -3028,671 +2879,6 @@ def _momentum_category_conclusion(category: dict) -> str:
     else:
         summary = "当前动能处于中性区间, 需观察各指标是否形成一致方向。"
     return f"{evidence}, {summary}" if evidence else summary
-
-
-def _activity_category_status(score: float | None) -> str:
-    if score is None:
-        return "数据不足"
-    if score >= 60:
-        return "市场参与度较高"
-    if score <= 40:
-        return "市场参与度较低"
-    return "市场参与度中等"
-
-
-def _activity_category_conclusion(category: dict) -> str:
-    score = _number(category.get("score"))
-    if score is None:
-        return "成交活跃度数据不足, 暂无法形成市场参与度结论。"
-
-    statuses = {
-        str(indicator.get("id")): indicator.get("status")
-        for indicator in category.get("indicators", [])
-    }
-    evidence = []
-    amount_status = statuses.get("amount_ratio_20")
-    trend_status = statuses.get("amount_ma5_ma20")
-    if amount_status not in {None, "数据不足"}:
-        evidence.append(f"近期{amount_status}")
-    if trend_status not in {None, "数据不足"}:
-        evidence.append(str(trend_status))
-    evidence.append(_activity_category_status(score))
-    return ", ".join(evidence) + "。成交活跃度只反映市场参与程度, 不代表涨跌方向。"
-
-
-def _risk_category_status(score: float | None) -> str:
-    if score is None:
-        return "数据不足"
-    if score >= 75.0:
-        return "风险偏高"
-    if score >= 60.0:
-        return "风险中等偏高"
-    if score >= 40.0:
-        return "风险中性"
-    if score >= 25.0:
-        return "风险中等偏低"
-    return "风险偏低"
-
-
-def _risk_category_conclusion(category: dict, analysis: dict) -> str:
-    score = _number(category.get("score"))
-    if score is None:
-        return "市场风险数据不足, 暂无法形成波动与下行风险结论。"
-
-    volatility_score = _number(category.get("volatility_score"))
-    if volatility_score is None:
-        percentile_scores = [
-            _percentile_to_risk_score(value)
-            for value in (analysis.get("atr_percentile"), analysis.get("realized_vol_percentile"))
-        ]
-        available_scores = [value for value in percentile_scores if value is not None]
-        volatility_score = sum(available_scores) / len(available_scores) if available_scores else None
-    volatility = (
-        "整体波动明显偏高" if volatility_score is not None and volatility_score >= 70.0
-        else "整体波动偏高但未失控" if volatility_score is not None and volatility_score >= 55.0
-        else "整体波动略高但未失控" if volatility_score is not None and volatility_score >= 35.0
-        else "整体波动处于正常范围" if volatility_score is not None
-        else "波动数据不足"
-    )
-
-    boll_status = (analysis.get("boll") or {}).get("status")
-    if boll_status and ("扩张" in boll_status or "收缩" in boll_status):
-        volatility += f", {boll_status}"
-
-    distance = analysis.get("distance_atr")
-    if distance is None:
-        deviation = "价格乖离数据不足"
-    elif distance <= -1.0:
-        deviation = f"价格已偏离 MA20 约 {distance:+.2f} ATR, 处于明显超跌区, 需关注超跌修复"
-    elif distance < -0.25:
-        deviation = f"价格位于 MA20 下方, 乖离 {distance:+.2f} ATR, 存在向下偏离"
-    elif distance >= 1.0:
-        deviation = f"价格已向上偏离 MA20 约 {distance:+.2f} ATR, 处于明显过热区, 需关注过热回归"
-    elif distance > 0.25:
-        deviation = f"价格位于 MA20 上方, 乖离 {distance:+.2f} ATR, 存在向上偏离"
-    else:
-        deviation = "价格接近 MA20"
-
-    downside_score = _number(category.get("downside_score"))
-    if downside_score is None:
-        downside_score = _percentile_to_risk_score(analysis.get("downside_percentile"))
-    downside_text = (
-        "下行波动明显偏高" if downside_score is not None and downside_score >= 80.0
-        else "下行波动偏高" if downside_score is not None and downside_score >= 70.0
-        else "下行波动有所升高" if downside_score is not None and downside_score >= 45.0
-        else "下行波动处于低位" if downside_score is not None and downside_score < 25.0
-        else "下行波动尚未显著升高" if downside_score is not None
-        else "下行波动数据不足"
-    )
-
-    drawdown = analysis.get("drawdown_score")
-    damage = (
-        "趋势损伤较深" if drawdown is not None and drawdown >= 70.0
-        else "已有一定趋势损伤" if drawdown is not None and drawdown >= 40.0
-        else "趋势损伤有限" if drawdown is not None
-        else "趋势损伤数据不足"
-    )
-
-    if downside_score is not None and downside_score >= 70.0 and drawdown is not None and drawdown >= 70.0:
-        dominant = "近期风险主要来自较高的下行波动和较深的趋势损伤"
-    elif downside_score is not None and downside_score >= 70.0:
-        dominant = "近期风险主要来自较高的下行波动"
-    elif drawdown is not None and drawdown >= 70.0:
-        dominant = "近期风险主要来自较深的趋势损伤"
-    elif (volatility_score is not None and volatility_score >= 70.0) or (boll_status and "扩张" in boll_status):
-        dominant = "近期风险主要来自波动扩张"
-    else:
-        dominant = "当前未见单一风险因子显著占优"
-
-    risk_change = _number(category.get("risk_change_5"))
-    risk_trend = category.get("risk_trend")
-    trend_text = f"近5周期风险{risk_trend}" if risk_change is not None and risk_trend else None
-    conclusion_parts = [volatility, downside_text, damage, dominant, deviation]
-    if trend_text:
-        conclusion_parts.append(trend_text)
-    return "; ".join(conclusion_parts) + "."
-
-
-def _history_relative_score(
-    current: float | None,
-    history: Iterable[float | None],
-    *,
-    minimum: int = 20,
-) -> tuple[float | None, float | None]:
-    values = [value for value in history if value is not None and math.isfinite(value) and value >= 0]
-    baseline = _median(values) if len(values) >= minimum else None
-    if current is None or baseline is None or baseline <= 0:
-        return None, None
-    relative = current / baseline
-    return _relative_level_score(relative), relative
-
-
-def _historical_percentile(
-    current: float | None,
-    history: Iterable[float | None],
-    *,
-    minimum: int = _RISK_MIN_HISTORY,
-) -> tuple[float | None, int]:
-    """Return a point-in-time empirical percentile from prior observations only."""
-    values = sorted(
-        value
-        for value in history
-        if value is not None and math.isfinite(value) and value >= 0
-    )
-    if current is None or current < 0 or not math.isfinite(current) or len(values) < minimum:
-        return None, len(values)
-    if values[-1] == values[0] and current == values[0]:
-        return 50.0, len(values)
-    return bisect_right(values, current) / len(values) * 100.0, len(values)
-
-
-def _percentile_to_risk_score(percentile: float | None) -> float | None:
-    """Map a historical percentile to a tail-sensitive risk score."""
-    if percentile is None or not math.isfinite(percentile):
-        return None
-    value = _clamp(percentile, 0.0, 100.0)
-    for (left_percentile, left_score), (right_percentile, right_score) in pairwise(_RISK_PERCENTILE_ANCHORS):
-        if value <= right_percentile:
-            span = right_percentile - left_percentile
-            if span <= 0:
-                return right_score
-            ratio = (value - left_percentile) / span
-            return left_score + ratio * (right_score - left_score)
-    return _RISK_PERCENTILE_ANCHORS[-1][1]
-
-
-def _prior_metric_values(
-    records: list[dict],
-    index: int,
-    metric,
-) -> list[float | None]:
-    return [metric(records, position) for position in range(max(0, index - _RISK_HISTORY_WINDOW), index)]
-
-
-def _prior_series_values(values: list[float | None], index: int) -> list[float | None]:
-    return values[max(0, index - _RISK_HISTORY_WINDOW):index]
-
-
-def _atr_pct(records: list[dict], index: int) -> float | None:
-    close = _number(records[index].get("close"))
-    atr = _number(records[index].get("atr_14"))
-    return atr / close if atr is not None and close is not None and close > 0 else None
-
-
-def _boll_width(records: list[dict], index: int) -> float | None:
-    row = records[index]
-    upper = _number(row.get("boll_upper"))
-    lower = _number(row.get("boll_lower"))
-    middle = _number(row.get("ma20"))
-    return ((upper - lower) / middle
-            if upper is not None and lower is not None and middle is not None and middle > 0 else None)
-
-
-def _return_window(records: list[dict], index: int, window: int) -> list[float] | None:
-    if index < window:
-        return None
-    returns: list[float] = []
-    for position in range(index - window + 1, index + 1):
-        current = _number(records[position].get("close"))
-        previous = _number(records[position - 1].get("close"))
-        if current is None or previous is None or previous <= 0:
-            return None
-        returns.append(current / previous - 1.0)
-    return returns
-
-
-def _realized_volatility(records: list[dict], index: int, window: int = 20) -> float | None:
-    returns = _return_window(records, index, window)
-    if returns is None:
-        return None
-    average = sum(returns) / len(returns)
-    return math.sqrt(sum((value - average) ** 2 for value in returns) / len(returns))
-
-
-def _downside_volatility(records: list[dict], index: int, window: int = _DOWNSIDE_VOLATILITY_WINDOW) -> float | None:
-    """Return downside deviation, with positive returns contributing zero."""
-    returns = _return_window(records, index, window)
-    if returns is None:
-        return None
-    negative = [value for value in returns if value < 0]
-    return math.sqrt(sum(value * value for value in negative) / len(returns))
-
-
-def _rolling_drawdown_pct(records: list[dict], index: int, window: int) -> float | None:
-    if index < window - 1:
-        return None
-    closes = [_number(item.get("close")) for item in records[index - window + 1:index + 1]]
-    if any(value is None or value <= 0 for value in closes):
-        return None
-    current = closes[-1]
-    peak = max(value for value in closes if value is not None)
-    return current / peak - 1.0 if peak > 0 else None
-
-
-def _drawdown_magnitude(records: list[dict], index: int, window: int) -> float | None:
-    value = _rolling_drawdown_pct(records, index, window)
-    return -value if value is not None else None
-
-
-def _negative_return_count(records: list[dict], index: int, window: int = _DOWNSIDE_VOLATILITY_WINDOW) -> int:
-    return sum(1 for value in (_return_window(records, index, window) or []) if value < 0)
-
-
-def _build_risk_metric_context(records: list[dict]) -> _RiskMetricContext:
-    return _RiskMetricContext(
-        atr_pct=[_atr_pct(records, index) for index in range(len(records))],
-        realized_volatility=[_realized_volatility(records, index) for index in range(len(records))],
-        boll_width=[_boll_width(records, index) for index in range(len(records))],
-        downside_volatility=[_downside_volatility(records, index) for index in range(len(records))],
-        drawdown_20=[_rolling_drawdown_pct(records, index, _DRAWDOWN_SHORT_WINDOW) for index in range(len(records))],
-        drawdown_60=[_rolling_drawdown_pct(records, index, _DRAWDOWN_MEDIUM_WINDOW) for index in range(len(records))],
-        negative_return_count=[_negative_return_count(records, index) for index in range(len(records))],
-    )
-
-
-def _drawdown_history_percentile(
-    records: list[dict],
-    index: int,
-    window: int,
-) -> tuple[float | None, int]:
-    current = _drawdown_magnitude(records, index, window)
-    history = _prior_metric_values(
-        records,
-        index,
-        lambda rows, position: _drawdown_magnitude(rows, position, window),
-    )
-    return _historical_percentile(current, history)
-
-
-def _drawdown_score(percentile: float | None) -> float | None:
-    """Map current drawdown percentile to damage severity, not absolute loss."""
-    return _percentile_to_risk_score(percentile)
-
-
-def _format_drawdown_detail(value: float | None, percentile: float | None) -> str:
-    if value is None:
-        return "数据不足"
-    if percentile is None:
-        return f"{value:.1%} (历史分位数据不足)"
-    return f"{value:.1%} (历史分位 {percentile:.0f}%)"
-
-
-def _risk_trend_label(change: float | None) -> str | None:
-    if change is None or not math.isfinite(change):
-        return None
-    if change <= -8.0:
-        return "快速回落"
-    if change < -1.5:
-        return "正在下降"
-    if change <= 1.5:
-        return "基本稳定"
-    if change < 8.0:
-        return "正在上升"
-    return "快速上升"
-
-
-def _risk_percentile_status(
-    percentile: float | None,
-    *,
-    high: str,
-    low: str,
-) -> str:
-    if percentile is None:
-        return "数据不足"
-    if percentile >= 75.0:
-        return high
-    if percentile <= 25.0:
-        return low
-    if percentile >= 60.0:
-        return "略高"
-    if percentile <= 40.0:
-        return "略低"
-    return "中性"
-
-
-def _risk_change_score(change: float | None) -> float | None:
-    if change is None or not math.isfinite(change):
-        return None
-    return _clamp(50.0 + change * 100.0)
-
-
-def _boll_width_analysis(
-    records: list[dict],
-    index: int,
-    boll_width_values: list[float | None] | None = None,
-) -> dict:
-    current = boll_width_values[index] if boll_width_values is not None else _boll_width(records, index)
-    percentile, history_count = _historical_percentile(
-        current,
-        _prior_series_values(boll_width_values, index)
-        if boll_width_values is not None
-        else _prior_metric_values(records, index, _boll_width),
-    )
-    previous = (
-        _boll_width(records, index - _BOLL_CHANGE_WINDOW)
-        if index >= _BOLL_CHANGE_WINDOW
-        else None
-    )
-    change = current / previous - 1.0 if current is not None and previous is not None and previous > 0 else None
-    change_score = _risk_change_score(change)
-    percentile_score = _percentile_to_risk_score(percentile)
-    score, coverage = _weighted_mean(((percentile_score, 0.70), (change_score, 0.30)))
-    if change is not None and change >= 0.15:
-        status = "波动明显扩张"
-    elif change is not None and change >= 0.03:
-        status = "波动温和扩张"
-    elif change is not None and change <= -0.15:
-        status = "波动明显收缩"
-    elif change is not None and change <= -0.03:
-        status = "波动温和收缩"
-    else:
-        status = _risk_percentile_status(percentile, high="波动水平偏高", low="波动水平偏低")
-    return {
-        "score": score,
-        "coverage": coverage,
-        "current": current,
-        "percentile": percentile,
-        "percentile_score": percentile_score,
-        "history_count": history_count,
-        "change": change,
-        "change_score": change_score,
-        "status": status,
-    }
-
-
-def _ma20_deviation_score(distance: float | None) -> float | None:
-    if distance is None or not math.isfinite(distance):
-        return None
-    magnitude = abs(distance)
-    if magnitude <= 1.0:
-        return magnitude * 50.0
-    if magnitude <= 2.0:
-        return 50.0 + (magnitude - 1.0) * 35.0
-    return _clamp(85.0 + (magnitude - 2.0) * 15.0)
-
-
-def _ma20_deviation_status(distance: float | None) -> str:
-    if distance is None:
-        return "数据不足"
-    if distance <= -1.0:
-        return "下方明显偏离"
-    if distance < -0.25:
-        return "下方偏离"
-    if distance <= 0.25:
-        return "MA20附近"
-    if distance < 1.0:
-        return "上方偏离"
-    return "上方明显偏离"
-
-
-def _risk_analysis(
-    records: list[dict],
-    index: int,
-    metric_context: _RiskMetricContext | None = None,
-) -> dict:
-    if metric_context is None:
-        current_atr_pct = _atr_pct(records, index)
-        atr_history = _prior_metric_values(records, index, _atr_pct)
-        current_realized_vol = _realized_volatility(records, index)
-        realized_vol_history = _prior_metric_values(records, index, _realized_volatility)
-        current_downside = _downside_volatility(records, index)
-        downside_history = _prior_metric_values(records, index, _downside_volatility)
-    else:
-        current_atr_pct = metric_context.atr_pct[index]
-        atr_history = _prior_series_values(metric_context.atr_pct, index)
-        current_realized_vol = metric_context.realized_volatility[index]
-        realized_vol_history = _prior_series_values(metric_context.realized_volatility, index)
-        current_downside = metric_context.downside_volatility[index]
-        downside_history = _prior_series_values(metric_context.downside_volatility, index)
-
-    atr_percentile, atr_history_count = _historical_percentile(current_atr_pct, atr_history)
-    realized_vol_percentile, realized_vol_history_count = _historical_percentile(
-        current_realized_vol,
-        realized_vol_history,
-    )
-
-    boll = _boll_width_analysis(
-        records,
-        index,
-        metric_context.boll_width if metric_context is not None else None,
-    )
-    distance = _ma20_atr_distance(records, index)
-    deviation_score = _ma20_deviation_score(distance)
-    if distance is None:
-        oversold_score = None
-        overheat_score = None
-    else:
-        oversold_score = deviation_score if distance < -0.25 else 0.0
-        overheat_score = deviation_score if distance > 0.25 else 0.0
-
-    downside_percentile, downside_history_count = _historical_percentile(
-        current_downside,
-        downside_history,
-    )
-
-    if metric_context is None:
-        drawdown_20 = _rolling_drawdown_pct(records, index, _DRAWDOWN_SHORT_WINDOW)
-        drawdown_60 = _rolling_drawdown_pct(records, index, _DRAWDOWN_MEDIUM_WINDOW)
-        drawdown_20_percentile, drawdown_20_history_count = _drawdown_history_percentile(
-            records, index, _DRAWDOWN_SHORT_WINDOW,
-        )
-        drawdown_60_percentile, drawdown_60_history_count = _drawdown_history_percentile(
-            records, index, _DRAWDOWN_MEDIUM_WINDOW,
-        )
-    else:
-        drawdown_20 = metric_context.drawdown_20[index]
-        drawdown_60 = metric_context.drawdown_60[index]
-        drawdown_20_percentile, drawdown_20_history_count = _historical_percentile(
-            -drawdown_20 if drawdown_20 is not None else None,
-            [-value if value is not None else None for value in _prior_series_values(metric_context.drawdown_20, index)],
-        )
-        drawdown_60_percentile, drawdown_60_history_count = _historical_percentile(
-            -drawdown_60 if drawdown_60 is not None else None,
-            [-value if value is not None else None for value in _prior_series_values(metric_context.drawdown_60, index)],
-        )
-    drawdown_20_score = _drawdown_score(drawdown_20_percentile)
-    drawdown_60_score = _drawdown_score(drawdown_60_percentile)
-    drawdown_score, drawdown_coverage = _weighted_mean((
-        (drawdown_20_score, 0.50),
-        (drawdown_60_score, 0.50),
-    ))
-    atr_risk_score = _percentile_to_risk_score(atr_percentile)
-    realized_vol_risk_score = _percentile_to_risk_score(realized_vol_percentile)
-    downside_risk_score = _percentile_to_risk_score(downside_percentile)
-    deviation_label = (
-        "超跌程度" if distance is not None and distance < -0.25
-        else "过热程度" if distance is not None and distance > 0.25
-        else "乖离程度"
-    )
-    negative_return_count = (
-        metric_context.negative_return_count[index]
-        if metric_context is not None
-        else _negative_return_count(records, index)
-    )
-
-    risk_indicators = [
-        {
-            "id": "atr_relative", "name": "ATR波动分位", "score": round(atr_risk_score) if atr_risk_score is not None else None,
-            "weight": _CATEGORY_INDICATOR_WEIGHTS["volatility_risk"]["atr_relative"],
-            "group": "volatility", "score_label": "风险",
-            "status": _risk_percentile_status(atr_percentile, high="波动明显偏高", low="波动明显偏低"),
-            "detail": "ATR/价格在此前250周期中的历史分位\n"
-            + (f"历史分位 {atr_percentile:.0f}% / {atr_history_count}个样本; 当前波动状态可比历史" if atr_percentile is not None else f"历史有效样本 {atr_history_count}个, 数据不足"),
-            "coverage": 1.0 if atr_percentile is not None else 0.0,
-            "raw_values": _raw_values(
-                atr14=_number(records[index].get("atr_14")),
-                atr_pct=current_atr_pct,
-                percentile=atr_percentile,
-                risk_score=atr_risk_score,
-                history_count=atr_history_count,
-                history_window=_RISK_HISTORY_WINDOW,
-            ),
-        },
-        {
-            "id": "realized_volatility", "name": "20周期实现波动率", "score": round(realized_vol_risk_score) if realized_vol_risk_score is not None else None,
-            "weight": _CATEGORY_INDICATOR_WEIGHTS["volatility_risk"]["realized_volatility"],
-            "group": "volatility", "score_label": "风险",
-            "status": _risk_percentile_status(realized_vol_percentile, high="波动明显偏高", low="波动明显偏低"),
-            "detail": "最近20周期收益率标准差的历史分位\n"
-            + (f"历史分位 {realized_vol_percentile:.0f}% / {realized_vol_history_count}个样本; 关注收益率变化的实际波动" if realized_vol_percentile is not None else f"历史有效样本 {realized_vol_history_count}个, 数据不足"),
-            "coverage": 1.0 if realized_vol_percentile is not None else 0.0,
-            "raw_values": _raw_values(
-                realized_volatility=current_realized_vol,
-                percentile=realized_vol_percentile,
-                risk_score=realized_vol_risk_score,
-                history_count=realized_vol_history_count,
-                history_window=_RISK_HISTORY_WINDOW,
-            ),
-        },
-        {
-            "id": "boll_width_relative", "name": "BOLL带宽状态", "score": round(boll["score"]) if boll["score"] is not None else None,
-            "weight": _CATEGORY_INDICATOR_WEIGHTS["volatility_risk"]["boll_width_relative"],
-            "group": "volatility", "score_label": "风险",
-            "status": boll["status"],
-            "detail": "BOLL带宽历史分位与近5周期变化率\n"
-            + (f"历史分位 {boll['percentile']:.0f}%" if boll["percentile"] is not None else "历史分位数据不足")
-            + (f"; 近5周期 {boll['change']:+.1%}; {boll['status']}" if boll["change"] is not None else f"; 近5周期变化数据不足; {boll['status']}"),
-            "coverage": boll["coverage"],
-            "raw_values": _raw_values(
-                boll_width=boll["current"],
-                percentile=boll["percentile"],
-                percentile_score=boll["percentile_score"],
-                change_5_pct=boll["change"],
-                change_score=boll["change_score"],
-                risk_score=boll["score"],
-                history_count=boll["history_count"],
-                history_window=_RISK_HISTORY_WINDOW,
-            ),
-        },
-        {
-            "id": "ma20_deviation_risk", "name": "MA20乖离", "score": round(deviation_score) if deviation_score is not None else None,
-            "weight": _CATEGORY_INDICATOR_WEIGHTS["volatility_risk"]["ma20_deviation_risk"],
-            "group": "extreme", "score_label": deviation_label,
-            "status": _ma20_deviation_status(distance),
-            "detail": "价格相对MA20的偏离按ATR归一化\n"
-            + (f"MA20乖离 {distance:+.2f} ATR; {_ma20_deviation_status(distance)}"
-               if distance is not None else "当前缺少价格, MA20或ATR数据"),
-            "coverage": 1.0 if deviation_score is not None else 0.0,
-            "raw_values": _raw_values(
-                close=_number(records[index].get("close")),
-                ma20=_number(records[index].get("ma20")),
-                atr14=_number(records[index].get("atr_14")),
-                distance_atr=distance,
-                deviation_score=deviation_score,
-                oversold_score=oversold_score,
-                overheat_score=overheat_score,
-            ),
-        },
-        {
-            "id": "downside_volatility", "name": "下行波动率", "score": round(downside_risk_score) if downside_risk_score is not None else None,
-            "weight": _CATEGORY_INDICATOR_WEIGHTS["volatility_risk"]["downside_volatility"],
-            "group": "downside", "score_label": "风险",
-            "status": _risk_percentile_status(downside_percentile, high="下行波动偏高", low="下行波动偏低"),
-            "detail": "仅使用负收益计算20周期下行波动率\n"
-            + (f"历史分位 {downside_percentile:.0f}% / {downside_history_count}个样本; 负收益 {negative_return_count}个"
-               if downside_percentile is not None else f"历史有效样本 {downside_history_count}个, 数据不足"),
-            "coverage": 1.0 if downside_percentile is not None else 0.0,
-            "raw_values": _raw_values(
-                downside_volatility=current_downside,
-                percentile=downside_percentile,
-                risk_score=downside_risk_score,
-                negative_count=negative_return_count,
-                history_count=downside_history_count,
-                history_window=_RISK_HISTORY_WINDOW,
-            ),
-        },
-        {
-            "id": "rolling_drawdown", "name": "回撤损伤", "score": round(drawdown_score) if drawdown_score is not None else None,
-            "weight": _CATEGORY_INDICATOR_WEIGHTS["volatility_risk"]["rolling_drawdown"],
-            "group": "downside", "score_label": "损伤",
-            "status": _score_status(drawdown_score, high="回撤损伤较深", low="回撤损伤有限"),
-            "detail": "20/60周期当前回撤的历史分位组合, 表示市场损伤而非未来下跌风险\n"
-            + (f"20周期 {_format_drawdown_detail(drawdown_20, drawdown_20_percentile)}; "
-               f"60周期 {_format_drawdown_detail(drawdown_60, drawdown_60_percentile)}; "
-               f"{'市场损伤状态' if drawdown_score is not None else '历史回撤分位样本不足'}"
-               if drawdown_20 is not None or drawdown_60 is not None else "回撤窗口数据不足"),
-            "coverage": drawdown_coverage,
-            "raw_values": _raw_values(
-                drawdown_20_pct=drawdown_20,
-                drawdown_60_pct=drawdown_60,
-                drawdown_20_percentile=drawdown_20_percentile,
-                drawdown_60_percentile=drawdown_60_percentile,
-                drawdown_20_history_count=drawdown_20_history_count,
-                drawdown_60_history_count=drawdown_60_history_count,
-                drawdown_20_score=drawdown_20_score,
-                drawdown_60_score=drawdown_60_score,
-                drawdown_pct=drawdown_20,
-            ),
-        },
-    ]
-    return {
-        "indicators": risk_indicators,
-        "atr_percentile": atr_percentile,
-        "realized_vol_percentile": realized_vol_percentile,
-        "boll": boll,
-        "distance_atr": distance,
-        "deviation_score": deviation_score,
-        "oversold_score": oversold_score,
-        "overheat_score": overheat_score,
-        "downside_percentile": downside_percentile,
-        "drawdown_20_percentile": drawdown_20_percentile,
-        "drawdown_60_percentile": drawdown_60_percentile,
-        "drawdown_score": drawdown_score,
-    }
-
-
-def _risk_group_score(indicators: list[dict], group: str) -> tuple[float | None, float]:
-    by_id = {str(indicator.get("id")): indicator for indicator in indicators}
-    weights = _CATEGORY_INDICATOR_WEIGHTS["volatility_risk"]
-    parts = [
-        (
-            by_id.get(indicator_id, {}).get("score"),
-            float(weights[indicator_id]),
-            float(by_id.get(indicator_id, {}).get("coverage", 0.0)),
-        )
-        for indicator_id in _RISK_GROUP_INDICATOR_IDS[group]
-    ]
-    return _weighted_partial_score(parts)
-
-
-def _risk_category(analysis: dict, *, risk_change_5: float | None = None) -> dict:
-    indicators = analysis["indicators"]
-    volatility_score, volatility_coverage = _risk_group_score(indicators, "volatility")
-    downside_score, downside_coverage = _risk_group_score(indicators, "downside")
-    total_score, total_coverage = _weighted_partial_score((
-        (volatility_score, _RISK_GROUP_WEIGHTS["volatility"], volatility_coverage),
-        (downside_score, _RISK_GROUP_WEIGHTS["downside"], downside_coverage),
-    ))
-    minimum_coverage = 0.60
-    category_available = total_score is not None and total_coverage >= minimum_coverage
-    meta = _CATEGORY_META["volatility_risk"]
-    category = {
-        "id": "volatility_risk",
-        "name": meta["name"],
-        "kind": meta["kind"],
-        "weight": meta["weight"],
-        "score": round(total_score) if category_available and total_score is not None else None,
-        "status": _risk_category_status(round(total_score) if category_available and total_score is not None else None),
-        "coverage": round(total_coverage * 100.0),
-        "available": category_available,
-        "volatility_score": round(volatility_score) if volatility_score is not None and volatility_coverage >= minimum_coverage else None,
-        "volatility_coverage": round(volatility_coverage * 100.0),
-        "downside_score": round(downside_score) if downside_score is not None and downside_coverage >= minimum_coverage else None,
-        "downside_coverage": round(downside_coverage * 100.0),
-        "volatility_weight": _RISK_GROUP_WEIGHTS["volatility"],
-        "downside_weight": _RISK_GROUP_WEIGHTS["downside"],
-        "risk_change_5": round(risk_change_5) if risk_change_5 is not None else None,
-        "risk_trend": _risk_trend_label(risk_change_5),
-        "indicators": indicators,
-        "oversold_score": round(analysis["oversold_score"]) if analysis["oversold_score"] is not None else None,
-        "overheat_score": round(analysis["overheat_score"]) if analysis["overheat_score"] is not None else None,
-    }
-    category["conclusion"] = _risk_category_conclusion(category, analysis)
-    return category
-
-
-def _risk_category_score(records: list[dict], index: int) -> float | None:
-    return _risk_category(_risk_analysis(records, index))["score"]
 
 
 def _vwma(records: list[dict], index: int, window: int) -> float | None:
@@ -4753,8 +3939,6 @@ def _category_scores(
     roc_context: _RocContext | None = None,
     volume_price_analysis: dict | None = None,
     obv_values: list[float | None] | None = None,
-    metric_context: _RiskMetricContext | None = None,
-    risk_cache: dict[int, dict] | None = None,
 ) -> dict:
     row = records[index]
     previous = records[index - 1] if index > 0 else {}
@@ -5272,40 +4456,6 @@ def _category_scores(
     ]
     price_position_category = _price_position_category(position_indicators)
 
-    if risk_cache is None:
-        risk_analysis = _risk_analysis(records, index, metric_context)
-    else:
-        risk_analysis = risk_cache.get(index)
-        if risk_analysis is None:
-            risk_analysis = _risk_analysis(records, index, metric_context)
-            risk_cache[index] = risk_analysis
-
-    activity_metrics = _activity_metrics(records, index)
-    amount = activity_metrics["amount"]
-    amount_average = activity_metrics["amount_average"]
-    amount_ratio = activity_metrics["amount_ratio"]
-    amount_ratio_score = _activity_level_score(amount_ratio)
-    amount_ma5 = activity_metrics["amount_ma5"]
-    amount_ma20 = activity_metrics["amount_ma20"]
-    amount_ma_ratio = activity_metrics["amount_ma_ratio"]
-    amount_ma_score = _activity_level_score(amount_ma_ratio)
-    activity_indicators = [
-        {
-            "id": "amount_ratio_20", "name": "成交额 / 前20周期均额", "score": round(amount_ratio_score) if amount_ratio_score is not None else None,
-            "weight": _CATEGORY_INDICATOR_WEIGHTS["activity"]["amount_ratio_20"],
-            "status": _activity_indicator_status(amount_ratio_score, high="成交放大", low="成交收缩", middle="成交一般"),
-            "detail": "当前成交额相对前20周期平均成交额",
-            "raw_values": _raw_values(amount=amount, average_amount=amount_average, ratio=amount_ratio),
-        },
-        {
-            "id": "amount_ma5_ma20", "name": "成交额 MA5 / MA20", "score": round(amount_ma_score) if amount_ma_score is not None else None,
-            "weight": _CATEGORY_INDICATOR_WEIGHTS["activity"]["amount_ma5_ma20"],
-            "status": _activity_indicator_status(amount_ma_score, high="短期有所升温", low="短期有所降温", middle="短期平稳"),
-            "detail": "成交额短期均值相对20周期均值",
-            "raw_values": _raw_values(amount_ma5=amount_ma5, amount_ma20=amount_ma20, ratio=amount_ma_ratio),
-        },
-    ]
-
     trend_category = _weighted_category("trend", trend_indicators)
     if trend_mode == _TREND_DATA_MODE_INSUFFICIENT:
         trend_category.update(score=None, status="数据不足", coverage=0, available=False)
@@ -5329,29 +4479,11 @@ def _category_scores(
     momentum_category = _weighted_category("momentum", momentum_indicators)
     momentum_category["conclusion"] = _momentum_category_conclusion(momentum_category)
 
-    risk_category = _risk_category(risk_analysis)
-    risk_change_5 = None
-    if index >= 5 and risk_category["score"] is not None:
-        if risk_cache is None:
-            previous_risk_analysis = _risk_analysis(records, index - 5, metric_context)
-        else:
-            previous_risk_analysis = risk_cache.get(index - 5)
-            if previous_risk_analysis is None:
-                previous_risk_analysis = _risk_analysis(records, index - 5, metric_context)
-                risk_cache[index - 5] = previous_risk_analysis
-        previous_risk = _risk_category(previous_risk_analysis)["score"]
-        if previous_risk is not None:
-            risk_change_5 = risk_category["score"] - previous_risk
-    if risk_change_5 is not None:
-        risk_category = _risk_category(risk_analysis, risk_change_5=risk_change_5)
-
     categories = [
         trend_category,
         momentum_category,
         volume_price_category,
         price_position_category,
-        risk_category,
-        _weighted_category("activity", activity_indicators),
     ]
     by_id = {category["id"]: category for category in categories}
     direction_weight_total = sum(_CATEGORY_DIRECTION_WEIGHTS.values())
@@ -5369,18 +4501,11 @@ def _category_scores(
         and direction_coverage >= 0.70
         and direction_score is not None
     )
-    activity_category = by_id["activity"]
-    activity_category["status"] = _activity_category_status(activity_category["score"])
-    activity_category["conclusion"] = _activity_category_conclusion(activity_category)
     return {
         "categories": categories,
         "direction_score": round(direction_score) if direction_available and direction_score is not None else None,
         "direction_coverage": round(direction_coverage * 100.0),
         "direction_available": direction_available,
-        "risk_score": risk_category["score"],
-        "risk_available": risk_category["available"],
-        "activity_score": activity_category["score"],
-        "activity_available": activity_category["available"],
     }
 
 
@@ -5391,8 +4516,6 @@ def _score_records(
     category_rows: list[dict] = []
     roc_context = _build_roc_context(records)
     obv_values = _obv_series(records, len(records) - 1) if records else []
-    metric_context = _build_risk_metric_context(records)
-    risk_cache: dict[int, dict] = {}
     for index in range(len(records)):
         trend, trend_coverage = _trend_score(records, index)
         momentum, momentum_coverage = _momentum_score(records, index, roc_context)
@@ -5400,17 +4523,13 @@ def _score_records(
         volume_price = volume_price_analysis["score"]
         volume_price_coverage = volume_price_analysis["coverage"]
         state_confirmation, state_coverage = _state_confirmation_score((trend, momentum, volume_price))
-        activity = _activity_score(records, index)
         category_scores = _category_scores(
             records,
             index,
             roc_context,
             volume_price_analysis,
             obv_values,
-            metric_context=metric_context,
-            risk_cache=risk_cache,
         )
-        volatility = category_scores["risk_score"]
         category_rows.append(category_scores)
 
         base_dimensions = (
@@ -5444,16 +4563,10 @@ def _score_records(
             "technical_momentum_score": round(momentum) if momentum is not None else None,
             "technical_volume_price_score": round(volume_price) if volume_price is not None else None,
             "technical_state_confirmation_score": round(state_confirmation) if state_confirmation is not None else None,
-            "technical_volatility_risk": round(volatility) if volatility is not None else None,
-            "technical_activity_score": round(activity) if activity is not None else None,
             "technical_score_available": available,
             "technical_category_direction_score": category_scores["direction_score"],
             "technical_category_direction_coverage": category_scores["direction_coverage"],
             "technical_category_direction_available": category_scores["direction_available"],
-            "technical_category_risk_score": category_scores["risk_score"],
-            "technical_category_risk_available": category_scores["risk_available"],
-            "technical_category_activity_score": category_scores["activity_score"],
-            "technical_category_activity_available": category_scores["activity_available"],
         })
     return result, category_rows
 
@@ -5473,16 +4586,10 @@ def _empty_score_columns(frame: pl.DataFrame) -> pl.DataFrame:
         pl.Series(name="technical_momentum_score", values=[], dtype=pl.Int64),
         pl.Series(name="technical_volume_price_score", values=[], dtype=pl.Int64),
         pl.Series(name="technical_state_confirmation_score", values=[], dtype=pl.Int64),
-        pl.Series(name="technical_volatility_risk", values=[], dtype=pl.Int64),
-        pl.Series(name="technical_activity_score", values=[], dtype=pl.Int64),
         pl.Series(name="technical_score_available", values=[], dtype=pl.Boolean),
         pl.Series(name="technical_category_direction_score", values=[], dtype=pl.Int64),
         pl.Series(name="technical_category_direction_coverage", values=[], dtype=pl.Int64),
         pl.Series(name="technical_category_direction_available", values=[], dtype=pl.Boolean),
-        pl.Series(name="technical_category_risk_score", values=[], dtype=pl.Int64),
-        pl.Series(name="technical_category_risk_available", values=[], dtype=pl.Boolean),
-        pl.Series(name="technical_category_activity_score", values=[], dtype=pl.Int64),
-        pl.Series(name="technical_category_activity_available", values=[], dtype=pl.Boolean),
     ])
 
 
@@ -5554,16 +4661,10 @@ def technical_score_payload(frame: pl.DataFrame) -> dict:
             "momentum": row.pop("technical_momentum_score"),
             "volume_price": row.pop("technical_volume_price_score"),
             "state_confirmation": row.pop("technical_state_confirmation_score"),
-            "volatility_risk": row.pop("technical_volatility_risk"),
-            "activity": row.pop("technical_activity_score"),
             "available": row.pop("technical_score_available"),
             "category_direction_score": row.pop("technical_category_direction_score"),
             "category_direction_coverage": row.pop("technical_category_direction_coverage"),
             "direction_available": row.pop("technical_category_direction_available"),
-            "category_risk_score": row.pop("technical_category_risk_score"),
-            "risk_available": row.pop("technical_category_risk_available"),
-            "category_activity_score": row.pop("technical_category_activity_score"),
-            "activity_available": row.pop("technical_category_activity_available"),
             "categories": categories[index],
         })
     return {"version": TECHNICAL_SCORE_VERSION, "rows": rows}

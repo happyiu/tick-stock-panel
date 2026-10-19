@@ -411,7 +411,8 @@ export function ETFSimulation() {
   const [replayId, setReplayId] = useState('')
   const [symbol, setSymbol] = useState('')
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false)
-  const [timelineSettings] = useState<PaperTradingTimelineSettings>(() => loadPaperTradingTimelineSettings())
+  const [localTimelineSettings] = useState<PaperTradingTimelineSettings>(() => loadPaperTradingTimelineSettings())
+  const timelineSettings = preferences.data?.timeline_schedule ?? localTimelineSettings
   const [manualPositionOpen, setManualPositionOpen] = useState(false)
   const [editingPosition, setEditingPosition] = useState<PaperPosition | null>(null)
   const [previewPosition, setPreviewPosition] = useState<{ symbol: string; name: string } | null>(null)

@@ -53,19 +53,27 @@ export function SettingsSchedulesPanel() {
   const [timelineSettingsDraft, setTimelineSettingsDraft] = useState<PaperTradingTimelineSettings>(() => loadPaperTradingTimelineSettings())
   const [promptDrafts, setPromptDrafts] = useState<Record<string, string>>(() => Object.fromEntries(TIMER_METHODS.map(timer => [timer.method, timer.defaultParameter])))
   const nextTimelinePointId = useRef(Math.max(0, ...timelineSettingsDraft.customPoints.map(point => point.id)) + 1)
+  const initialized = useRef(false)
   const reviewSchedule = preferences.data?.review_schedule
   const systemTimelinePoints = useMemo(
     () => getPaperTradingSystemTimelinePoints(reviewSchedule),
     [reviewSchedule?.enabled, reviewSchedule?.hour, reviewSchedule?.minute],
   )
   useEffect(() => {
-    const prompts = preferences.data?.seekhub_daily_prompts
+    if (!preferences.data || initialized.current) return
+    initialized.current = true
+    const saved = preferences.data.timeline_schedule
+    if (saved) {
+      setTimelineSettingsDraft(clonePaperTradingTimelineSettings(saved))
+      nextTimelinePointId.current = Math.max(0, ...saved.customPoints.map(point => point.id)) + 1
+    }
+    const prompts = preferences.data.seekhub_daily_prompts
     if (!prompts) return
     setPromptDrafts(current => Object.fromEntries(TIMER_METHODS.map(timer => [
       timer.method,
       prompts[timer.method] ?? current[timer.method] ?? timer.defaultParameter,
     ])))
-  }, [preferences.data?.seekhub_daily_prompts])
+  }, [preferences.data])
 
   const updateTimelineDraft = (patch: Partial<PaperTradingTimelineSettings>) => {
     setTimelineSettingsDraft(current => ({ ...current, ...patch }))
@@ -95,11 +103,10 @@ export function SettingsSchedulesPanel() {
     }))
   }
   const savePrompt = useMutation({
-    mutationFn: (prompts: Record<string, string>) => Promise.all(
-      TIMER_METHODS.map(timer => api.updateSeekhubDailyPrompt(timer.method, prompts[timer.method])),
-    ),
-    onSuccess: results => {
-      setPromptDrafts(Object.fromEntries(results.map(result => [result.method, result.prompt])))
+    mutationFn: (prompts: Record<string, string>) => api.updateTimelineSchedule(timelineSettingsDraft, prompts),
+    onSuccess: saved => {
+      storage.paperTimelineSettings.set(clonePaperTradingTimelineSettings(saved))
+      setTimelineSettingsDraft(saved)
       void queryClient.invalidateQueries({ queryKey: QK.preferences })
       toast('定时任务设置已保存', 'success')
     },
@@ -111,7 +118,6 @@ export function SettingsSchedulesPanel() {
       toast('提示词不能为空', 'error')
       return
     }
-    storage.paperTimelineSettings.set(clonePaperTradingTimelineSettings(timelineSettingsDraft))
     savePrompt.mutate(prompts)
   }
 
@@ -163,6 +169,7 @@ export function SettingsSchedulesPanel() {
                   </div>
                 </details>
               </div>
+              <p className="text-xs text-muted">按北京时间交易时段循环执行，午休和非交易日跳过。{!timelineSettingsDraft.timerMethods.length && '尚未选择方法，步长任务未启用。'}</p>
             </div>
           </section>
 
@@ -195,7 +202,10 @@ export function SettingsSchedulesPanel() {
                   </label>
                   <label className="space-y-1 sm:space-y-0">
                     <span className="text-[11px] text-muted sm:hidden">定时器方法</span>
-                    <input type="text" className={input} value={point.timerMethod} readOnly placeholder="由后端返回可执行方法" aria-label={`第 ${index + 1} 个时间点定时器方法`} />
+                    <select className={input} value={point.timerMethod} aria-label={`第 ${index + 1} 个时间点定时器方法`} onChange={event => updateTimelinePoint(point.id, { timerMethod: event.target.value })}>
+                      <option value="">不执行</option>
+                      {TIMER_METHODS.map(timer => <option key={timer.method} value={timer.method}>{timer.name}</option>)}
+                    </select>
                   </label>
                   <button type="button" className="inline-flex h-9 w-9 items-center justify-center rounded-btn text-muted transition-colors hover:bg-elevated hover:text-bear" aria-label={`删除第 ${index + 1} 个自定义时间点`} title="删除时间点" onClick={() => removeTimelinePoint(point.id)}>
                     <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
@@ -267,7 +277,7 @@ export function SettingsSchedulesPanel() {
         </section>
 
         <div className="flex items-center justify-between gap-3 rounded-card border border-border bg-surface px-4 py-3">
-          <p className="text-xs leading-5 text-muted">步长任务默认循环执行；自定义时间点的定时器方法由后端返回，前端只保存后端提供的方法标识，不执行任意输入代码。</p>
+          <p className="text-xs leading-5 text-muted">选择方法并保存后，后台按交易日时间点执行；关闭页面仍生效，服务需保持运行。上轮任务未结束时跳过新一轮。首次保存会将浏览器中的配置同步到后台。</p>
           <button type="button" className={primary + ' shrink-0'} onClick={saveTimelineSettings} disabled={!preferences.data || savePrompt.isPending}>
             <Save className="h-3.5 w-3.5" aria-hidden="true" />
             {preferences.isLoading ? '加载中...' : savePrompt.isPending ? '保存中...' : '保存并生效'}

@@ -455,7 +455,7 @@ export function Dashboard() {
   const [selectedDate, setSelectedDate] = useState<string | undefined>()
   const [manualFetching, setManualFetching] = useState(false)
   const [paperNow, setPaperNow] = useState(() => new Date())
-  const [paperTimelineSettings] = useState(() => loadPaperTradingTimelineSettings())
+  const [localTimelineSettings] = useState(() => loadPaperTradingTimelineSettings())
   const [previewStock, setPreviewStock] = useState<{
     symbol: string
     name?: string
@@ -483,6 +483,7 @@ export function Dashboard() {
   // 空态引导文案按当前数据源分流: TickFlow 源提"免费服务器", 其他源提"当前数据源",
   // 弱化与默认 TickFlow 的隐式绑定 (None 档/免费 Key 等 TickFlow 概念仅在其被选中时出现)
   const prefs = usePreferences()
+  const paperTimelineSettings = prefs.data?.timeline_schedule ?? localTimelineSettings
   const paperClock = getBeijingPaperClock(paperNow)
   const paperSystemTimelinePoints = getPaperTradingSystemTimelinePoints(prefs.data?.review_schedule)
   useEffect(() => {

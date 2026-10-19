@@ -50,3 +50,20 @@ it.each([{ bar: 20, gapBar: 14 }, { bar: 6, gapBar: 3 }])('成交量柱沿用原
   } as unknown as Parameters<typeof serverFormulaDraw>[0])
   expect(ctx.fillRect).toHaveBeenCalledWith(30-space.gapBar/2,90,space.gapBar,17)
 })
+
+it.each([40, 200])('天使魔鬼文字跟随箭头，缩放后仍保持固定像素间距 %s', arrowY => {
+  const signals: ChartIndicatorResult = { ...packet, pane: 'main', drawings: [
+    { ...packet.drawings[0], key: 'up', kind: 'DRAWICON', fields: [], constants: [[2, 1]], text: [] },
+    { ...packet.drawings[0], key: 'down', kind: 'DRAWICON', fields: [], constants: [[2, 2]], text: [] },
+    { ...packet.drawings[0], key: 'buyText', kind: 'DRAWTEXT', fields: [], text: [[2, '进攻']] },
+    { ...packet.drawings[0], key: 'sellText', kind: 'DRAWTEXT', fields: [], text: [[2, '撤退']] },
+  ] }
+  const figures = serverFormulaFigures(signals, 'angel-devil')
+  const attrs = (key: string) => (figures.find(f => f.key === key)!.attrs as Function)({
+    coordinate: { current: { x: 25, up: arrowY, down: arrowY, buyText: 500, sellText: 0 } }, data: { current: {} },
+  })
+  expect(attrs('buyText')).toMatchObject({ x: 25, y: arrowY + 9, align: 'center', baseline: 'top', text: '进攻' })
+  expect(attrs('sellText')).toMatchObject({ x: 25, y: arrowY - 9, align: 'center', baseline: 'bottom', text: '撤退' })
+  const original = serverFormulaFigures(signals)
+  expect((original.find(f => f.key === 'buyText')!.attrs as Function)({ coordinate: { current: { x: 25, buyText: 500 } }, data: { current: {} } })).toMatchObject({ y: 500 })
+})

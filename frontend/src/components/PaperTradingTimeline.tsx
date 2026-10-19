@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { RefreshCw } from 'lucide-react'
 import { Modal } from '@/components/Modal'
 import { MarkdownRenderer } from '@/components/financials/MarkdownRenderer'
-import { api, type TimelineExecution } from '@/lib/api'
+import { api, type TimelineExecution, type PaperTradingTimelineCustomPoint, type PaperTradingTimelineSettings } from '@/lib/api'
 import {
   buildPaperTradingTimelineState,
   createPaperTradingSessions,
@@ -18,18 +18,7 @@ import {
 } from '@/lib/paper-trading-time'
 import { storage } from '@/lib/storage'
 
-export type PaperTradingTimelineCustomPoint = {
-  id: number
-  time: string
-  description: string
-  timerMethod: string
-}
-
-export type PaperTradingTimelineSettings = {
-  stepMinutes: PaperTradingStepMinutes
-  timerMethods: string[]
-  customPoints: PaperTradingTimelineCustomPoint[]
-}
+export type { PaperTradingTimelineCustomPoint, PaperTradingTimelineSettings } from '@/lib/api'
 
 const DEFAULT_TIMELINE_SETTINGS: PaperTradingTimelineSettings = {
   stepMinutes: PAPER_TRADING_STEP_MINUTES,

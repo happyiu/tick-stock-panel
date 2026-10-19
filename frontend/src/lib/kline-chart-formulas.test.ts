@@ -67,13 +67,15 @@ it('多空趋势按显式周期计算，周线不伪造信号，防守价格不�
   expect(raw[500].dp).toBeLessThan(0)
 })
 
-it('天使魔鬼的信号箭头和文字沿用原价格坐标，替换普通MA', async () => {
+it('天使魔鬼文字与箭头共用价格锚点，保持固定像素间距', async () => {
   const def = definition('ANGEL_DEVIL')
   const result = await def.calc(bars, indicator())
   const index = calculateAngelDevil(bars.map(b => b.close)).findIndex(r => r.signal === 'buy')
   expect(index).toBeGreaterThan(0)
-  expect(result[index]).toMatchObject({ attackArrow: bars[index].low * 0.97, attackText: bars[index].low * 0.92 })
+  expect(result[index]).toMatchObject({ attackArrow: bars[index].low * 0.97, attackText: bars[index].low * 0.97 })
   expect(def.figures?.slice(0, 4).map(f => f.key)).toEqual(['ma5', 'ma13', 'ma21', 'ma34'])
+  const text = def.figures!.find(f => f.key === 'attackText')!
+  expect((text.attrs as Function)({ coordinate: { current: { x: 30, attackText: 100 } } })).toMatchObject({ x: 30, y: 109, align: 'center', baseline: 'top' })
 })
 
 it('KD柱线保留K到D上下端和宽度，参考线与背离连线在可见范围绘制', () => {

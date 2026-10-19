@@ -12,13 +12,22 @@ const text = (drawing: ChartIndicatorDrawing, index: number) => drawing.text.fin
 const num = (drawing: ChartIndicatorDrawing, index: number, row?: Row | null) => drawing.constants?.find(f => f[0] === index)?.[1] ?? row?.[field(drawing, index)] ?? null
 const enabled = (value: number | null) => value != null && Number.isFinite(value) && value !== 0
 
-export function serverFormulaFigures(packet: ChartIndicatorResult): IndicatorFigure<Row>[] {
+export function serverFormulaFigures(packet: ChartIndicatorResult, key?: string): IndicatorFigure<Row>[] {
   const lines: IndicatorFigure<Row>[] = packet.figures.filter(f => !f.hidden).map(f => ({ key: f.key, title: `${f.key}: `, type: 'line',
     styles: () => ({ color: formulaColor(f.color, f.light_color), size: f.width, style: f.dash ? 'dashed' : 'solid', dashedValue: [f.dash_size ?? 4, f.dash_size ?? 3] }) }))
   for (const drawing of packet.drawings.filter(d => d.kind === 'DRAWICON' || d.kind === 'DRAWTEXT')) {
     lines.push({ key: drawing.key, type: drawing.kind === 'DRAWICON' ? 'polygon' : 'text',
       attrs: ({ coordinate, data }) => {
         const { x, [drawing.key]: y } = coordinate.current
+        if (key === 'angel-devil' && drawing.kind === 'DRAWTEXT') {
+          const label = text(drawing, 2), iconType = label === '进攻' ? 1 : label === '撤退' ? 2 : null
+          const icon = iconType == null ? undefined : packet.drawings.find(d => d.kind === 'DRAWICON' && num(d, 2, data.current) === iconType)
+          const arrowY = icon ? coordinate.current[icon.key] : undefined
+          // 以箭头的屏幕坐标定位文字, 避免价轴缩放拉大两者距离。
+          if (arrowY != null && Number.isFinite(arrowY)) return {
+            x, y: arrowY + (iconType === 1 ? 9 : -9), text: label, align: 'center', baseline: iconType === 1 ? 'top' : 'bottom',
+          }
+        }
         const down = num(drawing, 2, data.current) === 2
         const direction = down ? -1 : 1
         const side = num(drawing, 3, data.current) ?? 4

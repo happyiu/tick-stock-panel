@@ -1,7 +1,6 @@
 """Regression tests for the versioned detail-page technical score."""
 from __future__ import annotations
 
-import math
 from datetime import date, datetime, timedelta
 
 import polars as pl
@@ -1300,198 +1299,10 @@ def test_high_volatility_is_independent_from_direction_confidence():
     shrinking_volume_rows[-1]["amount"] = 100.0
     shrinking_volume = score_technical_frame(pl.DataFrame(shrinking_volume_rows)).row(-1, named=True)
 
-    assert high_volatility["technical_volatility_risk"] > base["technical_volatility_risk"]
     assert high_volatility["technical_confidence"] >= base["technical_confidence"]
-    assert shrinking_volume["technical_activity_score"] < base["technical_activity_score"]
     assert shrinking_volume["technical_confidence"] <= base["technical_confidence"]
 
 
-def test_activity_score_uses_amount_instead_of_volume():
-    base_frame = _raw_frame(100)
-    base = score_technical_frame(base_frame).row(-1, named=True)
-
-    volume_only_rows = base_frame.to_dicts()
-    volume_only_rows[-1]["volume"] = 1.0
-    volume_only = score_technical_frame(pl.DataFrame(volume_only_rows)).row(-1, named=True)
-
-    assert volume_only["technical_activity_score"] == base["technical_activity_score"]
-    assert volume_only["technical_category_activity_score"] == base["technical_category_activity_score"]
-
-
-def test_activity_amount_average_does_not_require_nonzero_continuity():
-    rows = _raw_frame(100).to_dicts()
-    rows[-21]["volume"] = 0.0
-    rows[-21]["amount"] = 0.0
-
-    latest = score_technical_frame(pl.DataFrame(rows)).row(-1, named=True)
-
-    assert latest["technical_category_activity_available"] is True
-    assert latest["technical_category_activity_score"] is not None
-
-
-def test_risk_percentile_is_point_in_time_and_flat_history_is_neutral():
-    assert technical_scoring._historical_percentile(1.0, [1.0] * 20) == (50.0, 20)
-    assert technical_scoring._historical_percentile(2.0, [1.0] * 20) == (100.0, 20)
-    assert technical_scoring._historical_percentile(1.0, [1.0] * 19) == (None, 19)
-
-
-@pytest.mark.parametrize(
-    ("percentile", "expected"),
-    [(50.0, 10.0), (60.0, 20.0), (68.0, 28.0), (70.0, 30.0), (73.0, 34.5),
-     (80.0, 45.0), (85.0, 55.0), (90.0, 68.0), (92.0, 73.6), (95.0, 82.0),
-     (98.0, 92.0), (100.0, 100.0)],
-)
-def test_risk_percentile_uses_tail_sensitive_mapping(percentile, expected):
-    assert technical_scoring._percentile_to_risk_score(percentile) == pytest.approx(expected)
-
-
-def test_precomputed_risk_context_matches_point_in_time_analysis():
-    records = _raw_frame(100).to_dicts()
-    context = technical_scoring._build_risk_metric_context(records)
-
-    for index in range(len(records)):
-        assert technical_scoring._risk_analysis(records, index) == technical_scoring._risk_analysis(
-            records,
-            index,
-            context,
-        )
-
-
-def test_downside_volatility_ignores_positive_returns():
-    positive = _volume_records([100.0 + index for index in range(21)], [100.0] * 21)
-    assert technical_scoring._downside_volatility(positive, 20) == 0.0
-
-    one_loss = _volume_records([100.0] * 20 + [90.0], [100.0] * 21)
-    assert technical_scoring._downside_volatility(one_loss, 20) == pytest.approx(math.sqrt(0.10 ** 2 / 20))
-
-
-def test_drawdown_uses_current_close_against_rolling_high():
-    records = ([{"close": 100.0} for _ in range(20)]
-               + [{"close": 80.0}, {"close": 90.0}])
-    assert technical_scoring._rolling_drawdown_pct(records, 21, 20) == pytest.approx(-0.10)
-
-
-def test_drawdown_percentile_uses_prior_rolling_drawdowns_only():
-    records = [{"close": 100.0} for _ in range(80)] + [{"close": 90.0}]
-
-    assert technical_scoring._drawdown_history_percentile(records, 80, 60) == (100.0, 21)
-    assert technical_scoring._drawdown_score(100.0) == 100.0
-
-
-def test_risk_category_uses_six_requested_components_and_weights():
-    payload = technical_score_payload(score_technical_frame(_raw_frame(100)))
-    risk = next(category for category in payload["rows"][-1]["categories"] if category["id"] == "volatility_risk")
-
-    assert [indicator["id"] for indicator in risk["indicators"]] == [
-        "atr_relative", "realized_volatility", "boll_width_relative",
-        "ma20_deviation_risk", "downside_volatility", "rolling_drawdown",
-    ]
-    assert {indicator["id"]: indicator["weight"] for indicator in risk["indicators"]} == {
-        "atr_relative": 0.40,
-        "realized_volatility": 0.40,
-        "boll_width_relative": 0.20,
-        "ma20_deviation_risk": None,
-        "downside_volatility": 0.60,
-        "rolling_drawdown": 0.40,
-    }
-    assert risk["volatility_weight"] == pytest.approx(0.45)
-    assert risk["downside_weight"] == pytest.approx(0.55)
-    assert risk["volatility_score"] is not None
-    assert risk["downside_score"] is not None
-    assert risk["score"] == round(risk["volatility_score"] * 0.45 + risk["downside_score"] * 0.55)
-    assert risk["status"].startswith("风险")
-    assert "当前" in risk["conclusion"]
-
-
-def test_risk_category_uses_two_groups_and_excludes_ma20_from_total():
-    def build_analysis(ma20_score):
-        return {
-            "indicators": [
-                {"id": "atr_relative", "score": 35, "coverage": 1.0},
-                {"id": "realized_volatility", "score": 28, "coverage": 1.0},
-                {"id": "boll_width_relative", "score": 55, "coverage": 1.0},
-                {"id": "downside_volatility", "score": 74, "coverage": 1.0},
-                {"id": "rolling_drawdown", "score": 80, "coverage": 1.0},
-                {"id": "ma20_deviation_risk", "score": ma20_score, "coverage": 1.0},
-            ],
-            "atr_percentile": 73.0,
-            "realized_vol_percentile": 68.0,
-            "downside_percentile": 92.0,
-            "boll": {"status": "波动温和扩张"},
-            "distance_atr": -2.5,
-            "drawdown_score": 100.0,
-            "oversold_score": 92.0,
-            "overheat_score": 0.0,
-        }
-
-    with_extreme = technical_scoring._risk_category(build_analysis(92))
-    without_extreme = technical_scoring._risk_category(build_analysis(0))
-
-    assert with_extreme["volatility_score"] == 36
-    assert with_extreme["downside_score"] == 76
-    assert with_extreme["score"] == 58
-    assert with_extreme["score"] == without_extreme["score"]
-
-
-def test_risk_category_exposes_five_period_trend_without_changing_score():
-    analysis = {
-        "indicators": [
-            {"id": "atr_relative", "score": 35, "coverage": 1.0},
-            {"id": "realized_volatility", "score": 28, "coverage": 1.0},
-            {"id": "boll_width_relative", "score": 55, "coverage": 1.0},
-            {"id": "downside_volatility", "score": 74, "coverage": 1.0},
-            {"id": "rolling_drawdown", "score": 80, "coverage": 1.0},
-            {"id": "ma20_deviation_risk", "score": 92, "coverage": 1.0},
-        ],
-        "atr_percentile": 73.0,
-        "realized_vol_percentile": 68.0,
-        "downside_percentile": 92.0,
-        "boll": {"status": "波动温和扩张"},
-        "distance_atr": -2.5,
-        "drawdown_score": 80.0,
-        "oversold_score": 92.0,
-        "overheat_score": 0.0,
-    }
-
-    category = technical_scoring._risk_category(analysis, risk_change_5=-12)
-
-    assert category["score"] == 58
-    assert category["risk_change_5"] == -12
-    assert category["risk_trend"] == "快速回落"
-    assert "近5周期风险快速回落" in category["conclusion"]
-
-
-def test_risk_analysis_preserves_ma20_deviation_direction_and_separates_oversold():
-    records = []
-    for index in range(80):
-        records.append({
-            "date": date(2026, 1, 1) + timedelta(days=index),
-            "high": 100.0,
-            "low": 99.0,
-            "close": 100.0,
-            "ma20": 100.0,
-            "atr_14": 1.0,
-            "boll_upper": 102.0,
-            "boll_lower": 98.0,
-        })
-    records[-1].update(close=98.0, low=97.0)
-
-    analysis = technical_scoring._risk_analysis(records, len(records) - 1)
-    indicators = {indicator["id"]: indicator for indicator in analysis["indicators"]}
-
-    deviation = indicators["ma20_deviation_risk"]
-    assert deviation["raw_values"]["distance_atr"] == -2.0
-    assert deviation["status"] == "下方明显偏离"
-    assert deviation["score_label"] == "超跌程度"
-    assert analysis["oversold_score"] == pytest.approx(85.0)
-    assert analysis["overheat_score"] == pytest.approx(0.0)
-    assert "超跌" in technical_scoring._risk_category_conclusion(
-        {"score": 80.0}, analysis,
-    )
-
-    downside = indicators["downside_volatility"]
-    assert downside["score"] == 100
-    assert downside["raw_values"]["negative_count"] == 1
 
 
 def test_payload_is_versioned_and_date_aligned():
@@ -1503,9 +1314,8 @@ def test_payload_is_versioned_and_date_aligned():
     assert payload["rows"][0]["as_of"] == "2026-01-01"
     assert set(payload["rows"][0]) == {
         "as_of", "direction_score", "confidence", "coverage", "trend",
-        "momentum", "volume_price", "state_confirmation", "volatility_risk", "activity", "available",
+        "momentum", "volume_price", "state_confirmation", "available",
         "category_direction_score", "category_direction_coverage", "direction_available",
-        "category_risk_score", "risk_available", "category_activity_score", "activity_available",
         "categories",
     }
 
@@ -1530,16 +1340,14 @@ def test_payload_reuses_categories_computed_with_score_frame(monkeypatch):
     assert len(payload["rows"]) == frame.height
 
 
-def test_category_payload_exposes_nested_scores_and_independent_activity():
+def test_category_payload_exposes_nested_direction_and_position_scores():
     payload = technical_score_payload(score_technical_frame(_raw_frame(100)))
     latest = payload["rows"][-1]
 
     assert latest["direction_available"] is True
     assert latest["category_direction_score"] is not None
-    assert latest["risk_available"] is True
-    assert latest["activity_available"] is True
     assert [category["id"] for category in latest["categories"]] == [
-        "trend", "momentum", "volume_price", "price_position", "volatility_risk", "activity",
+        "trend", "momentum", "volume_price", "price_position",
     ]
     assert all("score" in indicator and "raw_values" in indicator for category in latest["categories"] for indicator in category["indicators"])
     trend = next(category for category in latest["categories"] if category["id"] == "trend")
@@ -1565,14 +1373,6 @@ def test_category_payload_exposes_nested_scores_and_independent_activity():
         "obv": 0.30,
     }
     assert volume_price["phase"] in {"多头增强", "多头衰减", "空头增强", "空头衰减", "震荡", "反转预警", "数据不足"}
-    activity = next(category for category in latest["categories"] if category["id"] == "activity")
-    assert [indicator["id"] for indicator in activity["indicators"]] == ["amount_ratio_20", "amount_ma5_ma20"]
-    assert {indicator["id"]: indicator["weight"] for indicator in activity["indicators"]} == {
-        "amount_ratio_20": 0.60,
-        "amount_ma5_ma20": 0.40,
-    }
-    assert activity["status"] == "市场参与度中等"
-    assert "成交活跃度只反映市场参与程度" in activity["conclusion"]
     assert trend["status"].startswith(_trend_score_status(trend["score"]))
     assert trend["status"].endswith("(中期降级)")
     assert "当前趋势" in trend["conclusion"]
@@ -1614,14 +1414,6 @@ def test_trend_category_degrades_by_available_ma_scope(
     else:
         assert trend["score"] is None
         assert trend["status"] == status_suffix
-
-
-def test_missing_amount_does_not_become_activity_score():
-    frame = _raw_frame(100).drop("amount")
-    latest = score_technical_frame(frame).row(-1, named=True)
-
-    assert latest["technical_category_activity_score"] is None
-    assert latest["technical_category_activity_available"] is False
 
 
 class _ScoringRepo:
@@ -1738,3 +1530,38 @@ def test_period_api_aligns_30m_score_rows_after_warmup_bars():
     assert result["available_days"] == 2
     assert len(result["technical_scores"]["rows"]) == len(result["rows"]) == 16
     assert result["technical_scores"]["rows"][0]["as_of"] == result["rows"][0]["date"]
+
+
+def test_activity_removed_from_runtime_columns_and_api_payload():
+    removed_columns = {
+        'technical_activity_score', 'technical_category_activity_score',
+        'technical_category_activity_available',
+    }
+    removed_fields = {'activity', 'category_activity_score', 'activity_available'}
+    for frame in (_raw_frame(100), _raw_frame(100).drop('amount'), _raw_frame(0)):
+        scored = score_technical_frame(frame)
+        assert removed_columns.isdisjoint(scored.columns)
+        payload = technical_score_payload(scored)
+        assert payload['version'] == 'technical-score-v10'
+        for row in payload['rows']:
+            assert removed_fields.isdisjoint(row)
+            assert {category['id'] for category in row['categories']} == {
+                'trend', 'momentum', 'volume_price', 'price_position',
+            }
+
+
+def test_market_risk_removed_from_runtime_columns_and_api_payload():
+    removed_columns = {
+        'technical_volatility_risk', 'technical_category_risk_score',
+        'technical_category_risk_available',
+    }
+    for frame in (_raw_frame(100), _raw_frame(0)):
+        scored = score_technical_frame(frame)
+        assert removed_columns.isdisjoint(scored.columns)
+        payload = technical_score_payload(scored)
+        assert payload['version'] == 'technical-score-v10'
+        for row in payload['rows']:
+            assert {'volatility_risk', 'category_risk_score', 'risk_available'}.isdisjoint(row)
+            assert {category['id'] for category in row['categories']} == {
+                'trend', 'momentum', 'volume_price', 'price_position',
+            }

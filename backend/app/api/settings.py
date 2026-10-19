@@ -13,6 +13,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app import secrets_store
 from app.data_providers.custom.config import MAX_TIMEOUT
+from app.services import timeline_schedule
+from app.services.timeline_schedule import TimelineSettings, TimerMethod
 from app.tickflow import client as tf_client
 from app.tickflow.policy import (
     detect_capabilities,
@@ -827,6 +829,7 @@ def get_preferences() -> dict:
         "limit_ladder_monitor_enabled": preferences.get_limit_ladder_monitor_enabled(),
         "depth_polling_interval": preferences.get_depth_polling_interval(),
         "depth_finalize_time": preferences.get_depth_finalize_time(),
+        "timeline_schedule": timeline_schedule.get_settings(),
         "seekhub_daily_prompt": preferences.get_seekhub_daily_prompt(),
         "seekhub_daily_prompts": preferences.get_seekhub_daily_prompts(),
         "review_schedule": preferences.get_review_schedule(),
@@ -2010,6 +2013,20 @@ class PipelineScheduleIn(BaseModel):
 class SeekhubDailyPromptIn(BaseModel):
     method: str = "seekhub_daily_start"
     prompt: str = Field(min_length=1, max_length=2000)
+
+
+class TimelineScheduleIn(TimelineSettings):
+    prompts: dict[TimerMethod, str] = Field(default_factory=dict)
+
+
+@router.put("/preferences/timeline-schedule")
+def update_timeline_schedule(req: TimelineScheduleIn) -> dict:
+    """原子保存时间轴和提示词; 分钟调度器下一次触发读取新配置。"""
+    prompts = {method: prompt.strip() for method, prompt in req.prompts.items()}
+    if any(not value or len(value) > 2000 for value in prompts.values()):
+        raise HTTPException(status_code=400, detail="提示词不能为空且不能超过 2000 字")
+    config = TimelineSettings.model_validate(req.model_dump(exclude={"prompts"}))
+    return timeline_schedule.save_settings(config, prompts)
 
 
 class ExchangeRateScheduleIn(BaseModel):

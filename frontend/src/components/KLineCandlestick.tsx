@@ -396,7 +396,7 @@ export function KLineCandlestick({
         paneId: definition?.pane === 'main' || key === 'ma' && !definition ? 'candle_pane' : `tsp_${key.replaceAll('-', '_')}`,
         ...(!managed && !builtin ? { extendData: key === 'vol' ? volumeCompare.enabled : { period }, ...(key === 'vol' ? { calcParams: [volumeCompare.days] } : {}) } : {}),
         ...(packet ? { precision: packet.precision ?? (packet.pane === 'main' ? precision : 2), series: packet.pane === 'main' ? 'price' as const : key === 'vol' ? 'volume' as const : 'normal' as const,
-          figures: serverFormulaFigures(packet).filter(f => key !== 'ma' || !hiddenMaLines.includes(f.key)) as IndicatorFigure[],
+          figures: serverFormulaFigures(packet, key).filter(f => key !== 'ma' || !hiddenMaLines.includes(f.key)) as IndicatorFigure[],
           minValue: packet.min_value ?? undefined, maxValue: packet.max_value ?? undefined,
           extendData: formulaContext(key, packet, volumeCompare.enabled, volumeCompare.days),
         } : {}),

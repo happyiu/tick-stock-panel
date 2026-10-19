@@ -26,7 +26,6 @@ export function SettingsSystemPanel() {
   const { data: versionData } = useVersion()
   const [saving, setSaving] = useState(false)
   const [passwordEditing, setPasswordEditing] = useState(false)
-  const [oldPassword, setOldPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmNewPassword, setConfirmNewPassword] = useState('')
   const [passwordError, setPasswordError] = useState('')
@@ -96,7 +95,7 @@ export function SettingsSystemPanel() {
   }, [qc])
 
   const changePassword = useMutation({
-    mutationFn: () => api.authChangePassword(oldPassword, newPassword),
+    mutationFn: () => api.authChangePassword(newPassword),
     onSuccess: () => {
       toast('登录密码已修改，请重新登录', 'success')
       navigate(`/login?redirect=${encodeURIComponent('/settings?tab=system')}`, { replace: true })
@@ -107,7 +106,6 @@ export function SettingsSystemPanel() {
   const submitPasswordChange = (e: FormEvent) => {
     e.preventDefault()
     setPasswordError('')
-    if (!oldPassword) { setPasswordError('请输入当前密码'); return }
     if (newPassword.length < 6) { setPasswordError('新密码至少 6 位'); return }
     if (newPassword !== confirmNewPassword) { setPasswordError('两次新密码不一致'); return }
     changePassword.mutate()
@@ -162,7 +160,6 @@ export function SettingsSystemPanel() {
                 setPasswordEditing(next)
                 setPasswordError('')
                 if (!next) {
-                  setOldPassword('')
                   setNewPassword('')
                   setConfirmNewPassword('')
                 }
@@ -176,17 +173,7 @@ export function SettingsSystemPanel() {
 
         {passwordEditing && (
           <form onSubmit={submitPasswordChange} className="mt-3 space-y-3 rounded-btn border border-border/70 bg-base/50 p-3">
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <label className="space-y-1">
-                <span className="text-[11px] text-muted">当前密码</span>
-                <input
-                  type="password"
-                  value={oldPassword}
-                  onChange={e => setOldPassword(e.target.value)}
-                  autoComplete="current-password"
-                  className="h-9 w-full rounded-btn border border-border bg-base px-2.5 text-xs text-foreground outline-none focus:border-accent/50"
-                />
-              </label>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <label className="space-y-1">
                 <span className="text-[11px] text-muted">新密码</span>
                 <input

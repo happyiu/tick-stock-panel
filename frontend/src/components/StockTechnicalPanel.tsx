@@ -17,7 +17,7 @@ import {
 import { fmtAssetPrice, fmtPct, fmtVolume } from '@/lib/format'
 
 type Tone = 'bull' | 'bear' | 'neutral'
-type ScoreKind = 'direction' | 'risk' | 'activity' | 'position'
+type ScoreKind = 'direction' | 'position'
 
 interface TechnicalMetric {
   label: string
@@ -88,9 +88,9 @@ const GROUP_DEFS: TechnicalGroupDef[] = [
   },
   {
     key: 'environment',
-    label: '市场环境',
-    description: '波动与流动性只作独立风险观察',
-    scoreKind: 'risk',
+    label: '波动指标',
+    description: 'ATR 与 BOLL 原始波动指标',
+    scoreKind: 'position',
     indicatorKeys: ['atr', 'boll_width'],
   },
 ]
@@ -494,20 +494,19 @@ function buildIndicator(
       }).filter((value): value is number => value != null)
       const baseline = previousAtrPcts.length === 20 ? median(previousAtrPcts) : null
       const relative = atrPct != null && baseline != null && baseline > 0 ? atrPct / baseline : null
-      const percentile = numberValue(scoreIndicator?.raw_values.percentile)
-      const status = scoreIndicator?.status ?? (atrPct == null ? '样本不足' : relative == null ? '样本不足' : relative >= 1.2 ? '波动放大' : relative <= 0.8 ? '波动收敛' : '波动常态')
+      const status = (atrPct == null ? '样本不足' : relative == null ? '样本不足' : relative >= 1.2 ? '波动放大' : relative <= 0.8 ? '波动收敛' : '波动常态')
       return {
         ...def,
         status,
         tone: 'neutral',
-        summary: scoreIndicator?.summary ?? status,
+        summary: status,
         metrics: [
           { label: 'ATR14', value: fmtAssetPrice(atr, assetType) },
           { label: 'ATR/价', value: fmtUnsignedPct(atrPct) },
-          { label: percentile == null ? '相对中位' : '历史分位', value: percentile == null ? fmtRatio(relative) : `${Math.round(percentile)}%` },
+          { label: '相对中位', value: fmtRatio(relative) },
           { label: '状态', value: status },
         ],
-        detail: scoreIndicator?.detail ?? (relative == null ? '需要 ATR14 及此前 20 个周期作为波动基准' : '波动风险分使用 ATR/价格相对此前 20 周期中位数'),
+        detail: (relative == null ? '需要 ATR14 及此前 20 个周期作为波动基准' : 'ATR/价格相对此前 20 周期中位数'),
       }
     }
 
@@ -525,19 +524,19 @@ function buildIndicator(
       }).filter((value): value is number => value != null)
       const baseline = previousWidths.length === 20 ? median(previousWidths) : null
       const relative = bandwidth != null && baseline != null && baseline > 0 ? bandwidth / baseline : null
-      const status = scoreIndicator?.status ?? (!complete ? '样本不足' : relative == null ? '样本不足' : relative >= 1.2 ? '带宽扩张' : relative <= 0.8 ? '带宽收缩' : '带宽常态')
+      const status = (!complete ? '样本不足' : relative == null ? '样本不足' : relative >= 1.2 ? '带宽扩张' : relative <= 0.8 ? '带宽收缩' : '带宽常态')
       return {
         ...def,
         status,
         tone: 'neutral',
-        summary: scoreIndicator?.summary ?? status,
+        summary: status,
         metrics: [
           { label: '上轨', value: fmtAssetPrice(upper, assetType) },
           { label: '中轨', value: fmtAssetPrice(middle, assetType) },
           { label: '下轨', value: fmtAssetPrice(lower, assetType) },
           { label: '带宽', value: fmtUnsignedPct(bandwidth) },
         ],
-        detail: scoreIndicator?.detail ?? (relative == null ? '需要 BOLL 及此前 20 个周期作为带宽基准' : `带宽相对历史中位 ${fmtRatio(relative)}，仅用于波动风险观察`),
+        detail: (relative == null ? '需要 BOLL 及此前 20 个周期作为带宽基准' : `带宽相对历史中位 ${fmtRatio(relative)}，用于观察带宽变化`),
       }
     }
 
@@ -678,10 +677,6 @@ function confidenceLabel(value: number | null | undefined): string {
   return value >= 75 ? '高' : value >= 50 ? '中' : '低'
 }
 
-function riskLabel(value: number | null | undefined): string {
-  if (value == null) return '未评估'
-  return value >= 70 ? '高' : value >= 40 ? '中等' : '正常'
-}
 
 function metricValue(indicator: TechnicalIndicatorModel | undefined, label: string): string {
   return indicator?.metrics.find(metric => metric.label === label)?.value ?? '—'
@@ -732,16 +727,6 @@ function compactEnvironmentSummary(
   return [atr ? 'ATR ' + atr : null, boll ? 'BOLL ' + boll : null].filter(Boolean).join(' · ') || '波动未评估'
 }
 
-function riskExtremeSummaries(category: TechnicalScoreCategory | undefined): Array<{ label: string; score: number }> {
-  if (!category) return []
-  const oversold = numberValue(category.oversold_score)
-  const overheat = numberValue(category.overheat_score)
-  if (oversold == null && overheat == null) return []
-  return [
-    { label: '过热程度', score: overheat ?? 0 },
-    { label: '超跌程度', score: oversold ?? 0 },
-  ]
-}
 
 function dimensionStateLabel(value: number | null | undefined, change: number | null): string {
   const direction = scoreDirectionLabel(value == null ? null : value)
@@ -790,9 +775,7 @@ function scoreBadgeClasses(value: number | null | undefined, kind: ScoreKind, st
       ? 'border-bull/30 bg-bull/10 text-bull'
       : isBearish ? 'border-bear/30 bg-bear/10 text-bear' : 'border-border bg-elevated text-secondary'
   }
-  return kind === 'risk'
-    ? 'border-warning/30 bg-warning/10 text-warning'
-    : 'border-sky-400/30 bg-sky-400/10 text-sky-300'
+  return 'border-border bg-elevated text-secondary'
 }
 
 export interface StockTechnicalPanelProps {
@@ -843,11 +826,6 @@ export function StockTechnicalPanel({
     const volumePrice = score?.categories?.find(category => category.id === 'volume_price')
     const relation = volumePrice?.indicators.find(indicator => indicator.id === 'price_volume')
     if (relation) entries.push(['volume_price', relation])
-    const riskCategory = score?.categories?.find(category => category.id === 'volatility_risk')
-    const atr = riskCategory?.indicators.find(indicator => indicator.id === 'atr_relative')
-    const boll = riskCategory?.indicators.find(indicator => indicator.id === 'boll_width_relative')
-    if (atr) entries.push(['atr', atr])
-    if (boll) entries.push(['boll_width', boll])
     return new Map(entries)
   }, [score])
   const indicators = useMemo(
@@ -863,8 +841,6 @@ export function StockTechnicalPanel({
   const currentDirectionScore = score?.available ? score.direction_score : null
   const currentConfidence = score?.available ? score.confidence : null
   const volumePriceCategory = score?.categories?.find(category => category.id === 'volume_price')
-  const riskCategory = score?.categories?.find(category => category.id === 'volatility_risk')
-  const extremeSummaries = riskExtremeSummaries(riskCategory)
   const volumeStatus = indicatorsByKey.get('volume_price')?.status
   const volumeState = volumePriceCategory
     ? [volumePriceCategory.direction_status ?? volumePriceCategory.status ?? '未评估', volumePriceCategory.phase, volumePriceCategory.alert].filter(Boolean).join(' · ')
@@ -967,7 +943,7 @@ export function StockTechnicalPanel({
                   <span className="text-[12px] font-medium text-foreground">技术研判</span>
                   <span className="text-[12px] text-muted">状态 → 变化 → 观察</span>
                 </div>
-                <div className="grid grid-cols-3 gap-1.5">
+                <div className="grid grid-cols-2 gap-1.5">
                   <div className="rounded border border-border/70 bg-base/30 p-2">
                     <div className="text-[12px] text-muted">技术状态</div>
                     <div className="mt-1 flex flex-wrap items-baseline gap-1.5">
@@ -982,14 +958,6 @@ export function StockTechnicalPanel({
                       <span className="font-mono text-[13px] font-semibold tabular-nums text-foreground">{currentConfidence == null ? '—' : `${Math.round(currentConfidence)}%`}</span>
                       <span className="text-[12px] text-secondary">{confidenceLabel(currentConfidence)}</span>
                     </div>
-                  </div>
-                  <div className="rounded border border-border/70 bg-base/30 p-2">
-                    <div className="text-[12px] text-muted">市场风险</div>
-                    <div className="mt-1 flex flex-wrap items-baseline gap-1.5">
-                      <span className="font-mono text-[13px] font-semibold tabular-nums text-warning">{score?.volatility_risk == null ? '—' : `${Math.round(score.volatility_risk)}/100`}</span>
-                      <span className="text-[12px] text-warning">{riskCategory?.status ?? riskLabel(score?.volatility_risk)}</span>
-                    </div>
-                    {extremeSummaries.length > 0 && <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-secondary">{extremeSummaries.map(item => <span key={item.label}>{item.label} {Math.round(item.score)}/100</span>)}</div>}
                   </div>
                 </div>
                 <div className="mt-2 border-t border-border/50 pt-2 text-[12px] leading-relaxed text-secondary">
@@ -1016,9 +984,8 @@ export function StockTechnicalPanel({
               <div className="rounded-card border border-border bg-surface/70 px-2.5 py-2 shadow-sm">
                 <div className="flex items-baseline justify-between gap-2">
                   <span className="text-[12px] font-medium text-foreground">市场环境</span>
-                  <span className="text-[12px] text-warning">{riskCategory?.status ?? riskLabel(score?.volatility_risk)}</span>
                 </div>
-                <div className="mt-1 truncate text-[12px] text-muted" title={compactEnvironmentSummary(indicatorsByKey, riskCategory)}>{compactEnvironmentSummary(indicatorsByKey, riskCategory)}</div>
+                <div className="mt-1 truncate text-[12px] text-muted" title={compactEnvironmentSummary(indicatorsByKey)}>{compactEnvironmentSummary(indicatorsByKey)}</div>
               </div>
 
               <details className="rounded-card border border-border bg-base/20">
@@ -1032,7 +999,7 @@ export function StockTechnicalPanel({
                       .map(key => indicatorsByKey.get(key))
                       .filter((indicator): indicator is TechnicalIndicatorModel => !!indicator && config.visible[indicator.key] !== false)
                     const groupScore = group.key === 'environment'
-                      ? score?.volatility_risk
+                      ? null
                       : group.key === 'volume_price' ? score?.volume_price : score?.[group.key]
                     return (
                       <TechnicalGroup
@@ -1055,15 +1022,13 @@ export function StockTechnicalPanel({
   )
 }
 
-function categoryScoreText(kind: ScoreKind, score: number | null | undefined): string {
+function categoryScoreText(_kind: ScoreKind, score: number | null | undefined): string {
   if (score == null) return '—'
-  const prefix = kind === 'risk' ? '风险 ' : kind === 'activity' ? '活跃 ' : ''
-  return `${prefix}${Math.round(score)}/100`
+  return `${Math.round(score)}/100`
 }
 
 function scoreSummaryClass(item: { label: string; kind: ScoreKind; value: number | null | undefined }): string {
-  if ((item.label === '过热程度' || item.label === '超跌程度') && item.value === 0) return 'text-secondary'
-  return item.kind === 'direction' ? 'text-foreground' : item.kind === 'risk' ? 'text-warning' : 'text-sky-300'
+  return item.kind === 'direction' ? 'text-foreground' : 'text-sky-300'
 }
 
 function categoryRawLabel(key: string): string {
@@ -1079,9 +1044,6 @@ function categoryRawLabel(key: string): string {
     history_count: '历史样本数',
     history_window: '历史窗口',
     distance_atr: '距MA20(ATR)',
-    deviation_score: '乖离程度',
-    oversold_score: '超跌程度',
-    overheat_score: '过热程度',
     change_pct: '涨跌幅',
     volume_ratio: '量比',
     rvol: 'RVOL20',
@@ -1182,28 +1144,6 @@ function categoryRawLabel(key: string): string {
     long_structure_score: '中长期结构分',
     medium_structure_score: '中期结构分',
     atr14: 'ATR14',
-    atr_pct: 'ATR/价格',
-    realized_volatility: '实现波动率',
-    downside_volatility: '下行波动率',
-    risk_score: '映射风险分',
-    percentile_score: '分位映射分',
-    negative_count: '负收益数',
-    change_5_pct: '带宽5周期变化',
-    change_score: '带宽变化分',
-    drawdown_20_pct: '20周期回撤',
-    drawdown_60_pct: '60周期回撤',
-    drawdown_20_percentile: '20周期回撤历史分位',
-    drawdown_60_percentile: '60周期回撤历史分位',
-    drawdown_20_history_count: '20周期回撤历史样本',
-    drawdown_60_history_count: '60周期回撤历史样本',
-    drawdown_20_score: '20周期损伤分',
-    drawdown_60_score: '60周期损伤分',
-    drawdown_pct: '回撤',
-    amount: '当前成交额',
-    deviation_atr: '偏离ATR倍数',
-    average_amount: '前20周期均额',
-    amount_ma5: '成交额 MA5',
-    amount_ma20: '成交额 MA20',
     ratio: '相对倍数',
   }
   for (const period of [5, 20, 60]) {
@@ -1243,7 +1183,7 @@ function categoryIndicatorStatusTone(kind: ScoreKind, score: number | null, indi
   if (score == null) return 'text-muted'
   if (kind === 'position') return 'text-secondary'
   if (kind === 'direction') return score >= 60 ? 'text-bull' : score <= 40 ? 'text-bear' : 'text-muted'
-  return kind === 'risk' ? 'text-warning' : 'text-sky-300'
+  return 'text-sky-300'
 }
 
 function positionIndicatorValue(indicator: TechnicalScoreIndicator): string {
@@ -1259,7 +1199,6 @@ function positionIndicatorValue(indicator: TechnicalScoreIndicator): string {
 
 function indicatorScoreText(category: TechnicalScoreCategory, indicator: TechnicalScoreIndicator): string {
   if (indicator.score == null) return '—'
-  if (indicator.score_label) return `${indicator.score_label} ${Math.round(indicator.score)}/100`
   return categoryScoreText(category.kind, indicator.score)
 }
 
@@ -1324,104 +1263,6 @@ function ETFPricePosition({ category }: { category: TechnicalScoreCategory }) {
   )
 }
 
-function riskGroupIndicators(category: TechnicalScoreCategory, group: 'volatility' | 'downside' | 'extreme'): TechnicalScoreIndicator[] {
-  const explicit = category.indicators.filter(indicator => indicator.group === group)
-  if (explicit.length > 0) return explicit
-  const fallbackIds: Record<typeof group, string[]> = {
-    volatility: ['atr_relative', 'realized_volatility', 'boll_width_relative'],
-    downside: ['downside_volatility', 'rolling_drawdown'],
-    extreme: ['ma20_deviation_risk'],
-  }
-  return category.indicators.filter(indicator => fallbackIds[group].includes(indicator.id))
-}
-
-function riskGroupScoreText(score: number | null | undefined): string {
-  return score == null ? '数据不足' : `风险 ${Math.round(score)}/100`
-}
-
-function ETFRiskGroup({
-  title,
-  weight,
-  score,
-  coverage,
-  indicators,
-  category,
-}: {
-  title: string
-  weight: number
-  score: number | null | undefined
-  coverage?: number
-  indicators: TechnicalScoreIndicator[]
-  category: TechnicalScoreCategory
-}) {
-  return (
-    <div className="rounded border border-border/70 bg-base/20 p-2">
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="text-[11px] font-medium text-foreground">{title}</span>
-        <span className="text-[10px] text-muted">权重 {Math.round(weight * 100)}%</span>
-      </div>
-      <div className="mt-1 font-mono text-[13px] font-semibold tabular-nums text-warning">{riskGroupScoreText(score)}</div>
-      {coverage != null && coverage < 100 && <div className="mt-0.5 text-[10px] text-muted">覆盖 {coverage}%</div>}
-      <div className="mt-1.5 grid gap-1.5">
-        {indicators.map(indicator => <ETFCategoryIndicator key={indicator.id} category={category} indicator={indicator} />)}
-      </div>
-    </div>
-  )
-}
-
-function ETFRiskCategory({ category }: { category: TechnicalScoreCategory }) {
-  const volatilityIndicators = riskGroupIndicators(category, 'volatility')
-  const downsideIndicators = riskGroupIndicators(category, 'downside')
-  const extremeIndicators = riskGroupIndicators(category, 'extreme')
-  return (
-    <details className="rounded border border-border/70 bg-base/20">
-      <summary className="cursor-pointer list-none px-2.5 py-2 text-[12px] text-secondary">
-        <div className="flex items-center justify-between gap-2">
-          <span className="min-w-0 truncate font-medium text-foreground">{category.name}</span>
-          <span className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[11px] font-semibold tabular-nums ${scoreBadgeClasses(category.score, category.kind, category.status)}`}>
-            {categoryScoreText(category.kind, category.score)}
-          </span>
-        </div>
-        {category.conclusion && (
-          <div className="mt-1 border-t border-border/50 pt-1 text-[11px] leading-relaxed text-secondary">
-            <span className="text-muted">结论: </span>{category.conclusion}
-          </div>
-        )}
-      </summary>
-      <div className="space-y-2 border-t border-border/70 p-1.5">
-        <div className="grid gap-1.5 sm:grid-cols-2">
-          <ETFRiskGroup
-            title="波动风险"
-            weight={category.volatility_weight ?? 0.45}
-            score={category.volatility_score}
-            coverage={category.volatility_coverage}
-            indicators={volatilityIndicators}
-            category={category}
-          />
-          <ETFRiskGroup
-            title="下行风险"
-            weight={category.downside_weight ?? 0.55}
-            score={category.downside_score}
-            coverage={category.downside_coverage}
-            indicators={downsideIndicators}
-            category={category}
-          />
-        </div>
-        {extremeIndicators.length > 0 && (
-          <div className="rounded border border-border/70 bg-base/20 p-2">
-            <div className="mb-1.5 flex items-baseline justify-between gap-2">
-              <span className="text-[11px] font-medium text-foreground">极端状态</span>
-              <span className="text-[10px] text-muted">不参与市场风险总分</span>
-            </div>
-            <div className="grid gap-1.5">
-              {extremeIndicators.map(indicator => <ETFCategoryIndicator key={indicator.id} category={category} indicator={indicator} />)}
-            </div>
-          </div>
-        )}
-      </div>
-    </details>
-  )
-}
 
 function ETFCategoryIndicator({ category, indicator, compact = false }: { category: TechnicalScoreCategory; indicator: TechnicalScoreIndicator; compact?: boolean }) {
   const score = indicator.score
@@ -1434,9 +1275,7 @@ function ETFCategoryIndicator({ category, indicator, compact = false }: { catego
   const [descriptionOpen, setDescriptionOpen] = useState(false)
   const [rawExpanded, setRawExpanded] = useState(false)
   const hasRawValues = Object.keys(indicator.raw_values).length > 0
-  const indicatorBadgeClasses = indicator.score_label && score === 0
-    ? 'border-border bg-elevated text-secondary'
-    : scoreBadgeClasses(isPricePosition ? null : score, category.kind)
+  const indicatorBadgeClasses = scoreBadgeClasses(isPricePosition ? null : score, category.kind)
   return (
     <div className={compact ? 'p-2' : 'rounded border border-border/70 bg-base/20 p-2'}>
       <div className="flex items-start justify-between gap-2">
@@ -1505,8 +1344,6 @@ function ETFCategoryIndicator({ category, indicator, compact = false }: { catego
 
 function ETFIndicatorScores({ score }: { score: TechnicalScoreRow | null }) {
   const categories = score?.categories ?? []
-  const riskCategory = categories.find(category => category.id === 'volatility_risk')
-  const extremeSummaries = riskExtremeSummaries(riskCategory)
   const summary: Array<{
     label: string
     kind: ScoreKind
@@ -1516,21 +1353,10 @@ function ETFIndicatorScores({ score }: { score: TechnicalScoreRow | null }) {
     display?: string
   }> = [
     { label: '方向分', kind: 'direction' as const, value: score?.category_direction_score, available: score?.direction_available, coverage: score?.category_direction_coverage },
-    { label: '市场风险', kind: 'risk' as const, value: score?.category_risk_score, available: score?.risk_available },
-    { label: '成交活跃度', kind: 'activity' as const, value: score?.category_activity_score, available: score?.activity_available },
   ]
-  if (extremeSummaries.length > 0) {
-    summary.splice(2, 0, ...extremeSummaries.map(item => ({
-      label: item.label,
-      kind: 'risk' as const,
-      value: item.score,
-      available: true,
-      display: `${Math.round(item.score)}/100`,
-    })))
-  }
   return (
     <section className="px-2.5 pb-2.5 pt-4">
-      <div className={`grid gap-1.5 ${extremeSummaries.length > 0 ? 'grid-cols-2 sm:grid-cols-5' : 'grid-cols-3'}`}>
+      <div className="grid grid-cols-1 gap-1.5">
         {summary.map(item => (
           <div key={item.label} className="rounded border border-border/70 bg-base/40 p-2">
             <div className="text-[11px] text-muted">{item.label}</div>
@@ -1548,8 +1374,7 @@ function ETFIndicatorScores({ score }: { score: TechnicalScoreRow | null }) {
             <ETFVolumePriceConfirmation key={category.id} category={category} />
           ) : category.id === 'price_position' ? (
             <ETFPricePosition key={category.id} category={category} />
-          ) : category.id === 'volatility_risk' ? (
-            <ETFRiskCategory key={category.id} category={category} />
+
           ) : (
             <details key={category.id} className="rounded border border-border/70 bg-base/20">
               <summary className="cursor-pointer list-none px-2.5 py-2 text-[12px] text-secondary">
@@ -1608,9 +1433,9 @@ function TechnicalGroup({
           <span className="text-[12px] font-medium text-foreground">{group.label}</span>
           <span className="truncate text-[12px] text-muted">{group.description}</span>
         </span>
-        <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[12px] font-semibold ${scoreBadgeClasses(score, group.scoreKind)}`}>
-          {group.scoreKind === 'risk' ? '风险 ' : ''}{scoreLabel(score)}
-        </span>
+        {group.scoreKind === 'direction' && <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[12px] font-semibold ${scoreBadgeClasses(score, group.scoreKind)}`}>
+          {scoreLabel(score)}
+        </span>}
       </button>
       {!collapsed && (
         indicators.length > 0 ? (
@@ -1683,7 +1508,7 @@ function TechnicalSettings({
             <div key={group.key} className="rounded-card border border-border bg-base/30 p-2">
               <div className="mb-1.5 flex items-center justify-between">
                 <span className="text-[12px] font-medium text-foreground">{group.label}</span>
-                <span className="text-[12px] text-muted">{group.scoreKind === 'direction' ? '方向分' : '风险分'}</span>
+                <span className="text-[12px] text-muted">{group.scoreKind === 'direction' ? '方向分' : '原始指标'}</span>
               </div>
               <div className="space-y-1">
                 {group.indicatorKeys.map(key => {

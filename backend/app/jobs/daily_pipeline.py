@@ -1561,6 +1561,8 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
 
     scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
     _register_h_analysis_job(scheduler)
+    from app.services.timeline_schedule import register as register_timeline
+    register_timeline(scheduler)
 
     # 盘前: 同步 instruments（时间由偏好决定）
     def _instruments_task(on_progress=None):

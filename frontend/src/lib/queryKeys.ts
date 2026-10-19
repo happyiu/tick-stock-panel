@@ -103,9 +103,9 @@ export const QK = {
 
   // Kline
   kline:                (symbol: string, start: string, end: string, extColumns?: string, includeTechnicalScores = false, indicators?: ChartIndicatorRequest) =>
-                           ['kline', symbol, start, end, extColumns ?? '', includeTechnicalScores, ...indicatorQuerySuffix(indicators)] as const,
+                           ['kline', symbol, start, end, extColumns ?? '', includeTechnicalScores ? 'technical-score-v10' : false, ...indicatorQuerySuffix(indicators)] as const,
   klinePeriod:          (symbol: string, period: string, start: string, end: string, days: number, includeTechnicalScores = false, indicators?: ChartIndicatorRequest) =>
-                           ['kline-period', symbol, period, start, end, days, includeTechnicalScores, ...indicatorQuerySuffix(indicators)] as const,
+                           ['kline-period', symbol, period, start, end, days, includeTechnicalScores ? 'technical-score-v10' : false, ...indicatorQuerySuffix(indicators)] as const,
   klineLatest:          (symbol: string) => ['kline-latest', symbol] as const,
   chanlun:              (symbol: string, assetType: string, period: string, start: string, end: string, days: number, source: string, asOf: string | null, revision: number) =>
                            ['chanlun', symbol, assetType, period, start, end, days, source, asOf, revision] as const,

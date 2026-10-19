@@ -85,7 +85,7 @@ function signalFigures(signals: Signal[], nativeText = false): IndicatorFigure<F
         const direction = signal.down ? -1 : 1
         return signal.arrow ? { coordinates: [
           { x, y: y - direction * 5 }, { x: x - 4, y: y + direction * 4 }, { x: x + 4, y: y + direction * 4 },
-        ] } : { x, y, text: nativeText ? signal.text : '', align: signal.align ?? 'left', baseline: 'middle' }
+        ] } : { x, y: nativeText ? y + direction * 9 : y, text: nativeText ? signal.text : '', align: nativeText ? 'center' : signal.align ?? 'left', baseline: nativeText ? signal.down ? 'bottom' : 'top' : 'middle' }
       },
       styles: () => ({ color: palette()[signal.color], size: 11, style: 'fill', family: 'JetBrains Mono, monospace' }),
     }
@@ -200,7 +200,7 @@ export const formulaIndicators: FormulaIndicator[] = [
       ...ANGEL_DEVIL_MA.map(ma => line(ma.key, () => themeColor(ma.color, ma.lightColor), ma.width)),
       ...signalFigures([
         { field: 'attack', key: 'attackText', text: '进攻', y: null, color: 'yellow' },
-        { field: 'retreat', key: 'retreatText', text: '撤退', y: null, color: 'white' },
+        { field: 'retreat', key: 'retreatText', text: '撤退', y: null, color: 'white', down: true },
       ], true),
       ...(['attackArrow', 'retreatArrow'] as const).map((key, i): IndicatorFigure<FormulaRow> => ({
         key, type: 'polygon', attrs: ({ coordinate }) => {
@@ -213,9 +213,9 @@ export const formulaIndicators: FormulaIndicator[] = [
       const rows = calculateAngelDevil(data.map(b => b.close))
       return numeric(rows).map((row, i) => ({ ...row,
         attackArrow: rows[i].signal === 'buy' ? data[i].low * 0.97 : null,
-        attackText: rows[i].signal === 'buy' ? data[i].low * 0.92 : null,
+        attackText: rows[i].signal === 'buy' ? data[i].low * 0.97 : null,
         retreatArrow: rows[i].signal === 'sell' ? data[i].high * 1.03 : null,
-        retreatText: rows[i].signal === 'sell' ? data[i].high * 1.08 : null,
+        retreatText: rows[i].signal === 'sell' ? data[i].high * 1.03 : null,
       }))
     },
     createTooltipDataSource: emptyTooltip,
