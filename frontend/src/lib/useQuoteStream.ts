@@ -200,8 +200,15 @@ export function useQuoteStream(
         try {
           const data = JSON.parse(e.data)
             const alerts: StrategyAlertEvent[] = data.alerts || []
-            if (alerts.length > 0) {
-              handleAlerts(alerts)
+            if (alerts.some(alert => alert.source === 'indicator' || alert.source === 'indicator_update')) {
+              qc.invalidateQueries({ queryKey: QK.indicatorMonitors })
+              qc.invalidateQueries({ queryKey: QK.indicatorMonitorEvents })
+              const ruleIds = new Set(alerts.filter(alert => alert.source === 'indicator' || alert.source === 'indicator_update').map(alert => (alert as unknown as { rule_id: string }).rule_id))
+              qc.invalidateQueries({ predicate: query => query.queryKey[0] === 'indicator-monitor-snapshot' && ruleIds.has(String(query.queryKey[1])) })
+            }
+            const visibleAlerts = alerts.filter(alert => alert.source !== 'indicator_update')
+            if (visibleAlerts.length > 0) {
+              handleAlerts(visibleAlerts)
               // 实时刷新触发记录列表 + 监控中心徽标
               qc.invalidateQueries({ queryKey: ['alerts'] })
               qc.invalidateQueries({ queryKey: ['alerts-total'] })

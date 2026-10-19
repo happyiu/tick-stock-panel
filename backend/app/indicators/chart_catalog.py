@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import re
 import threading
@@ -107,6 +108,27 @@ def validate_definition(item):
     if not isinstance(formula, str):
         raise CatalogError('公式必须是文本', 422)
     program = compile_formula(formula)
+    variables = formula_variables(program)
+    signals = item.get('monitor_signals', [])
+    if not isinstance(signals, list) or len(signals) > 32:
+        raise CatalogError('最多配置32个监控信号', 422)
+    seen = set()
+    for signal in signals:
+        if not isinstance(signal, dict) or not ID_RE.fullmatch(str(signal.get('id', ''))):
+            raise CatalogError('监控信号ID格式非法', 422)
+        if signal['id'] in seen:
+            raise CatalogError('监控信号ID不能重复', 422)
+        seen.add(signal['id'])
+        if not isinstance(signal.get('name'), str) or not 1 <= len(signal['name'].strip()) <= 80:
+            raise CatalogError('信号名称需要1～80个字符', 422)
+        if signal.get('variable') not in variables:
+            raise CatalogError('监控条件变量必须由公式定义', 422)
+        periods = signal.get('periods')
+        if not isinstance(periods, list) or not periods or any(p not in ('30m', '1d') for p in periods):
+            raise CatalogError('信号周期仅支持30f和日线', 422)
+    minimum = item.get('min_history_bars', 100)
+    if type(minimum) is not int or not 1 <= minimum <= 20000:
+        raise CatalogError('最低历史根数需要1～20000', 422)
     # Run all branches on a small frame to validate period parameters and argument types.
     sample = [{'open': 10+i*.01, 'close': 10+i*.02, 'high': 11+i*.02,
                'low': 9+i*.01, 'volume': 1000+i, 'amount': 10000+i} for i in range(90)]
@@ -115,8 +137,17 @@ def validate_definition(item):
     return program
 
 
+def formula_variables(program):
+    return [key for key, mode, *_ in program.statements if mode != 'draw']
+
+
+def calculation_fingerprint(item):
+    value = {key: item.get(key, default) for key, default in (
+        ('formula', ''), ('monitor_signals', []), ('min_history_bars', 100))}
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
 def save_indicator(data_dir, payload, key=None):
-    validate_definition(payload)
     with _LOCK:
         if key is None:
             key = f'user-{uuid.uuid4().hex}'
@@ -132,6 +163,9 @@ def save_indicator(data_dir, payload, key=None):
         item = {**base, 'id': key, 'source': 'custom', 'name': payload['name'].strip(),
                 'pane': payload['pane'], 'description': payload.get('description', ''),
                 'formula': payload['formula'], 'revision': revision, 'height': base.get('height', 120)}
+        item['monitor_signals'] = payload.get('monitor_signals', base.get('monitor_signals', []))
+        item['min_history_bars'] = payload.get('min_history_bars', base.get('min_history_bars', 100))
+        validate_definition(item)
         target = _path(data_dir, key)
         target.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(target, json.dumps(item, ensure_ascii=False, indent=2))

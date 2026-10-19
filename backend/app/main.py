@@ -25,6 +25,7 @@ from app.api import (
     external_factors,
     factors,
     financials,
+    indicator_monitors,
     indices,
     intraday,
     kline,
@@ -377,6 +378,21 @@ async def _application_lifespan(app: FastAPI):
     app.state.monitor_engine = monitor_engine
     app.state.sector_monitor_service = sector_monitor_service
 
+    from app.services.chart_candles import monitor_capability, monitor_snapshot
+    from app.services.indicator_monitor import IndicatorMonitorService
+    from app.services.notification_dispatch import format_notifications, send_indicator
+    try:
+        indicator_monitor = IndicatorMonitorService(
+            store.data_dir, loader=lambda rule, now: monitor_snapshot(app.state, rule, now),
+            sender=send_indicator, capability=lambda rule: monitor_capability(app.state, rule),
+            publisher=lambda key, events: qs.push_alerts(events or [{'source': 'indicator_update', 'rule_id': key}]),
+            formatter=lambda event: format_notifications([event], app.state.extension_registry)[0]['message'],
+        )
+        app.state.indicator_monitor = indicator_monitor
+        indicator_monitor.start()
+    except Exception:
+        logger.exception("indicator monitor init failed")
+
     # 源码内二次开发启动钩子: 仅暴露稳定只读上下文, 单个扩展失败不影响核心启动。
     extension_registry = app.state.extension_registry
     start_backend_extensions(
@@ -388,6 +404,9 @@ async def _application_lifespan(app: FastAPI):
         yield
     finally:
         repo._on_refresh_done = None  # noqa: SLF001
+        indicator_monitor = getattr(app.state, "indicator_monitor", None)
+        if indicator_monitor:
+            indicator_monitor.stop()
         wd = getattr(app.state, "watchdog", None)
         if wd:
             await wd.stop()
@@ -559,6 +578,7 @@ app.include_router(strategy.router)
 app.include_router(strategy_chart.router)
 app.include_router(signals.router)
 app.include_router(monitor_rules.router)
+app.include_router(indicator_monitors.router)
 app.include_router(lots.router)
 app.include_router(alerts.router)
 app.include_router(events.router)

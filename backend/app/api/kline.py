@@ -19,7 +19,6 @@ from app.market_time import cn_now, cn_today, in_continuous_session
 from app.price_limits import is_no_limit_day, is_risk_warning_name, parse_listing_date, price_limit_pct
 from app.services import kline_sync, trading_day
 from app.services import minute_adjust
-from app.services.chart_data import ChartSnapshot
 from app.services.kline_periods import aggregate_daily_period, aggregate_minute_30m
 from app.services.technical_scoring import (
     TECHNICAL_SCORE_COLUMNS,
@@ -38,14 +37,8 @@ _TECHNICAL_SCORE_WARMUP_DAYS = 400
 
 
 def _chart_snapshot(request, symbol, asset_type, period, start, end):
-    from app.services import preferences
-
-    service = getattr(request.app.state, "chart_data_service", None)
-    if service is None:
-        import polars as pl
-        return ChartSnapshot(pl.DataFrame(), "", stale=True)
-    provider = preferences.get_chart_data_provider()
-    return service.get(provider, provider, symbol, asset_type, period, start, end)
+    from app.services.chart_candles import chart_snapshot
+    return chart_snapshot(request.app.state, symbol, asset_type, period, start, end)
 
 
 def _score_frame_if_requested(frame, include_technical_scores: bool):
@@ -900,81 +893,9 @@ def _attach_ext(resp: dict, repo, symbol: str, ext_columns: Optional[str]) -> di
     return resp
 
 
-def _latest_live_candle(
-    request: Request,
-    symbol: str,
-    asset_type: str = "stock",
-    *,
-    refresh_asset: bool = True,
-) -> dict | None:
-    """从内存缓存读取单只标的的当日实时 enriched 行。"""
-
-    if asset_type == "stock":
-        qs = getattr(request.app.state, "quote_service", None)
-        if not qs:
-            return None
-        df_today, enriched_date = qs.get_enriched_today()
-    elif asset_type in {"etf", "index"}:
-        df_today, enriched_date = request.app.state.repo.get_enriched_latest_asset(
-            asset_type, refresh=refresh_asset,
-        )
-    else:
-        return None
-    if df_today.is_empty():
-        return None
-
-    # 非交易日(周末/假日)缓存日期 != 北京今天, 跳过注入避免产生重复蜡烛。
-    # 必须用 cn_today(): 美洲时区主机整个 A 股交易时段本地日期落后北京一天,
-    # 旧代码盘中直接丢K。UTC 主机盘中(UTC 1:30-7:00)本地日期与北京相同, 并不丢K;
-    # UTC 的旧症状是北京 00:00-08:00 把昨日残留快照误当实时K注入。
-    if not enriched_date or str(enriched_date)[:10] != cn_today().isoformat():
-        return None
-
-    # 查找该 symbol 的实时 enriched 行
-    import polars as pl
-    try:
-        q = df_today.filter(pl.col("symbol") == symbol).to_dicts()
-        if not q:
-            return None
-        q = q[0]
-    except Exception:
-        return None
-
-    close_price = q.get("close")
-    if not close_price or close_price <= 0:
-        return None
-
-    # 沿用完整日K接口原有的实时行投影, 避免增量接口形成第二套字段契约。
-    # API 在非交易时段可能返回 open/high/low=0, 用 close 填充避免异常蜡烛。
-    raw_open = q.get("open")
-    raw_high = q.get("high")
-    raw_low = q.get("low")
-    live_row = {
-        "date": cn_today().isoformat(),
-        "symbol": symbol,
-        "open": raw_open if raw_open and raw_open > 0 else close_price,
-        "high": raw_high if raw_high and raw_high > 0 else close_price,
-        "low": raw_low if raw_low and raw_low > 0 else close_price,
-        "close": close_price,
-        "volume": q.get("volume"),
-        "amount": q.get("amount"),
-        "change_pct": q.get("change_pct"),
-        "is_live": True,
-    }
-    if asset_type != "stock":
-        live_row["turnover_rate"] = q.get("turnover_rate")
-        for key in ("raw_close", "raw_high", "raw_low"):
-            if q.get(key) is not None:
-                live_row[key] = q[key]
-    for key in ("ma5", "ma10", "ma20", "ma30", "ma60",
-                "macd_dif", "macd_dea", "macd_hist",
-                "kdj_k", "kdj_d", "kdj_j",
-                "boll_upper", "boll_lower",
-                "rsi_6", "rsi_14", "rsi_24",
-                "atr_14", "vol_ratio_5d"):
-        if key in q and q[key] is not None:
-            live_row[key] = q[key]
-    return live_row
+def _latest_live_candle(request: Request, symbol: str, asset_type: str = "stock", *, refresh_asset: bool = True):
+    from app.services.chart_candles import latest_live_candle
+    return latest_live_candle(request.app.state, symbol, asset_type, refresh_asset=refresh_asset, today=cn_today())
 
 
 def _maybe_inject_live_candle(request: Request, symbol: str, rows: list[dict], asset_type: str = "stock") -> list[dict]:

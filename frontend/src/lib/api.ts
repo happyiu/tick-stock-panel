@@ -568,6 +568,27 @@ export interface ChartIndicatorDefinition {
   height: number
   min_value?: number
   max_value?: number
+  monitor_signals?: IndicatorMonitorSignal[]
+  min_history_bars?: number
+}
+export interface IndicatorMonitorSignal { id: string; name: string; variable: string; periods: ('30m' | '1d')[] }
+export interface IndicatorMonitorInput {
+  symbol: string; asset_type: 'stock' | 'etf'; indicator_id: string; period: '30m' | '1d'
+  signal_ids: string[]; mode: 'preview' | 'confirmed' | 'both'; channels: string[]; enabled: boolean; compare_days: number
+}
+export interface IndicatorMonitorRule extends IndicatorMonitorInput {
+  id: string; generation: number; status: string; reason?: string; last_checked?: string; data_through?: string
+  definition: ChartIndicatorDefinition; needs_update?: boolean
+}
+export interface IndicatorMonitorEvent {
+  event_id: string; rule_id: string; ts: number; symbol: string; asset_type: 'stock' | 'etf'; indicator_name: string
+  indicator_id: string; period: '30m' | '1d'; signal_name: string; phase: 'preview' | 'confirmed'; bar_end: string
+  message: string; price: number | null; confirmation: 'pending' | 'confirmed' | 'unconfirmed' | 'missing_data'
+  deliveries: Record<string, 'pending' | 'sent' | 'failed'>
+}
+export interface IndicatorMonitorSnapshot {
+  rows: KlineRow[]; symbol: string; asset_type: 'stock' | 'etf'; period: '30m' | '1d'
+  indicator_results: Record<string, ChartIndicatorResult>; definition: ChartIndicatorDefinition
 }
 export interface ChartIndicatorStyle { key: string; color: string; width: number; dash: boolean; hidden: boolean; light_color?: string; dash_size?: number }
 export interface ChartIndicatorDrawing extends ChartIndicatorStyle { kind: string; fields: [number, string][]; text: [number, string][]; constants?: [number, number | null][] }
@@ -2571,7 +2592,7 @@ export interface MonitorExtFieldItem {
   hiddenIndices?: number[]
 }
 export interface StrategyAlertEvent {
-  source: 'strategy' | 'depth'
+  source: 'strategy' | 'depth' | 'indicator' | 'indicator_update'
   type: string
   strategy_id?: string
   symbol?: string
@@ -2868,8 +2889,16 @@ export const api = {
   evaluateChartIndicators: (ids: string[], rows: unknown[], symbol: string, period: KlinePeriod) => request<Pick<KlineResponse, 'indicator_results' | 'indicator_errors'>>('/api/indicators/evaluate', { method: 'POST', body: JSON.stringify({ ids, rows, symbol, period }), quiet: true }),
   chartIndicators: () => request<{ items: ChartIndicatorDefinition[]; errors: { id: string; message: string }[] }>('/api/indicators'),
   chartIndicatorLanguage: () => request<{ help: string; functions: Record<string, number[]>; drawings: Record<string, number[]> }>('/api/indicators/language'),
-  validateChartIndicator: (value: Pick<ChartIndicatorDefinition, 'name' | 'pane' | 'description' | 'formula'>) => request<{ valid: boolean }>('/api/indicators/validate', { method: 'POST', body: JSON.stringify(value), quiet: true }),
-  saveChartIndicator: (value: Pick<ChartIndicatorDefinition, 'name' | 'pane' | 'description' | 'formula'> & { revision?: number; copy_from?: string }, id?: string) => request<ChartIndicatorDefinition>(`/api/indicators${id ? `/${encodeURIComponent(id)}` : ''}`, { method: id ? 'PUT' : 'POST', body: JSON.stringify(value), quiet: true }),
+  validateChartIndicator: (value: Pick<ChartIndicatorDefinition, 'name' | 'pane' | 'description' | 'formula'> & Partial<Pick<ChartIndicatorDefinition, 'monitor_signals' | 'min_history_bars'>>) => request<{ valid: boolean; variables: string[] }>('/api/indicators/validate', { method: 'POST', body: JSON.stringify(value), quiet: true }),
+  saveChartIndicator: (value: Pick<ChartIndicatorDefinition, 'name' | 'pane' | 'description' | 'formula'> & Partial<Pick<ChartIndicatorDefinition, 'monitor_signals' | 'min_history_bars'>> & { revision?: number; copy_from?: string }, id?: string) => request<ChartIndicatorDefinition>(`/api/indicators${id ? `/${encodeURIComponent(id)}` : ''}`, { method: id ? 'PUT' : 'POST', body: JSON.stringify(value), quiet: true }),
+  indicatorMonitors: () => request<{ items: IndicatorMonitorRule[] }>('/api/indicator-monitors'),
+  saveIndicatorMonitor: (value: IndicatorMonitorInput, id?: string) => request<IndicatorMonitorRule>(`/api/indicator-monitors${id ? `/${encodeURIComponent(id)}` : ''}`, { method: id ? 'PUT' : 'POST', body: JSON.stringify(value), quiet: true }),
+  deleteIndicatorMonitor: (id: string) => request(`/api/indicator-monitors/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  adoptIndicatorMonitor: (id: string) => request(`/api/indicator-monitors/${encodeURIComponent(id)}/adopt`, { method: 'POST', quiet: true }),
+  indicatorMonitorEvents: () => request<{ items: IndicatorMonitorEvent[] }>('/api/indicator-monitors/events'),
+  clearIndicatorMonitorEvents: () => request('/api/indicator-monitors/events', { method: 'DELETE' }),
+  retryIndicatorMonitorEvent: (id: string) => request(`/api/indicator-monitors/events/${encodeURIComponent(id)}/retry`, { method: 'POST' }),
+  indicatorMonitorSnapshot: (id: string, eventId?: string) => request<IndicatorMonitorSnapshot>(`/api/indicator-monitors/${encodeURIComponent(id)}/snapshot${eventId ? `?event_id=${encodeURIComponent(eventId)}` : ''}`, { quiet: true }),
   deleteChartIndicator: (id: string, revision: number) => request<{ deleted: boolean }>(`/api/indicators/${encodeURIComponent(id)}?revision=${revision}`, { method: 'DELETE', quiet: true }),
   health: () => request<{ status: string; version: string; mode: string }>('/health'),
 

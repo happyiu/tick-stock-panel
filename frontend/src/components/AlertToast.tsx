@@ -85,6 +85,7 @@ const SEVERITY_BAR: Record<string, string> = {
   info: 'bg-accent', warn: 'bg-warning', critical: 'bg-danger',
 }
 const SOURCE_BADGE: Record<string, { label: string; cls: string }> = {
+  indicator: { label: '指标', cls: 'bg-accent/15 text-accent' },
   strategy:  { label: '策略',   cls: 'bg-amber-400/15 text-amber-400' },
   signal:    { label: '信号',   cls: 'bg-accent/15 text-accent' },
   price:     { label: '价格',   cls: 'bg-emerald-400/15 text-emerald-400' },
@@ -119,8 +120,9 @@ export function AlertToastContainer() {
 
   // 点击通知 → 跳转监控中心 + 关闭当前通知
   const handleClick = (id: number) => {
+    const indicator = _queue.find(item => item.id === id)?.alert.source === 'indicator'
     dismiss(id)
-    navigate('/monitor')
+    navigate(indicator ? '/monitor?tab=indicators' : '/monitor')
   }
 
   if (!items.length) return null

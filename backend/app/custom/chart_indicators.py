@@ -22,6 +22,8 @@ class Definition(BaseModel):
     formula: str = Field(min_length=1, max_length=32768)
     revision: int | None = Field(default=None, ge=1)
     copy_from: str | None = Field(default=None, max_length=64)
+    monitor_signals: list[dict] = Field(default_factory=list, max_length=32)
+    min_history_bars: int = Field(default=100, ge=1, le=20000)
 
 
 def _dir(request):
@@ -76,13 +78,13 @@ def evaluate_loaded(body: Evaluation, request: Request):
 
 @router.post('/validate')
 def validate(body: Definition):
-    _call(chart_catalog.validate_definition, body.model_dump())
-    return {'valid': True}
+    program = _call(chart_catalog.validate_definition, body.model_dump())
+    return {'valid': True, 'variables': chart_catalog.formula_variables(program)}
 
 
 @router.post('')
 def create(body: Definition, request: Request):
-    return _call(chart_catalog.save_indicator, _dir(request), body.model_dump())
+    return _call(chart_catalog.save_indicator, _dir(request), body.model_dump(exclude_unset=True))
 
 
 @router.get('/{indicator_id}')
@@ -92,7 +94,7 @@ def detail(indicator_id: str, request: Request):
 
 @router.put('/{indicator_id}')
 def update(indicator_id: str, body: Definition, request: Request):
-    return _call(chart_catalog.save_indicator, _dir(request), body.model_dump(), indicator_id)
+    return _call(chart_catalog.save_indicator, _dir(request), body.model_dump(exclude_unset=True), indicator_id)
 
 
 @router.delete('/{indicator_id}')

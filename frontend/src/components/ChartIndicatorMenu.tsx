@@ -1,17 +1,22 @@
 import { useId, useState } from 'react'
-import { Check, SlidersHorizontal, X } from 'lucide-react'
+import { Bell, Check, SlidersHorizontal, X } from 'lucide-react'
 import { useChartIndicators } from '@/lib/useChartIndicators'
+import type { IndicatorMonitorInput, IndicatorMonitorRule } from '@/lib/api'
+import { IndicatorMonitorEditor, useIndicatorMonitors } from './monitor/IndicatorMonitorEditor'
 
-export function ChartIndicatorMenu({ activeIndicators, onToggle, allowMA = true }: {
+export function ChartIndicatorMenu({ activeIndicators, onToggle, allowMA = true, monitorContext }: {
   activeIndicators: string[]
   allowMA?: boolean
   onToggle: (key: string) => void
+  monitorContext?: Pick<IndicatorMonitorInput, 'symbol' | 'asset_type' | 'period' | 'compare_days'>
 }) {
   const catalog = useChartIndicators()
   const [open, setOpen] = useState(false)
   const [source, setSource] = useState<'custom' | 'builtin'>('custom')
   const [category, setCategory] = useState<'main' | 'sub'>('main')
   const id = useId()
+  const monitors = useIndicatorMonitors(Boolean(monitorContext))
+  const [editor, setEditor] = useState<{ rule?: IndicatorMonitorRule; preset?: Partial<IndicatorMonitorInput> } | null>(null)
   const indicators = (category === 'main' ? catalog.main : catalog.sub)
     .filter(indicator => (allowMA || indicator.key !== 'ma') && indicator.source === source)
   return (
@@ -63,20 +68,27 @@ export function ChartIndicatorMenu({ activeIndicators, onToggle, allowMA = true 
             {indicators.map(indicator => {
               const active = activeIndicators.includes(indicator.key)
               return (
-                <button key={indicator.key} type="button" role="checkbox" aria-label={indicator.label} aria-checked={active}
+                <div key={indicator.key} className="flex items-center"><button type="button" role="checkbox" aria-label={indicator.label} aria-checked={active}
                   onClick={() => onToggle(indicator.key)}
-                  className="flex w-full items-center gap-2 rounded-btn px-2 py-2 text-left text-xs text-secondary transition-colors hover:bg-elevated hover:text-foreground"
+                  className="flex min-w-0 flex-1 items-center gap-2 rounded-btn px-2 py-2 text-left text-xs text-secondary transition-colors hover:bg-elevated hover:text-foreground"
                 >
                   <span className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border ${active ? 'border-accent bg-accent' : 'border-border bg-base'}`}>
                     {active && <Check className="h-2.5 w-2.5 text-white" strokeWidth={3} />}
                   </span>
                   <span>{indicator.label}{indicator.description && <span className="mt-0.5 block text-[10px] text-muted">{indicator.description}</span>}</span>
-                </button>
+                </button>{monitorContext && indicator.source === 'custom' && (() => {
+                  const rule = monitors.data?.items.find(r => r.symbol === monitorContext.symbol && r.indicator_id === indicator.key && r.period === monitorContext.period)
+                  return <button type="button" disabled={monitors.isLoading || monitors.isError} aria-label={`${rule ? '编辑监控' : '添加监控'}${indicator.label}`} title={monitors.isError ? '监控加载失败，请重开菜单重试' : rule ? '已监控 · 编辑' : '添加指标监控'} className={`shrink-0 rounded p-2 ${rule ? 'text-accent' : 'text-muted'} hover:bg-elevated disabled:opacity-40`} onClick={() => {
+                    setOpen(false)
+                    setEditor({ rule, preset: { ...monitorContext, indicator_id: indicator.key } })
+                  }}><Bell className="h-3.5 w-3.5" /></button>
+                })()}</div>
               )
             })}
           </div>
         </div>
       )}
+      {editor && <IndicatorMonitorEditor rule={editor.rule} preset={editor.preset} onClose={() => setEditor(null)} />}
     </div>
   )
 }

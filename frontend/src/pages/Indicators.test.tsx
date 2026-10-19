@@ -57,6 +57,23 @@ it('保存使用稳定ID和版本，删除刷新目录', async () => {
   expect(button('编辑MA 均线')).toBeUndefined()
 })
 
+it('监控信号绑定需要明确选择变量，并随指标保存', async () => {
+  vi.mocked(api.validateChartIndicator).mockResolvedValueOnce({ valid: true, variables: ['原线'] })
+  await act(async () => button('编辑MA 均线').click())
+  await act(async () => button('添加信号').click()); await settle()
+  const variable = input('信号1变量') as unknown as HTMLSelectElement
+  expect(variable.value).toBe('')
+  expect(variable.textContent).toContain('原线')
+  await act(async () => {
+    variable.value = '原线'; variable.dispatchEvent(new Event('change', { bubbles: true }))
+    const name = input('信号1名称')
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, '条件提醒')
+    name.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await act(async () => button('保存并应用').click()); await settle()
+  expect(api.saveChartIndicator).toHaveBeenCalledWith(expect.objectContaining({ monitor_signals: [expect.objectContaining({ name: '条件提醒', variable: '原线', periods: ['30m', '1d'] })], min_history_bars: 100 }), 'ma')
+})
+
 it('来源默认自建，类型默认不限，单选项可取消且两组筛选互相独立', async () => {
   fixture.items = [...fixture.items, { ...fixture.items[0], id: 'vol', name: '成交量测试', pane: 'sub' }]
   await act(async () => client.invalidateQueries()); await settle()

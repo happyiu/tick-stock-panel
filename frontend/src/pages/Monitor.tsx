@@ -22,6 +22,7 @@ import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { toNavItems, type NavItem } from '@/lib/listNav'
 import { DimensionMembersDialog, type DimensionKind, type DimensionMembersTarget } from '@/components/DimensionMembersDialog'
 import { usePreferences, useQuoteStatus } from '@/lib/useSharedQueries'
+import { IndicatorMonitors } from '@/components/monitor/IndicatorMonitors'
 
 const TYPE_LABEL: Record<string, string> = {
   signal: '信号', price: '价格/涨跌', market: '市场异动', strategy: '策略监控', sector: '板块监控',
@@ -118,6 +119,12 @@ function AlertExtTags({ ev, fields, onTagClick }: {
 }
 
 export function Monitor() {
+  const [params, setParams] = useSearchParams()
+  const indicator = params.get('tab') === 'indicators'
+  return <div className="flex h-full min-h-0 flex-col"><div className="flex shrink-0 gap-2 border-b border-border px-5 py-3" role="tablist" aria-label="监控类型">{[['existing', '现有监控'], ['indicators', '指标监控']].map(([key, label]) => <button key={key} role="tab" aria-selected={indicator === (key === 'indicators')} className={`rounded-btn px-3 py-1.5 text-sm ${indicator === (key === 'indicators') ? 'bg-accent/10 text-accent' : 'text-muted'}`} onClick={() => { const next = new URLSearchParams(params); if (key === 'indicators') next.set('tab', key); else next.delete('tab'); setParams(next) }}>{label}</button>)}</div><div className="min-h-0 flex-1 overflow-auto">{indicator ? <IndicatorMonitors /> : <ExistingMonitor />}</div></div>
+}
+
+function ExistingMonitor() {
   const qc = useQueryClient()
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingRule, setEditingRule] = useState<MonitorRule | null>(null)

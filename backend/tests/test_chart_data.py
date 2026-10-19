@@ -52,6 +52,17 @@ def fetch(service, period="30m", asset="etf", name="test"):
     return service.get(name, name, "510300.SH", asset, period, date(2026, 9, 1), date(2026, 9, 4))
 
 
+def test_monitor_refreshes_boundary_data_without_waiting_for_chart_idle_ttl(monkeypatch):
+    service, provider, clock = setup(monkeypatch)
+    monkeypatch.setattr(chart_data, 'in_continuous_session', lambda: False)
+    fetch(service)
+    clock[0] = 61
+    fetch(service)
+    assert len(provider.calls) == 1
+    service.get('test', 'test', '510300.SH', 'etf', '30m', date(2026, 9, 1), date(2026, 9, 4), max_age_seconds=60)
+    assert len(provider.calls) == 2
+
+
 def test_direct_30m_without_local_minute_and_cache_hit(monkeypatch):
     service, provider, _ = setup(monkeypatch)
     result = fetch(service)

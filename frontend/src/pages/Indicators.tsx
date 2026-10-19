@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Code2, Copy, Loader2, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
 import { Modal } from '@/components/Modal'
-import { api, type ChartIndicatorDefinition } from '@/lib/api'
+import { api, type ChartIndicatorDefinition, type IndicatorMonitorSignal } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { useChartIndicators } from '@/lib/useChartIndicators'
 
@@ -16,11 +16,23 @@ function IndicatorEditor({ editor, close, changed }: { editor: Editor; close: ()
   const [pane, setPane] = useState<'main' | 'sub'>(item?.pane ?? 'main')
   const [description, setDescription] = useState(item?.description ?? '')
   const [formula, setFormula] = useState(item?.formula ?? emptyFormula)
+  const [signals, setSignals] = useState<IndicatorMonitorSignal[]>(item?.monitor_signals ?? [])
+  const [minimum, setMinimum] = useState(item?.min_history_bars ?? 100)
+  const [variables, setVariables] = useState<string[]>([])
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [valid, setValid] = useState(false)
   const language = useQuery({ queryKey: QK.chartIndicatorLanguage, queryFn: api.chartIndicatorLanguage, staleTime: Infinity })
-  const payload = { name, pane, description, formula }
+  const payload = { name, pane, description, formula, monitor_signals: signals, min_history_bars: minimum }
+  const readVariables = async (add = false) => {
+    setBusy(true); setError('')
+    try {
+      const result = await api.validateChartIndicator({ ...payload, monitor_signals: [] })
+      setVariables(result.variables ?? [])
+      if (add) setSignals(previous => [...previous, { id: `signal-${crypto.randomUUID()}`, name: '', variable: '', periods: ['30m', '1d'] }])
+    } catch (e) { setError(e instanceof Error ? e.message : '读取变量失败') }
+    finally { setBusy(false) }
+  }
   const run = async (save: boolean) => {
     setBusy(true); setError(''); setValid(false)
     try {
@@ -28,7 +40,7 @@ function IndicatorEditor({ editor, close, changed }: { editor: Editor; close: ()
         await api.saveChartIndicator({ ...payload, ...(item && !copy ? { revision: item.revision } : {}), ...(item && copy ? { copy_from: item.id } : {}) }, !copy ? item?.id : undefined)
         await changed(); close()
       } else {
-        await api.validateChartIndicator(payload); setValid(true)
+        const result = await api.validateChartIndicator(payload); setVariables(result.variables ?? []); setValid(true)
       }
     } catch (e) { setError(e instanceof Error ? e.message : '操作失败，请重试') }
     finally { setBusy(false) }
@@ -39,7 +51,18 @@ function IndicatorEditor({ editor, close, changed }: { editor: Editor; close: ()
       <div className="grid gap-4 sm:grid-cols-2"><label className="space-y-1 text-sm text-secondary">名称<input aria-label="指标名称" className={field} value={name} maxLength={80} readOnly={readOnly} onChange={e => { setName(e.target.value); setValid(false) }} /></label>
       <label className="space-y-1 text-sm text-secondary">类型<select aria-label="指标类型" className={field} value={pane} disabled={readOnly} onChange={e => { setPane(e.target.value as 'main' | 'sub'); setValid(false) }}><option value="main">主图叠加</option><option value="sub">副图</option></select></label></div>
       <label className="block space-y-1 text-sm text-secondary">说明<textarea aria-label="指标说明" className={field} value={description} maxLength={2000} readOnly={readOnly} onChange={e => setDescription(e.target.value)} /></label>
-      <label className="block space-y-1 text-sm text-secondary">通达信公式<textarea aria-label="指标公式源码" spellCheck={false} className={`${field} min-h-72 resize-y whitespace-pre font-mono text-xs leading-6`} value={formula} maxLength={32768} readOnly={readOnly} onChange={e => { setFormula(e.target.value); setValid(false); setError('') }} /></label>
+      <label className="block space-y-1 text-sm text-secondary">通达信公式<textarea aria-label="指标公式源码" spellCheck={false} className={`${field} min-h-72 resize-y whitespace-pre font-mono text-xs leading-6`} value={formula} maxLength={32768} readOnly={readOnly} onChange={e => { setFormula(e.target.value); setVariables([]); setValid(false); setError('') }} /></label>
+      <section className="space-y-3 rounded-md border border-border p-3" aria-label="监控信号配置">
+        <div className="flex items-center justify-between"><h3 className="text-sm font-medium">监控信号</h3>{!readOnly && <button disabled={busy || signals.length >= 32} onClick={() => readVariables(true)} className="text-xs text-accent">添加信号</button>}</div>
+        <p className="text-xs leading-5 text-muted">绑定公式条件变量。有限非零值表示成立，每根 K 线最多提醒一次；仅需穿越事件时请在公式中使用 CROSS。绘图文字不会自动成为监控信号。</p>
+        {signals.map((signal, index) => <div key={signal.id} className="flex flex-wrap items-center gap-2">
+          <input aria-label={`信号${index+1}名称`} placeholder="信号名称，例如试仓" className={`${field} !w-36`} value={signal.name} readOnly={readOnly} onChange={e => setSignals(all => all.map(s => s.id === signal.id ? { ...s, name: e.target.value } : s))} />
+          <select aria-label={`信号${index+1}变量`} className={`${field} !w-44`} value={signal.variable} disabled={readOnly} onFocus={() => { if (!variables.length && !busy) void readVariables() }} onChange={e => setSignals(all => all.map(s => s.id === signal.id ? { ...s, variable: e.target.value } : s))}><option value="">选择条件变量</option>{[...new Set([signal.variable, ...variables])].filter(Boolean).map(variable => <option key={variable}>{variable}</option>)}</select>
+          {(['30m', '1d'] as const).map(period => <label key={period} className="flex items-center gap-1 text-xs"><input type="checkbox" disabled={readOnly} checked={signal.periods.includes(period)} onChange={e => setSignals(all => all.map(s => s.id === signal.id ? { ...s, periods: e.target.checked ? [...s.periods, period] : s.periods.filter(p => p !== period) } : s))} />{period === '30m' ? '30f' : '日线'}</label>)}
+          {!readOnly && <button aria-label={`删除信号${index+1}`} onClick={() => setSignals(all => all.filter(s => s.id !== signal.id))} className="text-xs text-danger">删除</button>}
+        </div>)}
+        <label className="flex items-center gap-2 text-xs text-secondary">最低历史根数<input aria-label="最低历史根数" type="number" min={1} max={20000} className={`${field} !w-24`} readOnly={readOnly} value={minimum} onChange={e => setMinimum(Number(e.target.value))} /></label>
+      </section>
       {error && <div role="alert" className="whitespace-pre-wrap rounded-md bg-danger/10 p-3 text-sm text-danger">{error}</div>}
       {valid && <p role="status" className="text-sm text-accent">公式校验通过</p>}
       <details className="rounded-md border border-border p-3 text-xs text-muted"><summary className="cursor-pointer text-secondary">函数与语法说明</summary>{language.isLoading ? <p>加载中…</p> : language.isError ? <button onClick={() => language.refetch()}>说明加载失败，点击重试</button> : <><p className="mt-3 whitespace-pre-wrap leading-6">{language.data?.help}</p><p className="mt-2 leading-6">函数：{Object.keys(language.data?.functions ?? {}).join('、')}</p></>}</details>
@@ -58,6 +81,11 @@ export function Indicators() {
   const [deleting, setDeleting] = useState<ChartIndicatorDefinition | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get('edit')
+    const item = catalog.items.find(item => item.id === id && item.source === 'custom')
+    if (item) { setEditor({ item, readOnly: false }); window.history.replaceState(null, '', window.location.pathname) }
+  }, [catalog.data])
   const changed = async () => {
     await qc.invalidateQueries({ queryKey: QK.chartIndicators })
     await qc.invalidateQueries({ predicate: q => ['kline', 'kline-period', 'chart-indicator-values'].includes(String(q.queryKey[0])) })

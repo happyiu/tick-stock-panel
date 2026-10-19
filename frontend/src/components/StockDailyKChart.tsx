@@ -391,7 +391,8 @@ function StockDailyKChartView({
         <div className="max-w-full flex-none">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           {showIndicatorControls && (<>
-            <ChartIndicatorMenu allowMA={showMA} activeIndicators={effectiveMA ? ['ma', ...activeIndicators] : activeIndicators} onToggle={toggleIndicator} />
+            <ChartIndicatorMenu allowMA={showMA} activeIndicators={effectiveMA ? ['ma', ...activeIndicators] : activeIndicators} onToggle={toggleIndicator}
+              monitorContext={chartAssetType && (period === '30m' || period === '1d') ? { symbol, asset_type: chartAssetType, period, compare_days: volumeCompare.days } : undefined} />
           {chanlunAnalysis && (
             <div
               className="relative ml-0.5 flex items-center"

@@ -53,6 +53,7 @@ class _Entry:
     snapshot: ChartSnapshot
     raw: pl.DataFrame
     expires: float
+    fetched: float
 
 
 def _validate(frame: pl.DataFrame, symbol: str, column: str, start: date, end: date) -> pl.DataFrame:
@@ -81,14 +82,14 @@ class ChartDataService:
         self._pending: dict[tuple, Future] = {}
 
     def get(self, provider_name: str, factor_name: str, symbol: str, asset_type: str,
-            period: str, start: date, end: date) -> ChartSnapshot:
+            period: str, start: date, end: date, *, max_age_seconds: float | None = None) -> ChartSnapshot:
         end = min(end, cn_today())
         key = (provider_name, factor_name, symbol, asset_type, period, start, end)
         with self._lock:
             entry = self._cache.get(key)
             if entry is not None:
                 self._cache.move_to_end(key)
-                if self._clock() < entry.expires:
+                if self._clock() < entry.expires and (max_age_seconds is None or self._clock()-entry.fetched < max_age_seconds):
                     return entry.snapshot
             pending = self._pending.get(key)
             owner = pending is None
@@ -113,7 +114,7 @@ class ChartDataService:
             snapshot = self._fallback(entry, provider_name)
         ttl = 30 if snapshot.stale or (end == cn_today() and in_continuous_session()) else 300
         with self._lock:
-            self._cache[key] = _Entry(snapshot, raw, self._clock() + ttl)
+            self._cache[key] = _Entry(snapshot, raw, self._clock() + ttl, self._clock())
             self._cache.move_to_end(key)
             while len(self._cache) > self._max_entries:
                 self._cache.popitem(last=False)

@@ -13,6 +13,9 @@ const indicatorQuerySuffix = (value?: ChartIndicatorRequest) => value?.ids.lengt
 // ===== Query Key 工厂 =====
 
 export const QK = {
+  indicatorMonitors: ['indicator-monitors'] as const,
+  indicatorMonitorEvents: ['indicator-monitor-events'] as const,
+  indicatorMonitorSnapshot: (id: string, eventId?: string) => ['indicator-monitor-snapshot', id, eventId ?? 'latest'] as const,
   chartIndicatorValues: (symbol: string, period: string, version: string, rows: unknown) => ['chart-indicator-values', symbol, period, version, rows] as const,
   chartIndicators: ['chart-indicators'] as const,
   chartIndicatorLanguage: ['chart-indicator-language'] as const,
