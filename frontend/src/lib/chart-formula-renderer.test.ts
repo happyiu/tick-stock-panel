@@ -51,19 +51,35 @@ it.each([{ bar: 20, gapBar: 14 }, { bar: 6, gapBar: 3 }])('成交量柱沿用原
   expect(ctx.fillRect).toHaveBeenCalledWith(30-space.gapBar/2,90,space.gapBar,17)
 })
 
-it.each([40, 200])('天使魔鬼文字跟随箭头，缩放后仍保持固定像素间距 %s', arrowY => {
+it.each([40, 200])('自建或复制的天使魔鬼文字跟随箭头，缩放后仍保持固定像素间距 %s', arrowY => {
   const signals: ChartIndicatorResult = { ...packet, pane: 'main', drawings: [
     { ...packet.drawings[0], key: 'up', kind: 'DRAWICON', fields: [], constants: [[2, 1]], text: [] },
     { ...packet.drawings[0], key: 'down', kind: 'DRAWICON', fields: [], constants: [[2, 2]], text: [] },
     { ...packet.drawings[0], key: 'buyText', kind: 'DRAWTEXT', fields: [], text: [[2, '进攻']] },
     { ...packet.drawings[0], key: 'sellText', kind: 'DRAWTEXT', fields: [], text: [[2, '撤退']] },
   ] }
-  const figures = serverFormulaFigures(signals, 'angel-devil')
+  const figures = serverFormulaFigures(signals)
   const attrs = (key: string) => (figures.find(f => f.key === key)!.attrs as Function)({
     coordinate: { current: { x: 25, up: arrowY, down: arrowY, buyText: 500, sellText: 0 } }, data: { current: {} },
   })
-  expect(attrs('buyText')).toMatchObject({ x: 25, y: arrowY + 9, align: 'center', baseline: 'top', text: '进攻' })
-  expect(attrs('sellText')).toMatchObject({ x: 25, y: arrowY - 9, align: 'center', baseline: 'bottom', text: '撤退' })
-  const original = serverFormulaFigures(signals)
+  expect(attrs('buyText')).toMatchObject({ x: 25, y: arrowY + 17, align: 'center', baseline: 'top', text: '进攻' })
+  expect(attrs('sellText')).toMatchObject({ x: 25, y: arrowY - 17, align: 'center', baseline: 'bottom', text: '撤退' })
+  const original = serverFormulaFigures({ ...signals, pane: 'sub' })
   expect((original.find(f => f.key === 'buyText')!.attrs as Function)({ coordinate: { current: { x: 25, buyText: 500 } }, data: { current: {} } })).toMatchObject({ y: 500 })
+})
+
+it.each(['2026-10-19', '2026-10-19 10:00'])('信号显示锚点使用K线高低点，不让百分比坐标压缩价格轴 %s', async date => {
+  const signals: ChartIndicatorResult = { ...packet, pane: 'main', dates: [date], rows: [{ hit: 1, otherHit: 1 }], drawings: [
+    { ...packet.drawings[0], key: 'up', kind: 'DRAWICON', fields: [[0, 'hit']], constants: [[1, 0.7], [2, 1]], text: [] },
+    { ...packet.drawings[0], key: 'buyText', kind: 'DRAWTEXT', fields: [[0, 'hit']], constants: [[1, 0.66]], text: [[2, '进攻']] },
+    { ...packet.drawings[0], key: 'down', kind: 'DRAWICON', fields: [[0, 'hit']], constants: [[1, 0.79], [2, 2]], text: [] },
+    { ...packet.drawings[0], key: 'sellText', kind: 'DRAWTEXT', fields: [[0, 'hit']], constants: [[1, 0.83]], text: [[2, '撤退']] },
+    { ...packet.drawings[0], key: 'unrelated', kind: 'DRAWTEXT', fields: [[0, 'otherHit']], constants: [[1, 0.66]], text: [[2, '进攻']] },
+  ] }
+  const context = formulaContext('user-copy', signals, false, 1)
+  const result = await serverFormulaTemplate('TEST').calc([
+    { timestamp: 1, date, open: 0.75, close: 0.75, low: 0.74, high: 0.76 },
+  ] as KLineData[], { extendData: context } as Indicator<Record<string, number | null>, number, typeof context>)
+  expect(result[0]).toMatchObject({ up: 0.74, buyText: 0.74, down: 0.76, sellText: 0.76, hit: 1, unrelated: 0.66 })
+  expect(signals.drawings[1].constants).toEqual([[1, 0.66]])
 })

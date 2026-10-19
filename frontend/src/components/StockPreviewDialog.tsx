@@ -208,9 +208,7 @@ function previewKlineRange(
   assetType?: 'stock' | 'etf' | 'index',
   periodDays = DEFAULT_30M_DAYS,
 ): { start: string; end: string } {
-  return period === '1d' && assetType === 'etf'
-    ? defaultKlineRange('1mo')
-    : defaultKlineRange(period, new Date(), periodDays)
+  return defaultKlineRange(period, new Date(), periodDays, assetType)
 }
 
 function boardTag(symbol: string): { label: string; color: string } | null {
@@ -626,7 +624,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
 
   useEffect(() => {
     if (!findFeelLocked && assetType === 'etf' && period === '1d' && dateRange.start === defaultKlineRange('1d').start) {
-      setDateRange(defaultKlineRange('1mo'))
+      setDateRange(previewKlineRange('1d', 'etf'))
     }
   }, [assetType, dateRange.start, findFeelLocked, period])
 

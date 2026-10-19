@@ -58,6 +58,7 @@ export function defaultKlineRange(
   period: KlinePeriod,
   now = new Date(),
   thirtyMinuteDays = DEFAULT_30M_DAYS,
+  assetType?: 'stock' | 'etf' | 'index',
 ): { start: string; end: string } {
   const formatLocalDate = (value: Date) => [
     value.getFullYear(),
@@ -67,7 +68,7 @@ export function defaultKlineRange(
   const end = formatLocalDate(now)
   const start = new Date(now)
   if (period === '30m') start.setDate(start.getDate() - (thirtyMinuteDays * 3 + 20))
-  else if (period === '1d') start.setMonth(start.getMonth() - 6)
+  else if (period === '1d') start.setMonth(start.getMonth() - (assetType === 'etf' ? 24 : 6))
   else if (period === '1w') start.setFullYear(start.getFullYear() - 3)
   else start.setFullYear(start.getFullYear() - 4)
   return { start: formatLocalDate(start), end }

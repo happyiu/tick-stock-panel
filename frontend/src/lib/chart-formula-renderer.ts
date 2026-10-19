@@ -11,27 +11,36 @@ const field = (drawing: ChartIndicatorDrawing, index: number) => drawing.fields.
 const text = (drawing: ChartIndicatorDrawing, index: number) => drawing.text.find(f => f[0] === index)?.[1] ?? ''
 const num = (drawing: ChartIndicatorDrawing, index: number, row?: Row | null) => drawing.constants?.find(f => f[0] === index)?.[1] ?? row?.[field(drawing, index)] ?? null
 const enabled = (value: number | null) => value != null && Number.isFinite(value) && value !== 0
+const signalIcon = (packet: Pick<ChartIndicatorResult, 'pane' | 'drawings'>, drawing: ChartIndicatorDrawing, row?: Row | null) => {
+  if (packet.pane !== 'main' || drawing.kind !== 'DRAWTEXT') return undefined
+  const label = text(drawing, 2), iconType = label === '进攻' ? 1 : label === '撤退' ? 2 : null
+  return iconType == null ? undefined : packet.drawings.find(d => d.kind === 'DRAWICON' && num(d, 2, row) === iconType
+    && field(d, 0) === field(drawing, 0) && num(d, 0, row) === num(drawing, 0, row))
+}
+const SIGNAL_ARROW_OFFSET = 8
 
-export function serverFormulaFigures(packet: ChartIndicatorResult, key?: string): IndicatorFigure<Row>[] {
+export function serverFormulaFigures(packet: ChartIndicatorResult): IndicatorFigure<Row>[] {
   const lines: IndicatorFigure<Row>[] = packet.figures.filter(f => !f.hidden).map(f => ({ key: f.key, title: `${f.key}: `, type: 'line',
     styles: () => ({ color: formulaColor(f.color, f.light_color), size: f.width, style: f.dash ? 'dashed' : 'solid', dashedValue: [f.dash_size ?? 4, f.dash_size ?? 3] }) }))
   for (const drawing of packet.drawings.filter(d => d.kind === 'DRAWICON' || d.kind === 'DRAWTEXT')) {
     lines.push({ key: drawing.key, type: drawing.kind === 'DRAWICON' ? 'polygon' : 'text',
       attrs: ({ coordinate, data }) => {
         const { x, [drawing.key]: y } = coordinate.current
-        if (key === 'angel-devil' && drawing.kind === 'DRAWTEXT') {
+        if (packet.pane === 'main' && drawing.kind === 'DRAWTEXT') {
           const label = text(drawing, 2), iconType = label === '进攻' ? 1 : label === '撤退' ? 2 : null
-          const icon = iconType == null ? undefined : packet.drawings.find(d => d.kind === 'DRAWICON' && num(d, 2, data.current) === iconType)
+          const icon = signalIcon(packet, drawing, data.current)
           const arrowY = icon ? coordinate.current[icon.key] : undefined
           // 以箭头的屏幕坐标定位文字, 避免价轴缩放拉大两者距离。
           if (arrowY != null && Number.isFinite(arrowY)) return {
-            x, y: arrowY + (iconType === 1 ? 9 : -9), text: label, align: 'center', baseline: iconType === 1 ? 'top' : 'bottom',
+            x, y: arrowY + (iconType === 1 ? 1 : -1) * (SIGNAL_ARROW_OFFSET + 9), text: label, align: 'center', baseline: iconType === 1 ? 'top' : 'bottom',
           }
         }
         const down = num(drawing, 2, data.current) === 2
         const direction = down ? -1 : 1
         const side = num(drawing, 3, data.current) ?? 4
-        return drawing.kind === 'DRAWICON' ? { coordinates: [{ x, y: y - direction*5 }, { x: x-4, y: y+direction*side }, { x: x+4, y: y+direction*side }] }
+        const paired = drawing.kind === 'DRAWICON' && packet.drawings.some(d => signalIcon(packet, d, data.current)?.key === drawing.key)
+        const iconY = paired ? y + direction * SIGNAL_ARROW_OFFSET : y
+        return drawing.kind === 'DRAWICON' ? { coordinates: [{ x, y: iconY - direction*5 }, { x: x-4, y: iconY+direction*side }, { x: x+4, y: iconY+direction*side }] }
           : { x, y, text: packet.pane === 'main' ? text(drawing, 2) : '', baseline: 'middle' }
       }, styles: () => ({ color: formulaColor(drawing.color, drawing.light_color), style: 'fill', size: 11, family: 'JetBrains Mono, monospace' }) })
   }
@@ -116,7 +125,13 @@ export function serverFormulaTemplate(name: string): IndicatorTemplate<Row, numb
     const context = indicator.extendData
     const values = context?.values[String(bar.date)] ?? {}
     return { ...values, ...Object.fromEntries((context?.packet.drawings ?? []).filter(d => ['DRAWICON','DRAWTEXT'].includes(d.kind))
-      .map(d => [d.key, enabled(num(d,0,values)) ? num(d,1,values) : null])) }
+      .map(d => {
+        const icon = d.kind === 'DRAWTEXT' ? signalIcon(context!.packet, d, values)
+          : context?.packet.drawings.some(label => signalIcon(context.packet, label, values)?.key === d.key) ? d : undefined
+        // 仅改变显示锚点，避免公式中的百分比文字/箭头坐标撑大价格轴。
+        const anchor = icon ? (num(icon, 2, values) === 1 ? bar.low : bar.high) : num(d, 1, values)
+        return [d.key, enabled(num(d,0,values)) ? anchor : null]
+      })) }
   }), shouldUpdate: () => ({ calc: true, draw: true }), draw: serverFormulaDraw,
   createTooltipDataSource: ({ indicator, chart, crosshair }) => {
     const context = indicator.extendData as FormulaContext | undefined

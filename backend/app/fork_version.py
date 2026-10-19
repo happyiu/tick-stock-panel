@@ -2,5 +2,5 @@
 
 from app import __version__
 
-LOCAL_VERSION = "dev_0.02"
+LOCAL_VERSION = "dev_0.03"
 DISPLAY_VERSION = f"v{__version__.lstrip('v')}_{LOCAL_VERSION}"
