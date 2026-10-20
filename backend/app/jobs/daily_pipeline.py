@@ -1462,6 +1462,7 @@ def _maybe_push_review(content: str, meta: dict) -> None:
                     "market_review",
                     meta,
                     secrets_store.get_custom_webhook_secret(),
+                    3, preferences.get_custom_webhook_protocol(),
                 )
                 logger.info("review push(custom) %s", "sent" if ok else "failed")
             elif ch == "email":

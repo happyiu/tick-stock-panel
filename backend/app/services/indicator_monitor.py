@@ -298,7 +298,8 @@ class IndicatorMonitorService:
                     if delayed:
                         message += '（延迟确认）'
                     event = dict(event_id=event_id, rule_id=key, generation=rule['generation'], source='indicator', type=phase,
-                                 symbol=rule['symbol'], asset_type=rule['asset_type'], indicator_id=item['id'],
+                                 symbol=rule['symbol'], symbol_name=snapshot.get('symbol_name') or '',
+                                 asset_type=rule['asset_type'], indicator_id=item['id'],
                                  indicator_name=item['name'], period=rule['period'], signal_id=signal['id'],
                                  signal_name=signal['name'], phase=phase, bar_end=end, price=row.get('close'),
                                  ts=int(now.timestamp()*1000), message=message, delayed=delayed,

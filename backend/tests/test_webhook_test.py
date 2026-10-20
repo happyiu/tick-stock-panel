@@ -89,7 +89,9 @@ def test_wecom_sends_saved_url(monkeypatch):
     assert "推送配置正确" in calls["body"]
 
 
-def test_custom_webhook_sends_saved_url_and_secret(monkeypatch):
+@pytest.mark.parametrize("protocol", ["json", "hstudio"])
+def test_custom_webhook_sends_saved_url_and_secret(monkeypatch, protocol):
+    monkeypatch.setattr("app.services.preferences.get_custom_webhook_protocol", lambda: protocol)
     calls = {}
     monkeypatch.setattr(
         "app.services.preferences.get_custom_webhook_url",
@@ -98,12 +100,13 @@ def test_custom_webhook_sends_saved_url_and_secret(monkeypatch):
     monkeypatch.setattr("app.secrets_store.get_custom_webhook_secret", lambda: "secret")
     monkeypatch.setattr(
         "app.services.webhook_adapter.send_custom",
-        lambda url, title, body, event_type, data=None, secret="", max_attempts=3:
+        lambda url, title, body, event_type, data=None, secret="", max_attempts=3, protocol="json":
             calls.update(
                 url=url,
                 event_type=event_type,
                 secret=secret,
                 max_attempts=max_attempts,
+                protocol=protocol,
             ) or True,
     )
 
@@ -113,6 +116,7 @@ def test_custom_webhook_sends_saved_url_and_secret(monkeypatch):
     assert calls == {
         "url": "https://example.com/tickflow",
         "event_type": "test",
+        "protocol": protocol,
         "secret": "secret",
         "max_attempts": 1,
     }

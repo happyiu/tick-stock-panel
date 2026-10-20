@@ -959,6 +959,19 @@ def set_custom_webhook_url(url: str) -> str:
     return value
 
 
+def get_custom_webhook_protocol() -> str:
+    """Historical configurations retain the generic signed JSON format."""
+    value = load().get("custom_webhook_protocol", "json")
+    return value if value in {"json", "hstudio"} else "json"
+
+
+def set_custom_webhook_protocol(protocol: str) -> str:
+    if protocol not in {"json", "hstudio"}:
+        raise ValueError("Unsupported webhook protocol")
+    save({"custom_webhook_protocol": protocol})
+    return protocol
+
+
 _EMAIL_SMTP_DEFAULTS = {
     "host": "",
     "port": 465,

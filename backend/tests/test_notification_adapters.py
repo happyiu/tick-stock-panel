@@ -5,6 +5,8 @@ import hmac
 import json
 import logging
 
+import pytest
+
 from app.services import email_adapter, webhook_adapter
 
 
@@ -138,3 +140,117 @@ def test_feishu_production_retries_keep_backoff(monkeypatch, caplog):
     assert calls["n"] == 3
     assert sleeps == [1, 2]
     assert "已重试 3 次" in caplog.text
+
+
+def test_hstudio_payload_and_bearer_retry_id_are_stable(monkeypatch):
+    calls = []
+
+    def post(url, *, content, headers, timeout):
+        calls.append((content, headers))
+        return type('Response', (), {'status_code': 503 if len(calls) == 1 else 202, 'text': ''})()
+
+    monkeypatch.setattr('httpx.post', post)
+    monkeypatch.setattr(webhook_adapter.time, 'sleep', lambda _: None)
+    assert webhook_adapter.send_custom(
+        'http://localhost:3000/api/v1/webhooks/source/messages', '监控告警', '触发买入信号',
+        'monitor_alert', {'symbol': '600000.SH'}, 'a' * 43, protocol='hstudio',
+    )
+    payload = json.loads(calls[0][0])
+    assert set(payload) == {'eventId', 'title', 'content', 'data'}
+    assert payload['title'] == '监控告警'
+    assert payload['content'] == '触发买入信号'
+    assert payload['data'] == {'symbol': '600000.SH'}
+    assert payload['eventId']
+    assert calls[0] == calls[1]
+    assert calls[0][1]['Authorization'] == 'Bearer ' + 'a' * 43
+    assert 'X-TickFlow-Signature' not in calls[0][1]
+
+
+def test_hstudio_invalid_secret_does_not_send(monkeypatch):
+    monkeypatch.setattr('httpx.post', lambda *a, **kw: (_ for _ in ()).throw(AssertionError))
+    for secret in ['', 'bad\r\nheader', 'short']:
+        assert not webhook_adapter.send_custom('http://localhost/hook', '标题', '正文', 'test', secret=secret, protocol='hstudio')
+    assert not webhook_adapter.send_custom('http://localhost/hook', '标题', '正文', 'test', protocol='unknown')
+
+
+@pytest.mark.parametrize("id_field", ["event_id", "id"])
+def test_hstudio_reuses_persisted_event_id_and_truncates_to_receiver_limits(monkeypatch, id_field):
+    calls = []
+
+    def post(url, *, content, headers, timeout):
+        calls.append(json.loads(content))
+        return type('Response', (), {'status_code': 202, 'text': ''})()
+
+    monkeypatch.setattr('httpx.post', post)
+    for _ in range(2):
+        assert webhook_adapter.send_custom('http://localhost/hook', '标' * 110, '文' * 17000,
+                                           'monitor_alert', {id_field: 'persisted-event'}, 'a' * 43, protocol='hstudio')
+    assert calls[0]['eventId'] == calls[1]['eventId']
+    assert len(calls[0]['title']) == 100
+    assert len(calls[0]['content']) == 16000
+
+
+def test_hstudio_auth_rejection_is_not_retried(monkeypatch):
+    calls = []
+
+    def post(*args, **kwargs):
+        calls.append(1)
+        return type('Response', (), {'status_code': 401, 'text': 'Unauthorized'})()
+
+    monkeypatch.setattr('httpx.post', post)
+    monkeypatch.setattr(webhook_adapter.time, 'sleep', lambda _: (_ for _ in ()).throw(AssertionError))
+    assert not webhook_adapter.send_custom('http://localhost/hook', '标题', '正文', 'test', secret='a' * 43, protocol='hstudio')
+    assert len(calls) == 1
+
+
+def test_indicator_notification_uses_saved_hstudio_protocol(monkeypatch):
+    from app.services import notification_dispatch
+
+    calls = []
+    monkeypatch.setattr('app.services.preferences.get_custom_webhook_url', lambda: 'http://localhost/hook')
+    monkeypatch.setattr('app.services.preferences.get_custom_webhook_protocol', lambda: 'hstudio')
+    monkeypatch.setattr('app.secrets_store.get_custom_webhook_secret', lambda: 'a' * 43)
+    monkeypatch.setattr(webhook_adapter, 'send_custom', lambda *args: calls.append(args) or True)
+    event = {'id': 'event-001', 'symbol': '600000.SH', 'message': '买入信号', 'price': 10}
+    assert notification_dispatch.send_indicator(event, 'custom')
+    assert calls[0][4] == event
+    assert calls[0][-1] == 'hstudio'
+
+
+def test_hstudio_indicator_notifications_include_indicator_tag(monkeypatch):
+    from app.services import notification_dispatch
+
+    captured = {}
+
+    def post(url, *, content, headers, timeout):
+        captured.update(json.loads(content))
+        return type('Response', (), {'status_code': 202, 'text': ''})()
+
+    monkeypatch.setattr('httpx.post', post)
+    monkeypatch.setattr('app.services.preferences.get_custom_webhook_url', lambda: 'http://localhost/hook')
+    monkeypatch.setattr('app.services.preferences.get_custom_webhook_protocol', lambda: 'hstudio')
+    monkeypatch.setattr('app.secrets_store.get_custom_webhook_secret', lambda: 'a' * 43)
+    event = {
+        'event_id': 'indicator-001', 'source': 'indicator', 'symbol': '159605.SZ',
+        'symbol_name': '中概互联ETF广发',
+        'indicator_name': '天使魔鬼', 'period': '30m', 'signal_name': '进攻',
+        'message': '天使魔鬼 · 30分钟 · 进攻信号', 'price': 1.0, 'test': True,
+    }
+    assert notification_dispatch.send_indicator(event, 'custom')
+    assert captured['tags'] == ['indicator']
+    assert captured['data'] == event
+    assert captured['data']['symbol_name'] == '中概互联ETF广发'
+    assert captured['title'] == '指标监控'
+    assert '进攻信号' in captured['content']
+
+
+def test_generic_json_indicator_notifications_keep_original_envelope(monkeypatch):
+    captured = {}
+
+    def post(url, *, content, headers, timeout):
+        captured.update(json.loads(content))
+        return type('Response', (), {'status_code': 204, 'text': ''})()
+
+    monkeypatch.setattr('httpx.post', post)
+    assert webhook_adapter.send_custom('http://localhost/hook', '指标监控', '进攻', 'monitor_alert', {'source': 'indicator'})
+    assert set(captured) == {'event', 'timestamp', 'title', 'body', 'data'}

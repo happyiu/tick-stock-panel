@@ -198,10 +198,11 @@ def test_minute_confirmation_requires_complete_actual_coverage(monkeypatch):
     monkeypatch.setattr(chart_candles, 'chart_snapshot', get_snapshot)
     monkeypatch.setattr(chart_candles.preferences, 'get_minute_data_provider', lambda: 'test')
     rule = dict(symbol='A', asset_type='stock', period='30m')
-    full = chart_candles.monitor_snapshot(SimpleNamespace(), rule, at('10:31'))
+    state = SimpleNamespace(repo=SimpleNamespace(get_name_map=lambda symbols: {}))
+    full = chart_candles.monitor_snapshot(state, rule, at('10:31'))
     assert full['rows'][0]['is_closed'] is True
     frame = frame.filter(pl.col('datetime') != datetime(2026, 10, 20, 10, 12))
-    missing = chart_candles.monitor_snapshot(SimpleNamespace(), rule, at('10:31'))
+    missing = chart_candles.monitor_snapshot(state, rule, at('10:31'))
     assert missing['rows'][0]['is_closed'] is False
 
 
@@ -377,3 +378,39 @@ def test_indicator_api_variable_metadata_and_copy(tmp_path):
     updated = client.put('/api/indicators/'+copied['id'], json=old_update)
     assert updated.status_code == 200
     assert updated.json()['monitor_signals'] == copied['monitor_signals']
+
+
+@pytest.mark.parametrize('name', ['沪深300ETF', ''])
+def test_indicator_event_persists_symbol_name_for_delivery(tmp_path, name):
+    sent = []
+    svc = monitor(tmp_path)
+    rule, _ = setup_rule(tmp_path, svc)
+    svc.save({**rule, 'channels': ['custom']}, rule['id'])
+    svc.evaluate(rule['id'], {**snapshot(), 'symbol_name': name}, at('10:12'))
+    assert svc.events()[0]['symbol_name'] == name
+    restored = monitor(tmp_path, sender=lambda event, channel: sent.append(event) or True)
+    restored.deliver()
+    assert sent[0]['symbol_name'] == name
+
+
+@pytest.mark.parametrize(('asset_type', 'symbol', 'name'), [
+    ('etf', '159605.SZ', '中概互联ETF广发'), ('stock', '600000.SH', '浦发银行'),
+    ('etf', '999999.SZ', ''),
+])
+def test_monitor_snapshot_resolves_name_from_repository(monkeypatch, asset_type, symbol, name):
+    from types import SimpleNamespace
+
+    import polars as pl
+
+    from app.services import chart_candles
+    from app.services.chart_data import ChartSnapshot
+
+    calls = []
+    def names(symbols):
+        calls.append(symbols)
+        return {symbol: name} if name else {}
+    state = SimpleNamespace(repo=SimpleNamespace(get_name_map=names))
+    monkeypatch.setattr(chart_candles, 'chart_snapshot', lambda *a, **kw: ChartSnapshot(pl.DataFrame(), 'test'))
+    result = chart_candles.monitor_snapshot(state, {'symbol': symbol, 'asset_type': asset_type, 'period': '30m'}, at('10:31'))
+    assert result['symbol_name'] == name
+    assert calls == [[symbol]]

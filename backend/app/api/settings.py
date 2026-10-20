@@ -812,6 +812,7 @@ def get_preferences() -> dict:
         "wecom_webhook_url": preferences.get_wecom_webhook_url(),
         "custom_webhook_url": preferences.get_custom_webhook_url(),
         "custom_webhook_secret_set": bool(secrets_store.get_custom_webhook_secret()),
+        "custom_webhook_protocol": preferences.get_custom_webhook_protocol(),
         "email_smtp_config": preferences.get_email_smtp_config(),
         "email_smtp_password_set": bool(secrets_store.get_email_smtp_password()),
         "wecom_bot_id": preferences.get_wecom_bot_id(),
@@ -1538,6 +1539,7 @@ def update_wecom_webhook(req: WecomWebhookPrefsIn) -> dict:
 
 class CustomWebhookPrefsIn(BaseModel):
     url: str
+    protocol: Literal["json", "hstudio"] | None = None
     # None preserves the stored secret; an explicit empty string clears it.
     secret: str | None = None
 
@@ -1550,6 +1552,15 @@ def update_custom_webhook(req: CustomWebhookPrefsIn) -> dict:
     url = (req.url or "").strip()
     if url and not webhook_adapter.is_valid_custom_url(url):
         raise HTTPException(status_code=400, detail="Webhook 地址必须是完整的 HTTP(S) URL")
+    protocol = req.protocol or preferences.get_custom_webhook_protocol()
+    if url and protocol == "hstudio":
+        import re
+
+        secret = req.secret if req.secret is not None else secrets_store.get_custom_webhook_secret()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{43}", secret):
+            raise HTTPException(status_code=400, detail="请填写 HStudio Webhook 创建时显示的 43 位 Bearer 密钥")
+    if req.protocol is not None:
+        preferences.set_custom_webhook_protocol(req.protocol)
     saved_url = preferences.set_custom_webhook_url(url)
     if not saved_url:
         secrets_store.set_custom_webhook_secret("")
@@ -1558,6 +1569,7 @@ def update_custom_webhook(req: CustomWebhookPrefsIn) -> dict:
     return {
         "custom_webhook_url": saved_url,
         "custom_webhook_secret_set": bool(secrets_store.get_custom_webhook_secret()),
+        "custom_webhook_protocol": preferences.get_custom_webhook_protocol(),
     }
 
 
@@ -1663,6 +1675,7 @@ def test_webhook(req: WebhookTestIn) -> dict:
             event_type="test",
             secret=secrets_store.get_custom_webhook_secret(),
             max_attempts=1,
+            protocol=preferences.get_custom_webhook_protocol(),
         )
     else:  # email
         from app.services import email_adapter

@@ -2554,6 +2554,7 @@ export interface Preferences {
   feishu_webhook_url?: string
   feishu_webhook_secret?: string
   wecom_webhook_url?: string
+  custom_webhook_protocol?: 'json' | 'hstudio'
   custom_webhook_url?: string
   custom_webhook_secret_set?: boolean
   email_smtp_config?: EmailSmtpConfig
@@ -3284,10 +3285,10 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ url }),
     }),
-  updateCustomWebhook: (url: string, secret?: string) =>
-    request<{ custom_webhook_url: string; custom_webhook_secret_set: boolean }>('/api/settings/preferences/custom-webhook', {
+  updateCustomWebhook: (url: string, secret?: string, protocol?: 'json' | 'hstudio') =>
+    request<{ custom_webhook_url: string; custom_webhook_secret_set: boolean; custom_webhook_protocol: 'json' | 'hstudio' }>('/api/settings/preferences/custom-webhook', {
       method: 'PUT',
-      body: JSON.stringify({ url, ...(secret !== undefined ? { secret } : {}) }),
+      body: JSON.stringify({ url, ...(secret !== undefined ? { secret } : {}), ...(protocol ? { protocol } : {}) }),
     }),
   updateEmailSmtp: (config: EmailSmtpConfig, password?: string) =>
     request<{ email_smtp_config: EmailSmtpConfig; email_smtp_password_set: boolean }>('/api/settings/preferences/email-smtp', {

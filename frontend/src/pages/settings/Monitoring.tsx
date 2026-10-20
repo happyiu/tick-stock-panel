@@ -94,6 +94,8 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const [wecomDraft, setWecomDraft] = useState(wecomWebhookUrl)
   const [wecomError, setWecomError] = useState('')
   // 通用第三方 JSON webhook
+  const customWebhookProtocol = prefs?.custom_webhook_protocol ?? 'json'
+  const [customProtocolDraft, setCustomProtocolDraft] = useState<'json' | 'hstudio'>(customWebhookProtocol)
   const customWebhookUrl = prefs?.custom_webhook_url ?? ''
   const customWebhookSecretSet = prefs?.custom_webhook_secret_set ?? false
   const [customDraft, setCustomDraft] = useState(customWebhookUrl)
@@ -136,8 +138,9 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   }, [wecomWebhookUrl])
   useEffect(() => {
     setCustomDraft(customWebhookUrl)
+    setCustomProtocolDraft(customWebhookProtocol)
     setCustomSecretDraft('')
-  }, [customWebhookUrl, customWebhookSecretSet])
+  }, [customWebhookUrl, customWebhookSecretSet, customWebhookProtocol])
   useEffect(() => {
     setEmailDraft(emailSmtpConfig)
     setEmailPasswordDraft('')
@@ -223,7 +226,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   })
 
   const saveCustomWebhook = useMutation({
-    mutationFn: ({ url, secret }: { url: string; secret?: string }) => api.updateCustomWebhook(url, secret),
+    mutationFn: ({ url, secret, protocol }: { url: string; secret?: string; protocol: 'json' | 'hstudio' }) => api.updateCustomWebhook(url, secret, protocol),
     onSuccess: () => {
       setCustomError('')
       setCustomSecretDraft('')
@@ -240,9 +243,10 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
     }
     saveCustomWebhook.mutate({
       url,
+      protocol: customProtocolDraft,
       ...(customSecretDraft ? { secret: customSecretDraft } : {}),
     })
-  }, [customDraft, customSecretDraft, saveCustomWebhook])
+  }, [customDraft, customSecretDraft, customProtocolDraft, saveCustomWebhook])
   const testCustom = useMutation({
     mutationFn: () => api.sendTestWebhook('custom'),
   })
@@ -747,7 +751,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                   className="h-3 w-3 accent-accent cursor-pointer"
                 />
                 <span className="text-[11px] font-medium text-foreground">第三方系统</span>
-                <span className="text-[9px] text-muted">JSON Webhook</span>
+                <span className="text-[9px] text-muted">{customWebhookProtocol === 'hstudio' ? 'HStudio' : 'JSON Webhook'}</span>
                 {webhookDefaultChannels.includes('custom') && (
                   <span className="rounded bg-accent/15 px-1 py-px text-[9px] text-accent">默认</span>
                 )}
@@ -760,6 +764,15 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
               {customOpen && (
                 <div className="border-t border-border/60 bg-base/30 p-3">
                   <label className="block space-y-1.5">
+                    <span className="text-[11px] text-muted">接入方式</span>
+                    <select value={customProtocolDraft}
+                      onChange={e => { setCustomProtocolDraft(e.target.value as 'json' | 'hstudio'); testCustom.reset() }}
+                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground">
+                      <option value="json">通用 JSON Webhook</option>
+                      <option value="hstudio">HStudio 消息中心</option>
+                    </select>
+                  </label>
+                  <label className="block mt-2 space-y-1.5">
                     <span className="text-[11px] text-muted">接收端 URL</span>
                     <input
                       value={customDraft}
@@ -769,12 +782,12 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                     />
                   </label>
                   <label className="block mt-2 space-y-1.5">
-                    <span className="text-[11px] text-muted">签名密钥 (可选 · HMAC-SHA256)</span>
+                    <span className="text-[11px] text-muted">{customProtocolDraft === 'hstudio' ? 'Webhook 密钥 (必填 · Bearer)' : '签名密钥 (可选 · HMAC-SHA256)'}</span>
                     <input
                       type="password"
                       value={customSecretDraft}
                       onChange={e => setCustomSecretDraft(e.target.value)}
-                      placeholder={customWebhookSecretSet ? '已保存；留空保持不变' : '留空则不签名'}
+                      placeholder={customWebhookSecretSet ? '已保存；留空保持不变' : customProtocolDraft === 'hstudio' ? '填写 HStudio 创建时显示的密钥' : '留空则不签名'}
                       className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
                     />
                   </label>
@@ -782,19 +795,21 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                   <div className="mt-2 flex items-center gap-2">
                     <button
                       onClick={submitCustom}
-                      disabled={saveCustomWebhook.isPending || (customDraft.trim() === customWebhookUrl && !customSecretDraft)}
+                      disabled={saveCustomWebhook.isPending || (customDraft.trim() === customWebhookUrl && customProtocolDraft === customWebhookProtocol && !customSecretDraft)}
                       className="px-3 py-1.5 rounded-btn bg-accent text-white text-xs font-medium disabled:opacity-50 cursor-pointer hover:bg-accent/90 transition-colors"
                     >
                       {saveCustomWebhook.isPending ? '保存中…' : '保存'}
                     </button>
-                    <TestSendButton test={testCustom} configured={!!customWebhookUrl} />
+                    <TestSendButton test={testCustom} configured={!!customWebhookUrl && customDraft.trim() === customWebhookUrl && customProtocolDraft === customWebhookProtocol && !customSecretDraft} />
                     <TestResult test={testCustom} />
                   </div>
                   <details className="mt-3 text-[10px] text-muted">
                     <summary className="cursor-pointer hover:text-secondary">请求格式</summary>
                     <p className="mt-1.5 leading-relaxed">
-                      POST JSON 包含 event、timestamp、title、body、data。配置密钥后会附带
-                      X-TickFlow-Timestamp 和 X-TickFlow-Signature 请求头。
+                      {customProtocolDraft === 'hstudio'
+                        ? 'POST JSON 包含 eventId、title、content、data，使用 Authorization: Bearer 密钥鉴权。消息进入 HStudio 消息中心，手机通知取决于设备绑定和推送配置。'
+                        : 'POST JSON 包含 event、timestamp、title、body、data。配置密钥后会附带 X-TickFlow-Timestamp 和 X-TickFlow-Signature 请求头。'}
+                      修改配置后请先保存，再发送测试消息。
                     </p>
                   </details>
                 </div>

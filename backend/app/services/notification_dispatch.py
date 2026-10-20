@@ -37,7 +37,8 @@ def notification_jobs(event, channels, title, body):
         jobs.append(('wecom', webhook_adapter.send_wecom, (url, title, body)))
     if 'custom' in channels and (url := preferences.get_custom_webhook_url()):
         jobs.append(('custom', webhook_adapter.send_custom, (
-            url, title, body, 'monitor_alert', event, secrets_store.get_custom_webhook_secret())))
+            url, title, body, 'monitor_alert', event, secrets_store.get_custom_webhook_secret(),
+            3, preferences.get_custom_webhook_protocol())))
     config = preferences.get_email_smtp_config() if 'email' in channels else {}
     if 'email' in channels and email_adapter.is_configured(config):
         jobs.append(('email', email_adapter.send_email, (config, secrets_store.get_email_smtp_password(), title, body)))

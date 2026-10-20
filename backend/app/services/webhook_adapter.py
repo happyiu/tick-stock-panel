@@ -19,8 +19,10 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import time
 from urllib.parse import urlparse
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
@@ -371,14 +373,18 @@ def send_custom(
     data: dict | None = None,
     secret: str = "",
     max_attempts: int = _CUSTOM_MAX_ATTEMPTS,
+    protocol: str = "json",
 ) -> bool:
     """POST a stable JSON envelope to a user-configured third-party system.
 
-    When ``secret`` is configured the raw request body is signed with HMAC-SHA256.
+    The default JSON protocol signs the raw body with HMAC-SHA256 when configured.
+    HStudio uses Bearer authentication and a content/eventId message envelope.
     The receiver can validate ``X-TickFlow-Timestamp`` and
     ``X-TickFlow-Signature: sha256=<hex>`` before accepting the event.
     """
-    if not is_valid_custom_url(webhook_url):
+    if not is_valid_custom_url(webhook_url) or protocol not in {"json", "hstudio"}:
+        return False
+    if protocol == "hstudio" and not re.fullmatch(r"[A-Za-z0-9_-]{43}", secret):
         return False
 
     timestamp = str(int(time.time()))
@@ -389,11 +395,28 @@ def send_custom(
         "body": str(body or ""),
         "data": data or {},
     }
+    if protocol == "hstudio":
+        # Persisted monitor events retain their identity across outbox retries.
+        source_event_id = (data or {}).get("event_id") or (data or {}).get("id")
+        event_id = (
+            hashlib.sha256(f"{event_type}:{source_event_id}".encode()).hexdigest()
+            if source_event_id else uuid4().hex
+        )
+        payload = {
+            "eventId": event_id,
+            "title": str(title or "通知").strip()[:100] or "通知",
+            "content": str(body or "通知").strip()[:16000] or "通知",
+            "data": data or {},
+        }
+        if data and data.get("source") == "indicator":
+            payload["tags"] = ["indicator"]
     encoded = json.dumps(
         payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True, default=str,
     ).encode("utf-8")
     headers = {"Content-Type": "application/json", "User-Agent": "TickFlow-Webhook/1.0"}
-    if secret:
+    if protocol == "hstudio":
+        headers["Authorization"] = f"Bearer {secret}"
+    elif secret:
         digest = hmac.new(secret.encode("utf-8"), encoded, hashlib.sha256).hexdigest()
         headers["X-TickFlow-Timestamp"] = timestamp
         headers["X-TickFlow-Signature"] = f"sha256={digest}"

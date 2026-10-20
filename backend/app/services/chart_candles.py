@@ -120,7 +120,8 @@ def monitor_snapshot(state, rule, now):
             if isinstance(value, float) and not math.isfinite(value):
                 row[key] = None
     return dict(rows=rows, adjustment=snapshot.adjustment, source_context=f'{snapshot.provider}:{snapshot.adjustment}:{preferences.get_realtime_data_provider() if rule["period"] == "1d" else preferences.get_minute_data_provider()}',
-                stale=snapshot.stale, data_through=snapshot.metadata()['data_through'])
+                stale=snapshot.stale, data_through=snapshot.metadata()['data_through'],
+                symbol_name=state.repo.get_name_map([rule['symbol']]).get(rule['symbol']) or '')
 
 
 def latest_live_candle(

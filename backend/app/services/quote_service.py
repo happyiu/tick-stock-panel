@@ -1718,7 +1718,8 @@ class QuoteService:
                     enqueued += 1
                 if custom_url:
                     _WEBHOOK_EXECUTOR.submit(
-                        webhook_adapter.send_custom, custom_url, "模拟盘成交", body, "paper_fill", ev, custom_secret)
+                        webhook_adapter.send_custom, custom_url, "模拟盘成交", body, "paper_fill", ev, custom_secret,
+                        3, preferences.get_custom_webhook_protocol())
                     enqueued += 1
             if enqueued:
                 logger.info("模拟盘 Webhook 已提交 %d 条 (异步投递, 失败记 WARNING)", enqueued)

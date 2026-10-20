@@ -140,6 +140,7 @@ def test_ladder_webhook_uses_chinese_title_without_brand(monkeypatch):
 
 
 def test_ladder_dispatches_custom_webhook_and_email(monkeypatch):
+    monkeypatch.setattr("app.services.preferences.get_custom_webhook_protocol", lambda: "hstudio")
     calls = []
 
     class CaptureExecutor:
@@ -174,7 +175,7 @@ def test_ladder_dispatches_custom_webhook_and_email(monkeypatch):
     QuoteService._maybe_send_webhook(object.__new__(QuoteService), [event], engine)
 
     assert [name for name, _ in calls] == ["send_custom", "send_email"]
-    assert calls[0][1][3:] == ("monitor_alert", event, "hook-secret")
+    assert calls[0][1][3:] == ("monitor_alert", event, "hook-secret", 3, "hstudio")
     assert calls[1][1][:2] == (email_config, "smtp-password")
 
 
@@ -200,6 +201,7 @@ def test_review_webhooks_use_title_without_brand(monkeypatch):
 
 
 def test_review_pushes_custom_webhook_and_email(monkeypatch):
+    monkeypatch.setattr("app.services.preferences.get_custom_webhook_protocol", lambda: "hstudio")
     calls = []
     email_config = {
         "host": "smtp.example.com",
@@ -225,4 +227,5 @@ def test_review_pushes_custom_webhook_and_email(monkeypatch):
 
     assert [channel for channel, _ in calls] == ["custom", "email"]
     assert calls[0][1][3] == "market_review"
+    assert calls[0][1][-1] == "hstudio"
     assert calls[1][1][2] == "每日复盘"
