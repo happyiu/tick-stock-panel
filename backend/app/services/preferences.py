@@ -89,6 +89,14 @@ def get_realtime_quote_interval() -> float:
     return load().get("realtime_quote_interval", 6.0)
 
 
+def get_realtime_etf_watchlist_interval() -> float:
+    return load().get("realtime_etf_watchlist_interval", 10.0)
+
+
+def get_realtime_etf_pool_interval() -> float:
+    return load().get("realtime_etf_pool_interval", 60.0)
+
+
 def set_realtime_quote_interval(interval: float) -> float:
     """保存行情轮询间隔（不在此做 min/max 校验，由调用方按档位限制）。
 

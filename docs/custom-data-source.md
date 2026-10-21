@@ -134,6 +134,21 @@ datasets:
 
 建议实时接口额外提供 `amount`、`change_pct`、`change_amount`、`amplitude`、`turnover_rate`、`name`。缺失时部分字段会由 pipeline 回算,但精度取决于可用输入。
 
+自定义实时源（如扶摇）的 ETF 补充沿用内置 `astockdata` 的腾讯批量行情接口：
+股票、自选 ETF、ETF 池分别使用持久化的 `realtime_quote_interval`、
+`realtime_etf_watchlist_interval`、`realtime_etf_pool_interval`（默认 6 / 10 / 60 秒）。
+数据页实时行情卡片按组设置间隔，保存后生效，不需要重启；旧的股票间隔设置保持兼容。
+`realtime_pull_etf` 开启时按 ETF 池间隔查询本地 ETF 目录全部标的，全量轮次包含自选，不重复补拉。
+关闭该开关时仅查询自选 ETF。首次启用、跨日、切换源及午休/收盘最终同步立即拉全量。
+该补充依赖 `astockdata` 的 `realtime` 能力；缺少能力或请求失败不会阻止股票更新。
+TickFlow 与直接选用 `astockdata` 实时源时也使用上述分频策略；其他自定义全市场接口
+若无法按标的查询，服务只将当轮范围内的 ETF 记录交给后续更新。
+ETF 日 K 和 enriched 按标的合并写入并更新缓存，保留本轮未返回的 ETF。
+三组最后成功获取时间分别返回在行情状态的 `stock_last_fetch_ms`、
+`etf_watchlist_last_fetch_ms`、`etf_pool_last_fetch_ms`；失败和空数据不更新该时间。
+时间戳按现有 30 秒节流落盘，重启后可恢复最近保存值；同一线程串行取数，实际间隔受网络和计算耗时影响。
+ETF 池页面跟随 SSE 通知刷新；分钟 K / 30F 图表仍走独立数据链路。
+
 `change_pct`、`amplitude`、`turnover_rate` 统一使用小数制,例如 `0.0366` 表示 `3.66%`。百分制单位必须在 realtime 数据集上**显式声明**,不做数值猜测(数值无法区分两种单位:`0.05` 既可能是 0.05% 也可能是 5%):
 
 ```yaml

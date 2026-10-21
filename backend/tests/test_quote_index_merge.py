@@ -119,7 +119,7 @@ def test_index_live_write_without_monitor_rules(monkeypatch) -> None:
     qs._repo = repo
     qs._app_state = SimpleNamespace(monitor_engine=_Engine())
     flush_calls: list[tuple[str, bool, list[str]]] = []
-    monkeypatch.setattr(qs_module, "_persist_last_fetch", lambda ms: None)
+    monkeypatch.setattr(qs_module, "_persist_last_fetch", lambda *args: None)
     monkeypatch.setattr(qs, "_update_volume_delta", lambda *a, **k: None)
     monkeypatch.setattr(qs, "_evaluate_monitors", lambda *a, **k: None)
     monkeypatch.setattr(qs, "_broadcast_quote_updated", lambda: None)

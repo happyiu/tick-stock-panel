@@ -8,7 +8,7 @@ import math
 from datetime import date, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
@@ -19,6 +19,7 @@ from app.market_time import cn_now, cn_today, in_continuous_session
 from app.price_limits import is_no_limit_day, is_risk_warning_name, parse_listing_date, price_limit_pct
 from app.services import kline_sync, trading_day
 from app.services import minute_adjust
+from app.services.etf_pool import EtfCategory, list_etfs
 from app.services.kline_periods import aggregate_daily_period, aggregate_minute_30m
 from app.services.technical_scoring import (
     TECHNICAL_SCORE_COLUMNS,
@@ -258,6 +259,18 @@ _init_pinyin_dict()
 def _match_pinyin(name: str, keyword: str) -> bool:
     """keyword 是否匹配 name 任一拼音首字母串的前缀 (支持多音字)。"""
     return any(k.startswith(keyword) for k in _name_pinyin_keys(name))
+
+
+@router.get("/etf-pool")
+def get_etf_pool(
+    request: Request,
+    q: str = Query("", max_length=50),
+    category: Annotated[EtfCategory | None, Query()] = None,
+    exchange: Annotated[Literal["SH", "SZ"] | None, Query()] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+):
+    return list_etfs(request.app.state.repo, q=q, category=category or "", exchange=exchange or "", page=page, page_size=page_size)
 
 
 @router.get("/instruments/search")

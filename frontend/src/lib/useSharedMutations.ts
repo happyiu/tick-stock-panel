@@ -2,7 +2,7 @@
  * 共享 mutation hooks — 消除多页面重复的 useMutation 调用。
  */
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { api } from './api'
+import { api, type QuoteScope } from './api'
 import { QK } from './queryKeys'
 
 /** 切换实时行情 — Layout / Data 共用 */
@@ -18,12 +18,12 @@ export function useToggleRealtimeQuotes() {
 }
 
 /** 更新行情轮询间隔 — Layout / Data 共用 */
-export function useUpdateQuoteInterval() {
+export function useUpdateQuoteInterval(scope: QuoteScope = 'stock') {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (v: number) => api.updateQuoteInterval(v),
+    mutationFn: (v: number) => api.updateQuoteInterval(v, scope),
     onSuccess: (data) => {
-      qc.setQueryData(QK.quoteInterval, data)
+      qc.setQueryData(scope === 'stock' ? QK.quoteInterval : QK.quoteScopeInterval(scope), data)
       qc.invalidateQueries({ queryKey: QK.quoteStatus })
     },
   })

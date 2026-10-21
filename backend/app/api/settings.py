@@ -1466,7 +1466,8 @@ def update_pipeline_index_symbols(req: PipelineIndexSymbolsIn) -> dict:
 
 
 class QuoteIntervalIn(BaseModel):
-    interval: float
+    interval: float = Field(gt=0, allow_inf_nan=False)
+    scope: Literal["stock", "etf_watchlist", "etf_pool"] = "stock"
 
 
 class SystemNotifyPrefsIn(BaseModel):
@@ -1798,25 +1799,31 @@ def update_quote_interval(req: QuoteIntervalIn, request: Request) -> dict:
     """更新行情轮询间隔。按档位自动 clamp。"""
     qs = getattr(request.app.state, "quote_service", None)
     if not qs:
-        return {"interval": req.interval, "min_interval": 6.0, "max_interval": 60.0}
-    clamped = qs.set_interval(req.interval)
+        if req.scope == "stock":
+            return {"interval": req.interval, "min_interval": 6.0, "max_interval": 60.0}
+        from app.services.quote_service import QuoteService
+        qs = QuoteService()
+    clamped = qs.set_interval(req.interval, scope=req.scope)
     return {
         "interval": clamped,
         "min_interval": qs.get_min_interval(),
-        "max_interval": qs.MAX_INTERVAL,
+        "max_interval": qs.max_interval(req.scope),
     }
 
 
 @router.get("/preferences/quote-interval")
-def get_quote_interval(request: Request) -> dict:
+def get_quote_interval(request: Request, scope: Literal["stock", "etf_watchlist", "etf_pool"] = "stock") -> dict:
     """获取当前行情轮询间隔和档位限制。"""
     qs = getattr(request.app.state, "quote_service", None)
     if not qs:
-        return {"interval": 6.0, "min_interval": 6.0, "max_interval": 60.0}
+        if scope == "stock":
+            return {"interval": 6.0, "min_interval": 6.0, "max_interval": 60.0}
+        from app.services.quote_service import QuoteService
+        qs = QuoteService()
     return {
-        "interval": qs._interval,
+        "interval": qs.get_interval(scope),
         "min_interval": qs.get_min_interval(),
-        "max_interval": qs.MAX_INTERVAL,
+        "max_interval": qs.max_interval(scope),
     }
 
 

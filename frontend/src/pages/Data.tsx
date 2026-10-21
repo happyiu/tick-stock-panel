@@ -288,6 +288,10 @@ export function Data() {
   }, [])
   const quoteInterval = useQuoteInterval()
   const updateInterval = useUpdateQuoteInterval()
+  const etfWatchlistInterval = useQuoteInterval('etf_watchlist')
+  const etfPoolInterval = useQuoteInterval('etf_pool')
+  const updateEtfWatchlistInterval = useUpdateQuoteInterval('etf_watchlist')
+  const updateEtfPoolInterval = useUpdateQuoteInterval('etf_pool')
 
   const realtimeEnabled = prefs.data?.realtime_quotes_enabled ?? false
   const quoteStatus = useQuoteStatus()
@@ -798,7 +802,7 @@ export function Data() {
             enabled={realtimeEnabled}
             running={quoteStatus.data?.running ?? false}
             isTrading={quoteStatus.data?.is_trading_hours ?? false}
-            lastFetchMs={quoteStatus.data?.last_fetch_ms ?? null}
+            lastFetchMs={quoteStatus.data?.stock_last_fetch_ms ?? null}
             intervalS={quoteInterval.data?.interval ?? quoteStatus.data?.interval_s ?? 6}
             intervalMin={quoteInterval.data?.min_interval ?? 6}
             intervalMax={quoteInterval.data?.max_interval ?? 60}
@@ -807,7 +811,21 @@ export function Data() {
             toggling={toggleQuote.isPending}
             showIntervalEdit={showIntervalEdit}
             onShowIntervalEdit={handleToggleIntervalEdit}
-            onIntervalChange={(v) => updateInterval.mutate(v)}
+            onIntervalChange={(v) => updateInterval.mutateAsync(v)}
+            etfWatchlist={{
+              intervalS: etfWatchlistInterval.data?.interval ?? quoteStatus.data?.etf_watchlist_interval_s ?? 10,
+              intervalMin: etfWatchlistInterval.data?.min_interval ?? 1,
+              intervalMax: etfWatchlistInterval.data?.max_interval ?? 3600,
+              lastFetchMs: quoteStatus.data?.etf_watchlist_last_fetch_ms ?? null,
+              onIntervalChange: value => updateEtfWatchlistInterval.mutateAsync(value),
+            }}
+            etfPool={{
+              intervalS: etfPoolInterval.data?.interval ?? quoteStatus.data?.etf_pool_interval_s ?? 60,
+              intervalMin: etfPoolInterval.data?.min_interval ?? 1,
+              intervalMax: etfPoolInterval.data?.max_interval ?? 3600,
+              lastFetchMs: quoteStatus.data?.etf_pool_last_fetch_ms ?? null,
+              onIntervalChange: value => updateEtfPoolInterval.mutateAsync(value),
+            }}
           />
 
           {/* 自动调度 */}

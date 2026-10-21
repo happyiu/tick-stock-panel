@@ -300,6 +300,40 @@ def test_realtime_uses_requested_symbols_without_listing_request(monkeypatch):
     assert calls == ["https://qt.gtimg.cn/q=sh600519"]
 
 
+@pytest.mark.parametrize("fail_first_batch", [False, True])
+def test_realtime_batches_etf_catalog_and_continues_after_failed_batch(monkeypatch, fail_first_batch):
+    symbols = [f"{510000 + i}.SH" for i in range(401)]
+    calls: list[list[str]] = []
+
+    class _Response:
+        def __init__(self, keys):
+            quotes = []
+            for key in keys:
+                values = [""] * 53
+                values[1] = "ETF"
+                values[3:7] = ["4.1", "4", "4", "100"]
+                quotes.append(f'v_{key}="{"~".join(values)}";')
+            self.content = "\n".join(quotes).encode("gbk")
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, **kwargs):
+        keys = url.split("q=", 1)[1].split(",")
+        calls.append(keys)
+        if fail_first_batch and len(calls) == 1:
+            raise RuntimeError("first batch unavailable")
+        return _Response(keys)
+
+    monkeypatch.setattr(ap, "_http_get", fake_get)
+    monkeypatch.setattr(ap.time, "sleep", lambda seconds: None)
+    rows = AStockDataProvider().get_realtime(symbols=[*symbols, symbols[0]])
+
+    assert [len(keys) for keys in calls] == [200, 200, 1]
+    assert {row["symbol"] for row in rows} == set(symbols[200:] if fail_first_batch else symbols)
+    assert all(row["last_price"] == 4.1 for row in rows)
+
+
 def test_depth_batch_maps_mootdx_five_levels_and_keeps_explicit_market(monkeypatch):
     quotes = pd.DataFrame([
         {

@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from typing import ClassVar
 
 import polars as pl
+import pytest
 
 from app.indicators.pipeline import BENCHMARK_INDEX_SYMBOLS
 from app.services import quote_service as qs
@@ -67,7 +68,7 @@ def _service_with_provider(
     monkeypatch.setattr(custom_mod, "get_provider", lambda name: provider)
     monkeypatch.setattr(
         service, "_process_full_market_records",
-        lambda records, *, t0, now_ts, replace_index_cache=True, final_boundary_ms=None: (
+        lambda records, *, t0, now_ts, replace_index_cache=True, final_boundary_ms=None, etf_pool_refresh=False: (
             captured.append(records),
             index_cache_replacements.append(replace_index_cache),
         ),
@@ -156,26 +157,39 @@ def test_custom_provider_successful_empty_index_fetch_replaces_cache(monkeypatch
     assert replacements == [True]
 
 
-def test_custom_provider_adds_watchlist_etf_from_astockdata(monkeypatch):
-    """扶摇全市场快照不含 ETF 时, 自选 ETF 仍走腾讯单标的补拉。"""
+@pytest.mark.parametrize(
+    ("pull_all", "watchlist_symbols", "expected_symbols"),
+    [
+        (False, ["159992.SZ", "600519.SH"], ["159992.SZ"]),
+        (True, ["159992.SZ", "600519.SH"], ["159992.SZ", "510300.SH"]),
+        (True, [], ["159992.SZ", "510300.SH"]),
+        (False, [], []),
+    ],
+)
+def test_custom_provider_adds_etf_from_astockdata(
+    monkeypatch, pull_all, watchlist_symbols, expected_symbols,
+):
+    """全市场开关覆盖非自选 ETF, 关闭时仍只补拉自选 ETF。"""
     active = _ProviderNoIndices()
     etf_calls: list[list[str]] = []
 
     class _ETFProvider:
         def get_realtime(self, *, symbols=None):
             etf_calls.append(list(symbols or []))
-            return [{"symbol": "159992.SZ", "last_price": 0.84, "prev_close": 0.845}]
+            return [{"symbol": symbol, "last_price": 0.84, "prev_close": 0.845} for symbol in symbols]
 
     service = qs.QuoteService()
-    service._repo = SimpleNamespace(get_etf_symbol_set=lambda: {"159992.SZ"})
+    service._repo = SimpleNamespace(get_etf_symbol_set=lambda: {"159992.SZ", "510300.SH"})
     captured: list[list[dict]] = []
     monkeypatch.setattr(
         service,
         "_process_full_market_records",
         lambda records, **kwargs: captured.append(records),
     )
-    from app.services import preferences as prefs_mod, watchlist as watchlist_mod
+    from app.services import preferences as prefs_mod
+    from app.services import watchlist as watchlist_mod
     monkeypatch.setattr(prefs_mod, "get_realtime_data_provider", lambda: "fuyao")
+    monkeypatch.setattr(prefs_mod, "get_realtime_pull_etf", lambda: pull_all)
     import app.data_providers.custom as custom_mod
     monkeypatch.setattr(
         custom_mod,
@@ -190,17 +204,45 @@ def test_custom_provider_adds_watchlist_etf_from_astockdata(monkeypatch):
     monkeypatch.setattr(
         watchlist_mod,
         "list_symbols",
-        lambda: [{"symbol": "159992.SZ"}],
+        lambda: [{"symbol": symbol} for symbol in watchlist_symbols],
     )
 
     service._fetch_full_market_quotes()
 
-    assert etf_calls == [["159992.SZ"]]
-    assert {row["symbol"] for row in captured[0]} == {"600519.SH", "159992.SZ"}
+    assert etf_calls == ([expected_symbols] if expected_symbols else [])
+    assert {row["symbol"] for row in captured[0]} == {"600519.SH", *expected_symbols}
+
+
+@pytest.mark.parametrize("failure", ["missing_capability", "empty", "exception"])
+def test_etf_supplement_failure_keeps_stock_refresh(monkeypatch, failure):
+    service, captured, _ = _service_with_provider(monkeypatch, _ProviderNoIndices())
+    service._repo = SimpleNamespace(get_etf_symbol_set=lambda: {"510300.SH"})
+    from app.data_providers import custom
+    from app.services import preferences, watchlist
+
+    monkeypatch.setattr(preferences, "get_realtime_pull_etf", lambda: True)
+    monkeypatch.setattr(watchlist, "list_symbols", lambda: [])
+    monkeypatch.setattr(
+        custom, "provider_has_dataset",
+        lambda name, dataset: name != "astockdata" or failure != "missing_capability",
+    )
+
+    class _ETFProvider:
+        def get_realtime(self, *, symbols):
+            if failure == "exception":
+                raise RuntimeError("ETF endpoint unavailable")
+            return []
+
+    monkeypatch.setattr(
+        custom, "get_provider",
+        lambda name: _ETFProvider() if name == "astockdata" else _ProviderNoIndices(),
+    )
+    service._fetch_full_market_quotes()
+    assert captured == [[{"symbol": "600519.SH", "last_price": 1480.0}]]
 
 
 def _disable_record_processing_side_effects(monkeypatch, service: qs.QuoteService) -> None:
-    monkeypatch.setattr(qs, "_persist_last_fetch", lambda fetched_at: None)
+    monkeypatch.setattr(qs, "_persist_last_fetch", lambda *args: None)
     monkeypatch.setattr(service, "_update_volume_delta", lambda records, fetched_at: None)
     monkeypatch.setattr(service, "_broadcast_quote_updated", lambda: None)
     monkeypatch.setattr(service, "_evaluate_monitors", lambda daily, extra: None)

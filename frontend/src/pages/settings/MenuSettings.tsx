@@ -22,11 +22,12 @@ import { Link } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { usePreferences } from '@/lib/useSharedQueries'
+import { getFrontendExtensionNavigation } from '@/extensions/registry'
 
 interface NavEntry {
   id: string
   label: string
-  type: 'builtin' | 'analysis'
+  type: 'builtin' | 'analysis' | 'extension'
   visible: boolean
 }
 
@@ -85,7 +86,7 @@ const ARCH_CLASS: Record<string, { kind: ArchKind; reason: string }> = {
 }
 /** 自定义分析页天然属于扩展域 */
 const archOf = (entry: NavEntry): { kind: ArchKind; reason: string } =>
-  ARCH_CLASS[entry.id] ?? { kind: 'ext', reason: '自定义分析页 — 扩展域' }
+  ARCH_CLASS[entry.id] ?? { kind: 'ext', reason: '扩展页面 — 消费核心数据' }
 
 // ── Sortable row ──
 
@@ -172,7 +173,7 @@ function SortableItem({ entry, hidden, onToggleHidden, badgeEnabled, onToggleBad
         </button>
       </div>
       <div className="flex justify-center">
-        {entry.type === 'builtin' ? (
+        {entry.type !== 'analysis' ? (
           <Link
             to={entry.id}
             className="rounded p-1 text-muted hover:text-accent hover:bg-accent/10 transition-colors"
@@ -217,12 +218,17 @@ export function SettingsMenuSettingsPanel() {
   const { data: prefs } = usePreferences()
   const menus = useQuery({ queryKey: QK.analysisMenus, queryFn: api.analysisMenus })
 
-  const analysisEntries: NavEntry[] = (menus.data?.items ?? []).map(m => ({
+  const analysisEntries: NavEntry[] = [...(menus.data?.items ?? []).map(m => ({
     id: m.id,
     label: m.label,
     type: 'analysis' as const,
     visible: m.visible,
-  }))
+  })), ...getFrontendExtensionNavigation().map(item => ({
+    id: item.route.path,
+    label: item.label,
+    type: 'extension' as const,
+    visible: true,
+  }))]
 
   const allEntries = useMemo(() => {
     const saved = prefs?.nav_order ?? []

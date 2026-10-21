@@ -5,7 +5,7 @@
  * 只有管线进度等非 SSE 数据才用 refetchInterval。
  */
 import { useQuery } from '@tanstack/react-query'
-import { api } from './api'
+import { api, type QuoteScope } from './api'
 import { QK } from './queryKeys'
 
 // ===== 全局共享 =====
@@ -69,10 +69,10 @@ export function useQuoteStatus(opts?: { enabled?: boolean; poll?: boolean }) {
 }
 
 /** 行情间隔 — Layout / Data 共用 */
-export function useQuoteInterval() {
+export function useQuoteInterval(scope: QuoteScope = 'stock') {
   return useQuery({
-    queryKey: QK.quoteInterval,
-    queryFn: api.quoteInterval,
+    queryKey: scope === 'stock' ? QK.quoteInterval : QK.quoteScopeInterval(scope),
+    queryFn: () => api.quoteInterval(scope),
   })
 }
 

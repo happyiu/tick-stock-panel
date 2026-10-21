@@ -40,7 +40,7 @@ export const DATA_CARD_DEFS: CardDef[] = [
   { key: 'adj_factor',  label: '除权因子', desc: '复权计算因子',           defaultHiddenIfNoCap: true },
   { key: 'enriched',    label: 'Enriched', desc: '技术指标计算结果',       defaultHiddenIfNoCap: false },
   { key: 'index',       label: '指数',     desc: '主要市场指数日K',        defaultHiddenIfNoCap: false },
-  { key: 'etf',         label: 'ETF',      desc: '场内交易基金日K',         defaultHiddenIfNoCap: false, defaultHidden: true },
+  { key: 'etf',         label: 'ETF',      desc: '场内交易基金日K',         defaultHiddenIfNoCap: false },
   { key: 'minute',      label: '分钟 K',   desc: '分钟级K线(依赖分钟K批量数据)',  defaultHiddenIfNoCap: true },
   { key: 'financials',  label: '财务数据', desc: '财报数据(依赖财务数据)',    defaultHiddenIfNoCap: true },
   { key: 'exchange_rate', label: '汇率', desc: '当前参考 + 历史日频货币对 / DXY', defaultHiddenIfNoCap: false },
@@ -50,7 +50,7 @@ export const DATA_CARD_DEFS: CardDef[] = [
 
 const DEFAULT_ORDER = DATA_CARD_DEFS.map(d => d.key)
 /** 恢复默认时显示的卡片数量(按默认顺序取前 N 张) */
-const DEFAULT_VISIBLE_COUNT = 5
+const DEFAULT_VISIBLE_COUNT = 6
 
 const CAP_KEY_MAP: Partial<Record<CardKey, string>> = {
   adj_factor: 'adj_factor',
@@ -123,7 +123,7 @@ export function PageSettingsModal({
   const toggle = (key: CardKey) => persistVisible({ ...visible, [key]: !(visible[key] ?? true) })
 
   const reset = () => {
-    // 恢复默认: 默认顺序 + 仅勾选前 5 张卡片, 其余隐藏
+    // 恢复默认: 默认顺序 + 勾选包含 ETF 的前 6 张卡片, 其余隐藏
     const defaultOrder = [...DEFAULT_ORDER]
     const defaultVisible: Record<string, boolean> = {}
     defaultOrder.forEach((k, i) => { defaultVisible[k] = i < DEFAULT_VISIBLE_COUNT })

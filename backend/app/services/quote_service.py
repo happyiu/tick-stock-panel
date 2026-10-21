@@ -177,7 +177,7 @@ _LAST_FETCH_WRITE_INTERVAL_MS = 30_000.0
 _last_fetch_written_at_ms: float = 0.0
 
 
-def _persist_last_fetch(fetched_at_ms: float) -> None:
+def _persist_last_fetch(fetched_at_ms: float, scope_times: dict | None = None) -> None:
     """把"最后获取"时间戳持久化到 preferences, 使进程重启后仍可显示。
 
     放在锁外调用 (IO); 失败不影响主流程 (内存值已更新, 下次 fetch 再写)。
@@ -188,7 +188,7 @@ def _persist_last_fetch(fetched_at_ms: float) -> None:
         return
     try:
         from app.services import preferences
-        preferences.save({"last_fetch_ms": round(fetched_at_ms, 0)})
+        preferences.save({"last_fetch_ms": round(fetched_at_ms, 0), **(scope_times or {})})
         _last_fetch_written_at_ms = fetched_at_ms
     except Exception as e:  # noqa: BLE001
         logger.debug("last_fetch_ms 持久化失败 (不影响行情): %s", e)
@@ -257,6 +257,14 @@ class QuoteService:
         self._symbol_count: int = 0
         self._index_symbol_count: int = 0
         self._etf_symbol_count: int = 0
+        self._last_full_etf_refresh: tuple[str, date, float] | None = None
+        self._poll_attempts: dict[str, tuple[str, date, float]] = {}
+        from app.services import preferences
+        saved = preferences.load()
+        self._scope_fetch_times = {
+            f"{scope}_last_fetch_ms": saved.get(f"{scope}_last_fetch_ms")
+            for scope in ("stock", "etf_watchlist", "etf_pool")
+        }
         self._index_quotes_cache: pl.DataFrame | None = None
         self._intraday_signal_evaluator = IntradaySignalEvaluator()
         self._intraday_signal_bucket: dict[str, str] = {}
@@ -289,6 +297,8 @@ class QuoteService:
             from app.services import preferences
             interval = preferences.get_realtime_quote_interval()
         self._interval = self._clamp_interval(interval)
+        self._last_full_etf_refresh = None
+        self._poll_attempts.clear()
         self._running = True
         self._enabled = True
         self._thread = threading.Thread(target=self._poll_loop, daemon=True)
@@ -317,6 +327,9 @@ class QuoteService:
         if not self.is_realtime_allowed():
             logger.warning("实时行情开启被拒:当前档位(none)无实时行情权限")
             return False
+        if not self._enabled:
+            self._last_full_etf_refresh = None
+            self._poll_attempts.clear()
         self._enabled = True
         self._save_enabled(True)
         if not self._running:
@@ -395,13 +408,30 @@ class QuoteService:
         """注入 FastAPI app.state, 用于获取 strategy_monitor 等单例。"""
         self._app_state = app_state
 
-    def set_interval(self, interval: float) -> float:
-        """运行时更新轮询间隔（立即生效）。"""
-        clamped = self._clamp_interval(interval)
-        self._interval = clamped
+    @classmethod
+    def max_interval(cls, scope: str = "stock") -> float:
+        return cls.MAX_INTERVAL if scope == "stock" else 3600.0
+
+    def get_interval(self, scope: str = "stock") -> float:
         from app.services import preferences
-        preferences.set_realtime_quote_interval(clamped)
-        logger.info("轮询间隔已更新为 %.1fs", clamped)
+        getter = {
+            "stock": preferences.get_realtime_quote_interval,
+            "etf_watchlist": preferences.get_realtime_etf_watchlist_interval,
+            "etf_pool": preferences.get_realtime_etf_pool_interval,
+        }[scope]
+        return max(self.get_min_interval(), min(self.max_interval(scope), float(getter())))
+
+    def set_interval(self, interval: float, scope: str = "stock") -> float:
+        """运行时更新轮询间隔（立即生效）。"""
+        clamped = max(self.get_min_interval(), min(self.max_interval(scope), interval))
+        from app.services import preferences
+        if scope == "stock":
+            self._interval = clamped
+            preferences.set_realtime_quote_interval(clamped)
+        else:
+            key = {"etf_watchlist": "realtime_etf_watchlist_interval", "etf_pool": "realtime_etf_pool_interval"}[scope]
+            preferences.save({key: clamped})
+        logger.info("行情轮询间隔已更新 (%s): %.1fs", scope, clamped)
         return clamped
 
     def get_min_interval(self) -> float:
@@ -575,7 +605,10 @@ class QuoteService:
             "paused": self._paused,
             "mode": mode,
             "realtime_allowed": mode != "none",
-            "interval_s": self._interval,
+            "interval_s": self.get_interval(),
+            "etf_watchlist_interval_s": self.get_interval("etf_watchlist"),
+            "etf_pool_interval_s": self.get_interval("etf_pool"),
+            **self._scope_fetch_times,
             "symbol_count": self._symbol_count,
             "index_symbol_count": self._index_symbol_count,
             "etf_symbol_count": self._etf_symbol_count,
@@ -600,6 +633,7 @@ class QuoteService:
         self._fetch_quotes(
             final=is_final,
             final_boundary_ms=self._final_boundary_ms(phase) if is_final else None,
+            force=True,
         )
         return self.status()
 
@@ -652,7 +686,8 @@ class QuoteService:
                 logger.warning("行情轮询异常: %s", e)
 
             waited = 0.0
-            while self._running and self._enabled and waited < self._interval:
+            # 各组独立判断到期; 每秒检查一次, 配置变化无需重启线程。
+            while self._running and self._enabled and waited < 1.0:
                 time.sleep(0.5)
                 waited += 0.5
 
@@ -669,7 +704,7 @@ class QuoteService:
         if self._final_sync_failed and any(k[0] != today for k in self._final_sync_failed):
             self._final_sync_failed = {k: v for k, v in self._final_sync_failed.items() if k[0] == today}
 
-    def _fetch_quotes(self, *, final: bool = False, final_boundary_ms: int | None = None) -> bool:
+    def _fetch_quotes(self, *, final: bool = False, final_boundary_ms: int | None = None, force: bool = False) -> bool:
         """拉取行情。加锁串行化 (后台轮询 vs 手动 refresh)。返回本轮是否成功更新。
 
         final_boundary_ms: final 定版的边界时间戳 (ms)。传入时快照时间戳未达边界
@@ -680,7 +715,7 @@ class QuoteService:
             before = self._fetched_at
             if final:
                 logger.info("最终行情同步开始")
-            snapshot = self._fetch_full_market_quotes(final_boundary_ms=final_boundary_ms)
+            snapshot = self._fetch_full_market_quotes(final_boundary_ms=final_boundary_ms, force=force)
             updated = self._fetched_at > before
         # 监控评估移出取数锁执行: 评估输入是本轮快照 (daily_df/quote_extra),
         # 离锁执行结果不变; 时序不变式 (enriched 替换后才评估) 仍由调用顺序保证。
@@ -689,8 +724,39 @@ class QuoteService:
                 self._evaluate_monitors(*snapshot)
         return updated
 
+    def _scope_due(self, scope: str, provider: str, now_ts: float, force: bool = False) -> bool:
+        last = self._poll_attempts.get(scope)
+        return force or last is None or last[:2] != (provider, cn_today()) or now_ts - last[2] >= self.get_interval(scope)
+
+    def _record_poll_attempt(self, provider, now_ts, stock_due, wanted_etfs, full_etf_refresh):
+        for scope, attempted in (("stock", stock_due), ("etf_watchlist", bool(wanted_etfs)), ("etf_pool", full_etf_refresh)):
+            if attempted:
+                self._poll_attempts[scope] = (provider, cn_today(), now_ts)
+
+    def _etf_refresh_scope(
+        self, provider_name: str, now_ts: float, final_boundary_ms: int | None,
+        force: bool = False,
+    ) -> tuple[set[str], set[str], bool]:
+        from app.services import preferences, watchlist
+
+        all_symbols = self._repo.get_etf_symbol_set() if self._repo else set()
+        try:
+            selected = {row["symbol"] for row in watchlist.list_symbols() if row.get("symbol")}
+        except Exception as exc:
+            logger.warning("ETF 自选清单读取失败: %s", exc)
+            selected = set()
+        if not preferences.get_realtime_pull_etf():
+            self._last_full_etf_refresh = None
+            self._poll_attempts.pop("etf_pool", None)
+        # 最终同步绕过分钟限频, 避免午休/收盘只定版了自选标的。
+        full = bool(all_symbols) and preferences.get_realtime_pull_etf() and self._scope_due(
+            "etf_pool", provider_name, now_ts, force or final_boundary_ms is not None,
+        )
+        selected_due = self._scope_due("etf_watchlist", provider_name, now_ts, force or final_boundary_ms is not None)
+        return all_symbols, all_symbols if full else all_symbols & selected if selected_due else set(), full
+
     def _fetch_full_market_quotes(
-        self, final_boundary_ms: int | None = None
+        self, final_boundary_ms: int | None = None, *, force: bool = False,
     ) -> tuple[pl.DataFrame, pl.DataFrame | None] | None:
         """拉取全市场行情 → 写 daily + 计算 enriched + 更新缓存。
 
@@ -706,9 +772,23 @@ class QuoteService:
                     t0 = time.perf_counter()
                     now_ts = time.perf_counter()
                     provider = custom_sources.get_provider(provider_name)
-                    records = provider.get_realtime()
-                    # 扶摇全市场快照不支持 ETF 代码; ETF 自选用已接入腾讯的
-                    # astockdata 单标的接口补拉, 仍汇入同一轮缓存/详情页链路。
+                    all_etfs, wanted_etfs, full_etf_refresh = self._etf_refresh_scope(
+                        provider_name, now_ts, final_boundary_ms, force,
+                    )
+                    stock_due = self._scope_due("stock", provider_name, now_ts, force or final_boundary_ms is not None)
+                    if not stock_due and not wanted_etfs:
+                        return
+                    self._record_poll_attempt(provider_name, now_ts, stock_due, wanted_etfs, full_etf_refresh)
+                    if provider_name == "astockdata" and self._repo:
+                        instruments = self._repo.get_instruments()
+                        stock_symbols = set(instruments["symbol"]) if "symbol" in instruments.columns else set()
+                        symbols = (stock_symbols | self._repo.get_index_symbol_set() if stock_due else set()) | wanted_etfs
+                        records = provider.get_realtime(symbols=sorted(symbols)) if symbols else []
+                    else:
+                        # 通用全市场接口可能同时提供 ETF; 扶摇则只需股票轮取数。
+                        records = provider.get_realtime() if stock_due or (wanted_etfs and provider_name != "fuyao") else []
+                    records = [r for r in records if (stock_due and r.get("symbol") not in all_etfs) or r.get("symbol") in wanted_etfs]
+                    # 扶摇快照不含 ETF; 用腾讯批量补拉, 范围沿用全市场 ETF 开关。
                     if (
                         provider_name != "astockdata"
                         and self._repo
@@ -717,31 +797,23 @@ class QuoteService:
                         )
                     ):
                         try:
-                            from app.services import watchlist
-                            etf_symbols = sorted(
-                                {
-                                    row.get("symbol")
-                                    for row in watchlist.list_symbols()
-                                    if row.get("symbol")
-                                }
-                                & self._repo.get_etf_symbol_set()
-                            )
+                            etf_symbols = sorted(wanted_etfs - {r.get("symbol") for r in records})
                             if etf_symbols:
                                 etf_provider = custom_sources.get_provider("astockdata")
                                 records.extend(
                                     etf_provider.get_realtime(symbols=etf_symbols) or []
                                 )
                                 logger.info(
-                                    "自选 ETF 实时行情补拉完成: %d 只", len(etf_symbols)
+                                    "ETF 实时行情补拉完成: 请求 %d 只", len(etf_symbols)
                                 )
                         except Exception as e:  # noqa: BLE001
-                            logger.warning("自选 ETF 实时行情补拉失败: %s", e)
+                            logger.warning("ETF 实时行情补拉失败: %s", e)
                     # 指数补充: A 股快照通常不含指数。插件可选实现
                     # get_realtime_indices(symbols) 用独立端点补拉 (如 fuyao 指数快照);
                     # 未实现的源指数缓存为空, 由日K兜底接管。
-                    replace_index_cache = True
+                    replace_index_cache = stock_due
                     fetch_indices = getattr(provider, "get_realtime_indices", None)
-                    if callable(fetch_indices):
+                    if stock_due and callable(fetch_indices):
                         # 偏离值基准指数 (科创50/创业板综指等) 一并拉取, 供盘中
                         # attach_deviation_columns_today 实时外推; 展示层仍按核心
                         # 四只过滤, 多拉的指数不进侧栏。
@@ -763,13 +835,17 @@ class QuoteService:
                 except Exception as e:  # noqa: BLE001
                     logger.warning("自定义实时行情拉取失败: %s", e)
                     return
-                return self._process_full_market_records(
+                snapshot = self._process_full_market_records(
                     records,
                     t0=t0,
                     now_ts=now_ts,
                     replace_index_cache=replace_index_cache,
                     final_boundary_ms=final_boundary_ms,
+                    etf_pool_refresh=full_etf_refresh,
                 )
+                if full_etf_refresh and any(r.get("symbol") in all_etfs and (r.get("last_price") or 0) > 0 for r in records):
+                    self._last_full_etf_refresh = (provider_name, cn_today(), now_ts)
+                return snapshot
             # 自定义源未配置 realtime → 回退 TickFlow
 
         from app.tickflow.client import get_paid_realtime_client
@@ -789,13 +865,14 @@ class QuoteService:
             # 指数监控规则标的并入显式拉取 (quotes.get 按码覆盖)
             monitor_index_symbols = self._collect_monitor_index_symbols()
             all_index_symbols.update(monitor_index_symbols)
-            all_etf_symbols = set()
-            if self._repo:
-                etf_inst = self._repo.get_etf_instruments()
-                if not etf_inst.is_empty() and "symbol" in etf_inst.columns:
-                    all_etf_symbols = set(etf_inst["symbol"].cast(pl.Utf8).to_list())
-            # 全市场 ETF 默认关闭以控制请求量, 但自选标的必须跟随行情轮询。
-            # 只补拉自选集合, 不改变全市场拉取开关的资源语义。
+            all_etf_symbols, wanted_etfs, full_etf_refresh = self._etf_refresh_scope(
+                "tickflow", now_ts, final_boundary_ms, force,
+            )
+            stock_due = self._scope_due("stock", "tickflow", now_ts, force or final_boundary_ms is not None)
+            if not stock_due and not wanted_etfs:
+                return
+            self._record_poll_attempt("tickflow", now_ts, stock_due, wanted_etfs, full_etf_refresh)
+            # 自选跟随普通轮询; ETF 全量轮次通过 CN_ETF 一次覆盖, 不重复按码取数。
             try:
                 from app.services import watchlist
                 watchlist_symbols = {
@@ -803,13 +880,12 @@ class QuoteService:
                 }
             except Exception:  # noqa: BLE001
                 watchlist_symbols = set()
-            watchlist_etf_symbols = watchlist_symbols & all_etf_symbols
             watchlist_stock_symbols = watchlist_symbols - all_etf_symbols - all_index_symbols
 
             universes: list[str] = []
-            if preferences.get_realtime_pull_stock():
+            if stock_due and preferences.get_realtime_pull_stock():
                 universes.append("CN_Equity_A")
-            if preferences.get_realtime_pull_etf() and all_etf_symbols:
+            if full_etf_refresh:
                 universes.append("CN_ETF")
 
             resp = []
@@ -818,16 +894,16 @@ class QuoteService:
                 logger.info("拉取全市场行情 (universes=%s, SDK超时=30s×重试3)", universes)
                 resp.extend(tf.quotes.get_by_universes(universes=universes) or [])
                 logger.info("全市场行情拉取完成: %d 条 (%.2fs)", len(resp), time.perf_counter() - _u0)
-            if watchlist_stock_symbols and not preferences.get_realtime_pull_stock():
+            if stock_due and watchlist_stock_symbols and not preferences.get_realtime_pull_stock():
                 resp.extend(tf.quotes.get(symbols=sorted(watchlist_stock_symbols)) or [])
-            if watchlist_etf_symbols and not preferences.get_realtime_pull_etf():
-                resp.extend(tf.quotes.get(symbols=sorted(watchlist_etf_symbols)) or [])
+            if wanted_etfs and not full_etf_refresh:
+                resp.extend(tf.quotes.get(symbols=sorted(wanted_etfs)) or [])
             # 指数: 固定核心四只 + 偏离值基准指数 + 监控规则标的, 按码显式拉取
             from app.indicators.pipeline import BENCHMARK_INDEX_SYMBOLS
             _core_syms = sorted(
                 core_index_symbols | BENCHMARK_INDEX_SYMBOLS | monitor_index_symbols
             )
-            if _core_syms:
+            if stock_due and _core_syms:
                 _i0 = time.perf_counter()
                 resp.extend(tf.quotes.get(symbols=_core_syms) or [])
                 logger.info("核心指数行情拉取完成: %d 只 (%.2fs)", len(_core_syms), time.perf_counter() - _i0)
@@ -871,9 +947,13 @@ class QuoteService:
                 "session": q.get("session"),
             })
 
-        return self._process_full_market_records(
-            records, t0=t0, now_ts=now_ts, final_boundary_ms=final_boundary_ms
+        snapshot = self._process_full_market_records(
+            records, t0=t0, now_ts=now_ts, final_boundary_ms=final_boundary_ms,
+            replace_index_cache=stock_due, etf_pool_refresh=full_etf_refresh,
         )
+        if full_etf_refresh and any(r.get("symbol") in all_etf_symbols and (r.get("last_price") or 0) > 0 for r in records):
+            self._last_full_etf_refresh = ("tickflow", cn_today(), now_ts)
+        return snapshot
 
     def _process_full_market_records(
         self,
@@ -883,6 +963,7 @@ class QuoteService:
         now_ts: float,
         replace_index_cache: bool = True,
         final_boundary_ms: int | None = None,
+        etf_pool_refresh: bool = False,
     ) -> tuple[pl.DataFrame, pl.DataFrame | None] | None:
         """把全市场 records 写盘并增量计算 enriched。
 
@@ -929,15 +1010,29 @@ class QuoteService:
             self._fetch_time = now_ts
             self._fetch_ms = fetch_ms
             self._fetched_at = fetched_at
-            self._symbol_count = len(stock_records)
-            self._etf_symbol_count = len(etf_records)
+            if stock_records:
+                self._symbol_count = len(stock_records)
+            if etf_records:
+                self._etf_symbol_count = len(etf_records)
             if replace_index_cache:
                 self._index_symbol_count = len(index_records)
                 self._index_quotes_cache = self._build_index_quotes(index_records)
             else:
                 logger.info("指数本轮获取失败,沿用上轮缓存: %d 只", self._index_symbol_count)
 
-        _persist_last_fetch(fetched_at)
+        if any((r.get("last_price") or 0) > 0 for r in stock_records):
+            self._scope_fetch_times["stock_last_fetch_ms"] = fetched_at
+        if any((r.get("last_price") or 0) > 0 for r in etf_records):
+            from app.services import watchlist
+            try:
+                selected = {row.get("symbol") for row in watchlist.list_symbols()}
+            except Exception:
+                selected = set()
+            if any(r.get("symbol") in selected and (r.get("last_price") or 0) > 0 for r in etf_records):
+                self._scope_fetch_times["etf_watchlist_last_fetch_ms"] = fetched_at
+            if etf_pool_refresh:
+                self._scope_fetch_times["etf_pool_last_fetch_ms"] = fetched_at
+        _persist_last_fetch(fetched_at, self._scope_fetch_times)
         logger.info("行情刷新: %d 只股票, %d 只ETF, %d 只指数, 耗时 %.0fms", len(stock_records), len(etf_records), len(index_records), fetch_ms)
 
         if confirmed_final is False:
@@ -951,7 +1046,8 @@ class QuoteService:
             return
 
         # 轮询放量状态更新 (volume_delta 规则的差值来源)
-        self._update_volume_delta(stock_records, fetched_at)
+        if stock_records:
+            self._update_volume_delta(stock_records, fetched_at)
 
         # ---- 写 kline_daily (不复权原始价格, 只有 OHLCV) ----
         daily_df = self._build_daily(stock_records)
@@ -964,7 +1060,7 @@ class QuoteService:
         etf_daily_df = self._build_daily(etf_records)
         if not etf_daily_df.is_empty() and self._repo:
             try:
-                self._repo.flush_live_daily_asset("etf", etf_daily_df)
+                self._repo.merge_live_daily_asset("etf", etf_daily_df)
             except Exception as e:  # noqa: BLE001
                 logger.warning("ETF 日K写盘失败: %s", e)
 
@@ -976,7 +1072,7 @@ class QuoteService:
         if not daily_df.is_empty() and self._repo:
             self._flush_live_enriched(daily_df, quote_extra, asset_type="stock")
         if not etf_daily_df.is_empty() and self._repo:
-            self._flush_live_enriched(etf_daily_df, etf_quote_extra, asset_type="etf")
+            self._flush_live_enriched(etf_daily_df, etf_quote_extra, asset_type="etf", merge=True)
         # ---- 指数: 核心四只每轮已显式拉取, 与股票/ETF 同口径 merge 写盘 ----
         # 不能再门控 has_asset_rules("index"): 默认配置无指数监控规则, 否则
         # 盘中 kline_index_enriched 停在上一交易日, 读侧守卫直接跳过不注入。
@@ -1837,8 +1933,11 @@ class QuoteService:
                 table = {"etf": "kline_etf_daily", "index": "kline_index_daily"}.get(asset_type, "kline_daily")
                 daily_glob = str(self._repo.store.data_dir / table / "**" / "*.parquet")
                 ohlcv_cols = ["symbol", "date", "open", "high", "low", "close", "volume", "amount", "quote_ts"]
+                history = scan_daily_parquet(daily_glob)
+                if asset_type == "etf":
+                    history = history.filter(pl.col("symbol").is_in(daily_df["symbol"].to_list()))
                 hist_df = guarded_collect(
-                    scan_daily_parquet(daily_glob)
+                    history
                     # 多读一段自然日, 再按交易日计数确定窗口起点 (长假前后 90 个自然日不足 60 个交易日)
                     .filter(pl.col("date") >= cutoff - timedelta(days=60))
                     .sort(["symbol", "date"]),

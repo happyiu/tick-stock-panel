@@ -8,6 +8,34 @@ import { toast } from '@/components/Toast'
 
 const BASE = ''
 
+export interface EtfPoolParams {
+  q: string
+  category: string
+  page: number
+  pageSize: number
+}
+
+export interface EtfPoolRow {
+  symbol: string
+  code: string
+  name: string
+  category: string
+  exchange: string
+  last_price?: number | null
+  /** 小数口径，0.01 表示 1%。 */
+  change_pct?: number | null
+  quote_date?: string | null
+}
+
+export interface EtfPoolResponse {
+  rows: EtfPoolRow[]
+  total: number
+  catalog_total: number
+  categories: { name: string; count: number }[]
+  page: number
+  page_size: number
+}
+
 type RequestOptions = RequestInit & {
   /** 为 true 时不弹错误 toast（由调用方自行汇总提示，如多图串行队列） */
   quiet?: boolean
@@ -248,6 +276,7 @@ export interface AiStockReport {
 
 // ===== Kline =====
 export type KlinePeriod = '30m' | '1d' | '1w' | '1mo'
+export type QuoteScope = 'stock' | 'etf_watchlist' | 'etf_pool'
 
 export interface MinuteKlineRow {
   datetime: string
@@ -3234,15 +3263,20 @@ export const api = {
       final_sync_done?: boolean
       final_sync_failed?: string | null
       last_fetch_ms: number | null
+      stock_last_fetch_ms?: number | null
+      etf_watchlist_last_fetch_ms?: number | null
+      etf_pool_last_fetch_ms?: number | null
+      etf_watchlist_interval_s?: number
+      etf_pool_interval_s?: number
     }>('/api/intraday/status'),
-  quoteInterval: () =>
+  quoteInterval: (scope: QuoteScope = 'stock') =>
     request<{ interval: number; min_interval: number; max_interval: number }>(
-      '/api/settings/preferences/quote-interval',
+      `/api/settings/preferences/quote-interval?scope=${scope}`,
     ),
-  updateQuoteInterval: (interval: number) =>
+  updateQuoteInterval: (interval: number, scope: QuoteScope = 'stock') =>
     request<{ interval: number; min_interval: number; max_interval: number }>(
       '/api/settings/preferences/quote-interval',
-      { method: 'PUT', body: JSON.stringify({ interval }) },
+      { method: 'PUT', body: JSON.stringify({ interval, scope }) },
     ),
   intradayRefresh: () => request<{ status: string }>('/api/intraday/refresh', { method: 'POST' }),
   indexQuotes: (symbols?: string[]) =>
@@ -3464,6 +3498,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ symbols, date, ...(preferLocal ? { prefer_local: true } : {}), ...(since ? { since } : {}) }),
     }),
+  etfPool: (params: EtfPoolParams) => {
+    const query = new URLSearchParams({ page: String(params.page), page_size: String(params.pageSize) })
+    if (params.q) query.set('q', params.q)
+    if (params.category) query.set('category', params.category)
+    return request<EtfPoolResponse>(`/api/kline/etf-pool?${query}`)
+  },
   instrumentSearch: (q: string, limit = 20, assetTypes?: string) =>
     request<{ results: { symbol: string; name: string; code: string; asset_type?: string }[] }>(
       `/api/kline/instruments/search?q=${encodeURIComponent(q)}&limit=${limit}${assetTypes ? `&asset_types=${encodeURIComponent(assetTypes)}` : ''}`,

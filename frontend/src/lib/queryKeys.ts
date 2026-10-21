@@ -5,7 +5,7 @@
  * - SSE invalidation 基于 SSE_INVALIDATE_PREFIXES 列表，新增 key 无需改 useQuoteStream。
  */
 
-import type { ChartIndicatorRequest } from './api'
+import type { ChartIndicatorRequest, EtfPoolParams } from './api'
 
 const indicatorQuerySuffix = (value?: ChartIndicatorRequest) => value?.ids.length
   ? [value.ids.join(','), value.version, value.compareDays] : []
@@ -29,6 +29,7 @@ export const QK = {
   capabilityMatrix: ['capability-matrix'] as const,
   quoteStatus:    ['quote-status'] as const,
   quoteInterval:  ['quote-interval'] as const,
+  quoteScopeInterval: (scope: string) => ['quote-interval', scope] as const,
   overviewMarket: (asOf?: string) => ['overview-market', asOf ?? 'latest'] as const,
   indexQuotes:    ['index-quotes'] as const,
 
@@ -50,6 +51,7 @@ export const QK = {
   // 导致每次都拉 TickFlow 触限流。分时图用固定 refetchInterval 刷新即可。
   minuteBatch:          (symbols: string) => ['minute-batch', symbols] as const,
   instrumentSearch:     (q: string, assetTypes?: string) => ['instrument-search', q, assetTypes ?? 'stock'] as const,
+  etfPool:              (params: EtfPoolParams) => ['etf-pool', params] as const,
 
   // Screener
   screener:             ['screener'] as const,
@@ -187,6 +189,7 @@ export const SSE_INVALIDATE_PREFIXES = [
   // 旧设置里的 'watchlist' 单开关由 useQuoteStream 兼容读取。
   'watchlist-quotes',
   'watchlist-enriched',
+  'etf-pool',
   'quote-status',
   'index-quotes',
   'overview-market',

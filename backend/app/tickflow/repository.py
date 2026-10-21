@@ -1626,6 +1626,56 @@ class KlineRepository:
             df = df.select(existing)
         return df
 
+    def get_etf_quote_snapshot(self, symbols: list[str]) -> pl.DataFrame:
+        """当前页 ETF 价格快照: 原始成交价、小数涨幅、逐标的日期, 不重算指标。"""
+        schema = {"symbol": pl.String, "date": pl.Date, "last_price": pl.Float64, "change_pct": pl.Float64}
+        if not symbols:
+            return pl.DataFrame(schema={"symbol": pl.String, "quote_date": pl.String, "last_price": pl.Float64, "change_pct": pl.Float64})
+        today = cn_today()
+        partitions = []
+        for path in (self.store.data_dir / "kline_etf_enriched").glob("date=*/part.parquet"):
+            try:
+                day = date.fromisoformat(path.parent.name[5:])
+            except ValueError:
+                continue
+            if day <= today:
+                partitions.append((day, path))
+        parts = []
+        # shortcut: 仅查最近三个分区; 如需长期停牌标的历史价, 再扩展有界回溯。
+        recent = sorted(partitions)[-3:]
+        paths = [str(path) for _, path in recent]
+        if paths:
+            history = guarded_collect(
+                scan_enriched_parquet(paths).filter(pl.col("symbol").is_in(symbols))
+                .select("symbol", "date", "raw_close", "close")
+                .unique(subset=["symbol", "date"], keep="last").sort(["symbol", "date"]),
+            )
+            previous = pl.col("close").shift(1).over("symbol")
+            previous_dates = {day: recent[i - 1][0] for i, (day, _) in enumerate(recent) if i}
+            has_previous_day = pl.col("date").shift(1).over("symbol") == pl.col("date").replace_strict(previous_dates, default=None, return_dtype=pl.Date)
+            parts.append(history.select(
+                "symbol", "date", pl.col("raw_close").alias("last_price"),
+                pl.when(has_previous_day & pl.col("close").is_finite() & (pl.col("close") > 0)
+                        & previous.is_finite() & (previous > 0))
+                .then(pl.col("close") / previous - 1).otherwise(None).alias("change_pct"),
+            ))
+        cached, cache_date = self.get_enriched_latest_asset("etf", refresh=False)
+        if not cached.is_empty() and "symbol" in cached.columns and "raw_close" in cached.columns:
+            parts.append(cached.filter(pl.col("symbol").is_in(symbols)
+                                       & pl.col("raw_close").is_finite() & (pl.col("raw_close") > 0)).select(
+                pl.col("symbol").cast(pl.String),
+                (pl.col("date") if "date" in cached.columns else pl.lit(cache_date)).cast(pl.Date).alias("date"),
+                pl.col("raw_close").cast(pl.Float64).alias("last_price"),
+                (pl.col("change_pct") if "change_pct" in cached.columns else pl.lit(None)).cast(pl.Float64).alias("change_pct"),
+            ))
+        result = pl.concat(parts, how="vertical_relaxed") if parts else pl.DataFrame(schema=schema)
+        result = result.filter(pl.col("date").is_not_null() & (pl.col("date") <= today))
+        return result.sort(["symbol", "date"], maintain_order=True).unique(subset="symbol", keep="last").select(
+            "symbol", pl.col("date").cast(pl.String).alias("quote_date"),
+            pl.when(pl.col("last_price").is_finite() & (pl.col("last_price") > 0)).then(pl.col("last_price")).otherwise(None).alias("last_price"),
+            pl.when(pl.col("change_pct").is_finite()).then(pl.col("change_pct")).otherwise(None).alias("change_pct"),
+        )
+
     def get_daily_asset(
         self,
         asset_type: str,

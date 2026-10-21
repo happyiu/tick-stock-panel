@@ -59,7 +59,7 @@ def service(monkeypatch) -> tuple[QuoteService, _StubRepo, dict]:
     repo = _StubRepo()
     qs._repo = repo
     events: dict[str, int] = {"broadcast": 0, "enriched": 0}
-    monkeypatch.setattr(qs_module, "_persist_last_fetch", lambda ms: None)
+    monkeypatch.setattr(qs_module, "_persist_last_fetch", lambda *args: None)
     monkeypatch.setattr(qs, "_update_volume_delta", lambda *a, **k: None)
     monkeypatch.setattr(qs, "_evaluate_monitors", lambda *a, **k: None)
     monkeypatch.setattr(qs, "_broadcast_quote_updated", lambda: events.__setitem__("broadcast", events["broadcast"] + 1))
