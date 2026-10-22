@@ -99,17 +99,17 @@ def _get_table_stats(name: str, fetch: Callable[[], dict | None]) -> dict | None
     return fresh
 
 
-def _safe_aggregate(repo, view: str) -> dict | None:
+def _safe_aggregate(repo, view: str, *, symbols: list[str] | None = None) -> dict | None:
     """聚合视图基础统计;视图不存在或为空时返 None。"""
     try:
-        row = repo.execute_one(
-            f"""SELECT count(*) AS rows,
+        where = " WHERE symbol IN (" + ", ".join("?" for _ in symbols) + ")" if symbols is not None else ""
+        sql = f"""SELECT count(*) AS rows,
                        min(date) AS earliest,
                        max(date) AS latest,
                        count(DISTINCT symbol) AS symbols,
                        count(DISTINCT date) AS trading_days
-                FROM {view}"""
-        )
+                FROM {view}{where}"""
+        row = repo.execute_one(sql, symbols) if symbols is not None else repo.execute_one(sql)
     except Exception as e:  # noqa: BLE001
         logger.debug("aggregate %s failed: %s", view, e)
         return None
@@ -167,7 +167,9 @@ def _safe_aggregate_exchange_rate(repo) -> dict | None:
 
 def _safe_aggregate_commodity(repo) -> dict | None:
     """商品统计; 补充各品种最新值、单位和来源。"""
-    stats = _safe_aggregate(repo, "commodity")
+    from app.data_providers.commodity import DEFINITIONS_BY_SYMBOL
+
+    stats = _safe_aggregate(repo, "commodity", symbols=list(DEFINITIONS_BY_SYMBOL))
     if not stats:
         return None
     try:
@@ -187,6 +189,7 @@ def _safe_aggregate_commodity(repo) -> dict | None:
     except Exception as e:  # noqa: BLE001
         logger.debug("aggregate commodity latest failed: %s", e)
         latest = []
+    latest = [row for row in latest if row[0] in DEFINITIONS_BY_SYMBOL]
     return {
         **stats,
         "latest_values": {

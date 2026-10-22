@@ -573,7 +573,10 @@ def run_now(
     pull_index = _prefs.get_pipeline_pull_index()
     pull_etf = _prefs.get_pipeline_pull_etf()
 
-    if capset.has(Cap.KLINE_DAILY_BATCH) and (pull_index or pull_etf):
+    if (pull_index or pull_etf) and (
+        capset.has(Cap.KLINE_DAILY_BATCH)
+        or (pull_etf and _prefs.get_etf_daily_data_provider() != "tickflow")
+    ):
         _types = []
         if pull_index:
             _types.append("指数")
@@ -582,7 +585,7 @@ def run_now(
         emit("sync_index", 88, f"同步{'+'.join(_types)}日K…")
         # 子阶段进度分配: 88.0(开始) → 89.0(完成), 指数占前半, ETF 占后半
         try:
-            if pull_index:
+            if pull_index and capset.has(Cap.KLINE_DAILY_BATCH):
                 emit("sync_index", 88, "同步指数维表…")
                 index_count = index_sync.sync_index_instruments(repo, pull_index=True, pull_etf=False)
                 emit("sync_index", 88, f"指数维表完成,{index_count} 只")

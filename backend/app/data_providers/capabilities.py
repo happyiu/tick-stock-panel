@@ -96,6 +96,15 @@ CAPABILITY_REGISTRY: list[dict] = [
         # (插件实现 get_intraday_batch / 可选 get_intraday_latest, YAML 仅修复轮)
     },
     {
+        "id": "etf_daily",
+        "group": "etf",
+        "label": "ETF池日K",
+        "desc": "ETF池历史日K同步与回补, 独立于股票日K",
+        "field": "etf_daily_data_provider",
+        "default": "tickflow",
+        "tf_tier": "none",
+    },
+    {
         "id": "exchange_rate",
         "label": "汇率",
         "desc": "货币对与美元指数日频数据",
@@ -204,6 +213,7 @@ def build_capability_matrix(current: dict[str, str], tickflow_tier: str = "none"
         usable = any(c["name"] == effective for c in candidates)
         capabilities.append({
             "id": cap["id"],
+            "group": cap.get("group", "general"),
             "label": cap["label"],
             "desc": cap["desc"],
             "field": cap["field"],

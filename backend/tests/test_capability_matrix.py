@@ -16,6 +16,7 @@ from app.data_providers.capabilities import CAPABILITY_REGISTRY, build_capabilit
 DEFAULT_CURRENT = {
     "chart_data_provider": "tickflow",
     "daily_data_provider": "tickflow",
+    "etf_daily_data_provider": "tickflow",
     "adj_factor_provider": "tickflow",
     "minute_data_provider": "tickflow",
     "full_minute_data_provider": "tickflow",
@@ -53,7 +54,7 @@ def test_registry_covers_all_routing_fields():
     assert len(set(routable)) == len(routable)
     assert {c["id"] for c in CAPABILITY_REGISTRY} == {
         "chart", "realtime", "daily", "minute", "full_minute", "depth5", "adj_factor", "financial",
-        "exchange_rate",
+        "exchange_rate", "etf_daily",
     }
     full_minute = next(c for c in CAPABILITY_REGISTRY if c["id"] == "full_minute")
     assert full_minute["field"] == "full_minute_data_provider"
@@ -73,7 +74,7 @@ def test_matrix_without_third_party_sources(monkeypatch):
     _fake_sources(monkeypatch, [])
     matrix = build_capability_matrix(dict(DEFAULT_CURRENT), tickflow_tier="expert")
     assert matrix["tickflow_tier"] == "expert"
-    assert len(matrix["capabilities"]) == 9
+    assert len(matrix["capabilities"]) == 10
     for cap in matrix["capabilities"]:
         if cap["id"] == "exchange_rate":
             assert cap["candidates"] == []
@@ -309,6 +310,7 @@ def test_api_endpoint_injects_all_routing_preferences(monkeypatch):
         "chart_data_provider": "chart-src",
         "realtime_data_provider": "rt-src",
         "daily_data_provider": "daily-src",
+        "etf_daily_data_provider": "etf-src",
         "minute_data_provider": "min-src",
         "full_minute_data_provider": "fm-src",
         "depth5_data_provider": "d5-src",
@@ -320,6 +322,7 @@ def test_api_endpoint_injects_all_routing_preferences(monkeypatch):
         "chart_data_provider": "get_chart_data_provider",
         "realtime_data_provider": "get_realtime_data_provider",
         "daily_data_provider": "get_daily_data_provider",
+        "etf_daily_data_provider": "get_etf_daily_data_provider",
         "minute_data_provider": "get_minute_data_provider",
         "full_minute_data_provider": "get_full_minute_data_provider",
         "depth5_data_provider": "get_depth5_data_provider",
@@ -373,3 +376,18 @@ def test_api_endpoint_full_minute_usable_follows_preference(monkeypatch):
     assert fm["effective"] == "eltdx"
     assert fm["usable"] is True
     assert fm["tf_available"] is False
+
+
+def test_etf_daily_is_separate_group_and_requires_explicit_etf_dataset(monkeypatch):
+    _fake_sources(monkeypatch, [
+        {'name': 'stock_only', 'datasets': ['daily'], 'available': True},
+        {'name': 'astockdata', 'datasets': ['daily', 'etf_daily'], 'available': True},
+    ])
+    caps = _by_id(build_capability_matrix({'etf_daily_data_provider': 'astockdata'}))
+    etf = caps['etf_daily']
+    assert etf['group'] == 'etf'
+    assert etf['default'] == 'tickflow'
+    assert etf['effective'] == 'astockdata'
+    assert etf['usable']
+    assert [c['name'] for c in etf['candidates']] == ['tickflow', 'astockdata']
+    assert caps['daily']['effective'] == 'tickflow'

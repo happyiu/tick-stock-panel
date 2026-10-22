@@ -49,18 +49,6 @@ COMMODITY_DEFINITIONS: tuple[CommodityDefinition, ...] = (
     CommodityDefinition(
         "NATURAL_GAS", "天然气", "energy", "price", "USD/MMBtu", "1d", "eia", "RNGWHHD",
     ),
-    CommodityDefinition(
-        "CRUDE_STOCKS", "原油库存", "energy_fundamental", "inventory", "千桶", "1w", "eia", "WCRSTUS1",
-    ),
-    CommodityDefinition(
-        "CRUDE_PRODUCTION", "原油产量", "energy_fundamental", "production", "千桶/日", "1w", "eia", "WCRFPUS2",
-    ),
-    CommodityDefinition(
-        "GASOLINE_STOCKS", "汽油库存", "energy_fundamental", "inventory", "千桶", "1w", "eia", "WGTSTUS1",
-    ),
-    CommodityDefinition(
-        "REFINERY_UTILIZATION", "炼厂开工率", "energy_fundamental", "utilization", "%", "1w", "eia", "WPULEUS3",
-    ),
 )
 
 DEFINITIONS_BY_SYMBOL = {item.symbol: item for item in COMMODITY_DEFINITIONS}

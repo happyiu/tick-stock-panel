@@ -12,10 +12,9 @@ const CATEGORY_META = {
   precious_metal: { label: '贵金属', description: '黄金、白银与铜价格', source: 'Gold API' },
   crypto: { label: '加密币', description: '加密资产价格', source: 'Gold API' },
   energy: { label: '能源', description: '原油与天然气价格', source: 'FRED / EIA' },
-  energy_fundamental: { label: '能源基本面', description: '库存、产量与炼厂利用率', source: 'EIA' },
 } as const
 
-const CATEGORY_ORDER = ['precious_metal', 'crypto', 'energy', 'energy_fundamental'] as const
+const CATEGORY_ORDER = ['precious_metal', 'crypto', 'energy'] as const
 const CURRENT_QUOTES_REFRESH_MS = 3 * 60 * 60 * 1000
 
 function localDate(date = new Date()) {
@@ -31,10 +30,9 @@ function startDateMonthsAgo(months: number, end = localDate()) {
   return localDate(date)
 }
 
-function formatValue(value: number | null | undefined, unit?: string) {
+function formatValue(value: number | null | undefined) {
   if (value == null || !Number.isFinite(Number(value))) return '—'
-  const digits = unit === '%' ? 2 : unit === '千桶' || unit === '千桶/日' ? 0 : 3
-  return Number(value).toLocaleString('zh-CN', { minimumFractionDigits: digits, maximumFractionDigits: digits })
+  return Number(value).toLocaleString('zh-CN', { minimumFractionDigits: 3, maximumFractionDigits: 3 })
 }
 
 function formatRetrievedAt(value?: string | null) {
@@ -50,7 +48,7 @@ function sourceLabel(source?: string | null) {
 }
 
 function frequencyLabel(frequency?: string | null) {
-  return frequency === '1d' ? '日频' : frequency === '1w' ? '周频' : frequency || '—'
+  return frequency === '1d' ? '日频' : frequency || '—'
 }
 
 function latestRowsBySymbol(rows: CommodityRow[]) {
@@ -95,7 +93,7 @@ function CommodityChart({ rows, item }: { rows: CommodityRow[]; item?: Commodity
         {gridValues.map(value => (
           <g key={value}>
             <line x1={plotLeft} x2={plotRight} y1={y(value)} y2={y(value)} stroke="hsl(var(--border) / 0.7)" />
-            <text x={plotLeft - 8} y={y(value) + 4} textAnchor="end" fill="hsl(var(--fg-muted))" fontSize="10">{formatValue(value, item.unit)}</text>
+            <text x={plotLeft - 8} y={y(value) + 4} textAnchor="end" fill="hsl(var(--fg-muted))" fontSize="10">{formatValue(value)}</text>
           </g>
         ))}
         <line x1={plotLeft} x2={plotLeft} y1={plotTop} y2={plotBottom} stroke="hsl(var(--fg-muted) / 0.85)" />
@@ -118,7 +116,7 @@ function CommodityChart({ rows, item }: { rows: CommodityRow[]; item?: Commodity
       </svg>
       <div className="flex items-center justify-between text-[10px] text-muted">
         <span>{points.length} 个原始数据点 · 不补齐频率缺口</span>
-        <span className="font-mono">最新 {formatValue(points[points.length - 1].value, item.unit)} {item.unit}</span>
+        <span className="font-mono">最新 {formatValue(points[points.length - 1].value)} {item.unit}</span>
       </div>
     </div>
   )
@@ -298,7 +296,7 @@ export function Commodity() {
                     aria-pressed={selectedItem?.symbol === item.symbol}
                   >
                     <div className="truncate text-[11px] text-muted">{item.name}</div>
-                    <div className="mt-1 font-mono text-lg font-semibold tabular-nums text-foreground">{formatValue(quote?.value ?? row?.value ?? stats?.latest_values?.[item.symbol], item.unit)}</div>
+                    <div className="mt-1 font-mono text-lg font-semibold tabular-nums text-foreground">{formatValue(quote?.value ?? row?.value ?? stats?.latest_values?.[item.symbol])}</div>
                     <div className="mt-1 flex items-center justify-between gap-1 text-[10px] text-muted">
                       <span>{item.unit} · {quote ? '当前价' : frequencyLabel(item.frequency)}</span>
                       <span>{quote ? formatRetrievedAt(quote.updated_at) : row?.date ?? stats?.latest_date ?? '—'}</span>
@@ -351,7 +349,7 @@ export function Commodity() {
                   {(history.data?.items ?? []).slice().sort((a, b) => b.date.localeCompare(a.date)).slice(0, 160).map(row => (
                     <tr key={row.symbol + '-' + row.date + '-' + row.source + '-' + row.retrieved_at} className="border-t border-border/60 hover:bg-elevated/30">
                       <td className="px-3 py-2 font-mono text-secondary">{row.date}</td>
-                      <td className="px-3 py-2 font-mono tabular-nums text-foreground">{formatValue(row.value, row.unit)}</td>
+                      <td className="px-3 py-2 font-mono tabular-nums text-foreground">{formatValue(row.value)}</td>
                       <td className="px-3 py-2 text-secondary">{row.unit}</td>
                       <td className="px-3 py-2 text-secondary">{frequencyLabel(row.frequency)}</td>
                       <td className="px-3 py-2 text-secondary">{sourceLabel(row.source)}</td>

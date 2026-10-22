@@ -679,6 +679,7 @@ class MinuteSyncPrefs(BaseModel):
 class DataProvidersIn(BaseModel):
     chart_data_provider: str | None = None
     daily_data_provider: str | None = None
+    etf_daily_data_provider: str | None = None
     adj_factor_provider: str | None = None
     minute_data_provider: str | None = None
     full_minute_data_provider: str | None = None
@@ -776,6 +777,7 @@ def get_preferences() -> dict:
         "minute_refresh_interval": preferences.get_minute_refresh_interval(),
         "chart_data_provider": preferences.get_chart_data_provider(),
         "daily_data_provider": preferences.get_daily_data_provider(),
+        "etf_daily_data_provider": preferences.get_etf_daily_data_provider(),
         "adj_factor_provider": preferences.get_adj_factor_provider(),
         "minute_data_provider": preferences.get_minute_data_provider(),
         "full_minute_data_provider": preferences.get_full_minute_data_provider(),
@@ -870,6 +872,7 @@ def get_capability_matrix() -> dict:
             "realtime_data_provider": preferences.get_realtime_data_provider(),
             "chart_data_provider": preferences.get_chart_data_provider(),
             "daily_data_provider": preferences.get_daily_data_provider(),
+            "etf_daily_data_provider": preferences.get_etf_daily_data_provider(),
             "minute_data_provider": preferences.get_minute_data_provider(),
             "full_minute_data_provider": preferences.get_full_minute_data_provider(),
             "depth5_data_provider": preferences.get_depth5_data_provider(),
@@ -970,6 +973,7 @@ def uninstall_plugin(name: str) -> dict:
     for getter, key, default in [
         (preferences.get_chart_data_provider, "chart_data_provider", "tickflow"),
         (preferences.get_daily_data_provider, "daily_data_provider", "tickflow"),
+        (preferences.get_etf_daily_data_provider, "etf_daily_data_provider", "tickflow"),
         (preferences.get_minute_data_provider, "minute_data_provider", "tickflow"),
         (preferences.get_realtime_data_provider, "realtime_data_provider", "tickflow"),
         (preferences.get_financial_provider, "financial_data_provider", "tickflow"),
@@ -1024,6 +1028,8 @@ def delete_data_source(name: str, request: Request) -> dict:
     updates: dict = {}
     if preferences.get_daily_data_provider() == name:
         updates["daily_data_provider"] = "tickflow"
+    if preferences.get_etf_daily_data_provider() == name:
+        updates["etf_daily_data_provider"] = "tickflow"
     if preferences.get_realtime_data_provider() == name:
         updates["realtime_data_provider"] = "tickflow"
     if preferences.get_financial_provider() == name:
@@ -1074,6 +1080,7 @@ def update_data_providers(req: DataProvidersIn, request: Request) -> dict:
     return {
         "chart_data_provider": preferences.get_chart_data_provider(),
         "daily_data_provider": preferences.get_daily_data_provider(),
+        "etf_daily_data_provider": preferences.get_etf_daily_data_provider(),
         "adj_factor_provider": preferences.get_adj_factor_provider(),
         "minute_data_provider": preferences.get_minute_data_provider(),
         "full_minute_data_provider": preferences.get_full_minute_data_provider(),

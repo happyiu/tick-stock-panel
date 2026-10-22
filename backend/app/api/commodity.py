@@ -92,7 +92,7 @@ def list_commodities(
             definitions_for([symbol])
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-    valid_categories = {"precious_metal", "crypto", "energy", "energy_fundamental"}
+    valid_categories = {definition.category for definition in COMMODITY_DEFINITIONS}
     if category and category not in valid_categories:
         raise HTTPException(status_code=400, detail=f"不支持的商品分类: {category}")
 
@@ -101,6 +101,10 @@ def list_commodities(
     active_sources = sorted({definition.source for definition in COMMODITY_DEFINITIONS})
     conditions.append("source IN (" + ", ".join("?" for _ in active_sources) + ")")
     params.extend(active_sources)
+    # 本地可能保留旧品种历史; 只返回当前目录内的有效品种。
+    active_symbols = [definition.symbol for definition in COMMODITY_DEFINITIONS]
+    conditions.append("symbol IN (" + ", ".join("?" for _ in active_symbols) + ")")
+    params.extend(active_symbols)
     if start_date is not None:
         conditions.append("date >= ?")
         params.append(start_date)

@@ -6,7 +6,7 @@ runtime: python
 install_no_deps: true
 entry: app.plugins.astockdata.provider:AStockDataProvider
 check: app.plugins.astockdata.provider:availability
-datasets: [daily, adj_factor, minute, realtime, depth5]
+datasets: [etf_daily, daily, adj_factor, minute, realtime, depth5]
 description: "腾讯原始日K/分钟K/五档盘口/实时行情 + 通达信官网北交所盘后日K + 新浪复权因子；腾讯日K成交额为空，分钟成交额为估算。"
 install_hint: "行情仅需 requests；分钟最多320根且不支持北交所。北交所日K需等待官网盘后包发布。"
 homepage: "https://github.com/simonlin1212/a-stock-data"

@@ -50,7 +50,7 @@ UPSTREAM_REPOSITORY = "https://github.com/simonlin1212/a-stock-data"
 UPSTREAM_VERSION = "v3.10.2"
 UPSTREAM_COMMIT = "29b07d2e37005b9fd568bca1262f6e572b5f9407"
 
-_DATASETS = ("daily", "adj_factor", "minute", "realtime", "depth5")
+_DATASETS = ("etf_daily", "daily", "adj_factor", "minute", "realtime", "depth5")
 _BATCH = 40
 _REALTIME_BATCH = 200
 _TENCENT_MINUTE_BARS = 320  # 腾讯分钟接口稳定上限，1m 约覆盖最近 1.3 个交易日
@@ -962,8 +962,9 @@ class AStockDataProvider:
 
     def test_dataset(self, dataset: str, symbols: list[str] | None = None) -> dict:
         sample = symbols or ["600519.SH"]
-        if dataset == "daily":
-            return _preview(dataset, self.get_daily(sample, None, None))
+        if dataset in {"daily", "etf_daily"}:
+            asset = "etf" if dataset == "etf_daily" else "stock"
+            return _preview(dataset, self.get_daily(symbols or (["510300.SH"] if asset == "etf" else sample), None, None, asset_type=asset))
         if dataset == "adj_factor":
             return _preview(dataset, self.get_adj_factors(sample, None, None))
         if dataset == "minute":

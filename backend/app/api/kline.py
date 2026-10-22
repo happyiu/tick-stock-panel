@@ -1921,9 +1921,16 @@ async def extend_etf_history(request: Request):
             run_with_capacity,
             try_acquire_run_slot,
         )
-        from app.tickflow.capabilities import Cap
-        if not capset.has(Cap.KLINE_DAILY_BATCH):
-            raise HTTPException(status_code=403, detail="需要 Pro+ 权限 (batch K-line)")
+        from app.data_providers.capabilities import build_capability_matrix
+        from app.services import preferences
+        from app.tickflow import policy
+        matrix = build_capability_matrix(
+            {"etf_daily_data_provider": preferences.get_etf_daily_data_provider()},
+            tickflow_tier=policy.base_tier_name(),
+        )
+        etf_route = next(cap for cap in matrix["capabilities"] if cap["id"] == "etf_daily")
+        if not etf_route["usable"]:
+            raise HTTPException(status_code=403, detail="ETF池日K能力不可用, 请在数据源设置中选择可用提供方")
 
         # ETF 全市场标的数较多,用长任务停滞阈值。
         job_id, is_new = job_store.create(long_running=True)

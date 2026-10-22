@@ -407,7 +407,7 @@ def test_manifest_declares_standard_datasets():
     assert manifest["name"] == "astockdata"
     assert manifest["runtime"] == "python"
     assert manifest["install_no_deps"] is True
-    assert set(manifest["datasets"]) == {"daily", "adj_factor", "minute", "realtime", "depth5"}
+    assert set(manifest["datasets"]) == {"daily", "etf_daily", "adj_factor", "minute", "realtime", "depth5"}
     assert AStockDataProvider().capabilities.depth5 is True
     assert "financial" not in manifest["datasets"]
     assert manifest["upstream"]["repository"] == ap.UPSTREAM_REPOSITORY

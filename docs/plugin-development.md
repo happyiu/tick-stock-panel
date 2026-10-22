@@ -78,7 +78,8 @@ provider 实现 'get_commodity_series(start, end, symbols)'，返回包含
 仓库还提供 `backend/app/plugins/astockdata/` 作为 Python 型可选插件：当前适配
 [a-stock-data](https://github.com/simonlin1212/a-stock-data) `v3.10.2`
 （commit `29b07d2e37005b9fd568bca1262f6e572b5f9407`）的行情层，声明 `daily`、
-`adj_factor`、`minute`、`realtime`、`depth5` 五个标准数据集。
+`adj_factor`、`minute`、`realtime`、`depth5` 五个标准数据集, 并显式声明 `etf_daily`
+供「ETF池日K」独立路由调用（复用 `get_daily(..., asset_type="etf")` 契约）。
 
 - 沪深日K使用腾讯不复权接口，长区间分段获取；腾讯没有成交额，`amount` 保留 null，依赖成交额的指标可能不可计算。
 - 北交所股票日K按腾讯上证日K返回的实际交易日期下载通达信官网 HTTP 盘后包，每日包对本批所有北交所标的共用一次下载；

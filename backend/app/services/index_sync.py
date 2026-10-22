@@ -2,17 +2,19 @@
 
 标的列表优先用免费的 exchanges.get_instruments(type=index/etf) 拉取
 (None/Free 档均可用,无需 quote.pool 权限);付费档可额外用
-quotes.get_by_universes 作为补充来源。日K统一走 klines.batch。
+quotes.get_by_universes 作为补充来源。指数日K走 klines.batch, ETF日K独立路由。
 """
 from __future__ import annotations
 
-import logging
 import gc
+import logging
 from collections.abc import Callable
 from datetime import datetime, timedelta
 
 import polars as pl
 
+from app.data_providers import custom as custom_sources
+from app.data_providers.normalizer import normalize_daily
 from app.indicators.pipeline import compute_enriched
 from app.services import kline_sync, preferences
 from app.tickflow.capabilities import Cap, CapabilitySet
@@ -339,7 +341,13 @@ def sync_and_persist_etf_daily(
     """同步 ETF 日K到独立 kline_etf_* parquet,并计算 ETF enriched。
     on_chunk_done(current, total) 每个批次完成后回调。
     """
-    if not capset.has(Cap.KLINE_DAILY_BATCH):
+    provider_name = preferences.get_etf_daily_data_provider()
+    provider = None
+    if provider_name != "tickflow":
+        if not custom_sources.provider_has_dataset(provider_name, "etf_daily"):
+            raise ValueError(f"数据源 {provider_name} 不支持 ETF池日K")
+        provider = custom_sources.get_provider(provider_name)
+    elif not capset.has(Cap.KLINE_DAILY_BATCH):
         return 0
 
     if symbols_override:
@@ -355,8 +363,9 @@ def sync_and_persist_etf_daily(
     if not symbols:
         return 0
 
-    limit = resolve_limit(capset, Cap.KLINE_DAILY_BATCH)
-    batch_size = min_batch(preferences.get_index_daily_batch_size(), limit)
+    limit = resolve_limit(capset, Cap.KLINE_DAILY_BATCH) if provider is None else None
+    batch_size = (min_batch(preferences.get_index_daily_batch_size(), limit)
+                  if limit else preferences.get_index_daily_batch_size())
 
     end_time = end_date or datetime.now()
     start_time = start_date or (end_time - timedelta(days=730))
@@ -365,14 +374,20 @@ def sync_and_persist_etf_daily(
     chunks = chunked(symbols, batch_size)
     factors = _load_etf_factors(repo)
     for i, chunk in enumerate(chunks):
-        sleep_between_batches(i, limit.rpm)
-        raw = kline_sync.sync_daily_batch(
-            chunk,
-            count=count,
-            batch_size=None,
-            start_time=start_time,
-            end_time=end_time,
-        )
+        if provider is not None:
+            raw = normalize_daily(provider.get_daily(
+                chunk, start_time=start_time, end_time=end_time, asset_type="etf",
+            ), source=provider_name)
+            if not raw.is_empty():
+                raw = raw.filter(
+                    pl.col("symbol").is_in(chunk)
+                    & pl.col("date").is_between(start_time.date(), end_time.date())
+                )
+        else:
+            sleep_between_batches(i, limit.rpm)
+            raw = kline_sync.sync_daily_batch(
+                chunk, count=count, batch_size=None, start_time=start_time, end_time=end_time,
+            )
         if raw.is_empty():
             continue
 

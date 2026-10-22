@@ -23,7 +23,7 @@ from app.tickflow.repository import DataStore, KlineRepository
 def test_provider_normalizers_keep_units_frequency_and_skip_missing_values():
     xau = DEFINITIONS_BY_SYMBOL["XAU/USD"]
     wti = DEFINITIONS_BY_SYMBOL["WTI"]
-    stocks = DEFINITIONS_BY_SYMBOL["CRUDE_STOCKS"]
+    gas = DEFINITIONS_BY_SYMBOL["NATURAL_GAS"]
 
     gold = gold_rows(
         [{"day": "2026-09-17", "avg_price": "2500.25"}, {"day": "2026-09-16", "avg_price": ""}],
@@ -37,7 +37,7 @@ def test_provider_normalizers_keep_units_frequency_and_skip_missing_values():
     )
     eia = eia_rows(
         {"response": {"data": [{"period": "2026-09-13", "value": "430000"}, {"period": "2026-09-06", "value": "NA"}]}},
-        stocks,
+        gas,
         "2026-09-18T00:00:00+00:00",
     )
 
@@ -45,7 +45,8 @@ def test_provider_normalizers_keep_units_frequency_and_skip_missing_values():
     assert gold[0]["unit"] == "USD/oz"
     assert gold[0]["frequency"] == "1d"
     assert len(fred) == 1 and fred[0]["source_series_id"] == "DCOILWTICO"
-    assert len(eia) == 1 and eia[0]["frequency"] == "1w"
+    assert len(eia) == 1 and eia[0]["frequency"] == "1d"
+    assert eia[0]["unit"] == "USD/MMBtu"
     assert parse_value(".") is None
     with pytest.raises(ValueError, match="不是有效数字"):
         parse_value("not-a-number")
@@ -96,14 +97,14 @@ def test_eia_fetch_uses_dataset_route_and_series_facet():
         return httpx.Response(200, request=request, json={"response": {"data": []}})
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        eia_fetch(client, "test-key", "WCRSTUS1", start=date(2026, 9, 1), end=date(2026, 9, 18))
+        eia_fetch(client, "test-key", "RNGWHHD", start=date(2026, 9, 1), end=date(2026, 9, 18))
 
     assert len(requests) == 1
     request = requests[0]
-    assert request.url.path == "/v2/petroleum/stoc/wstk/data/"
-    assert request.url.params["facets[series][]"] == "WCRSTUS1"
+    assert request.url.path == "/v2/natural-gas/pri/fut/data/"
+    assert request.url.params["facets[series][]"] == "RNGWHHD"
     assert request.url.params["data[0]"] == "value"
-    assert request.url.params["frequency"] == "weekly"
+    assert request.url.params["frequency"] == "daily"
 
 
 def test_goldapi_fetch_uses_daily_history_average_and_header():
@@ -341,3 +342,49 @@ def test_commodity_api_category_filter_and_empty_view():
         ),
     )
     assert commodity_api.list_commodities(failing_request)["items"] == []
+
+
+def test_catalog_and_sync_targets_only_contain_commodity_prices(monkeypatch, tmp_path):
+    from app.data_providers.commodity import catalog
+    items = catalog()
+    assert {item['category'] for item in items} == {'precious_metal', 'crypto', 'energy'}
+    assert len(items) == 8
+    assert all(item['kind'] == 'price' and item['frequency'] == '1d' for item in items)
+    calls = {}
+    class Source:
+        def __init__(self, name):
+            self.name = name
+        def get_commodity_series(self, *, start, end, symbols):
+            calls[self.name] = symbols
+            return []
+    monkeypatch.setattr('app.data_providers.custom.get_provider', lambda name: Source(name))
+    sync_commodities(KlineRepository(DataStore(tmp_path)))
+    assert calls['eia'] == ['NATURAL_GAS']
+
+
+def test_removed_fundamentals_are_rejected_and_old_rows_are_excluded(tmp_path):
+    from fastapi import HTTPException
+
+    from app.api.data import _safe_aggregate_commodity
+    from app.data_providers.commodity import definitions_for
+    from app.services.commodity_sync import _as_frame, _upsert_partition
+    repo = KlineRepository(DataStore(tmp_path))
+    legacy = {**_row('NATURAL_GAS', 430000), 'symbol': 'CRUDE_STOCKS', 'name': '原油库存',
+              'category': 'energy_fundamental', 'kind': 'inventory', 'frequency': '1w'}
+    _upsert_partition(tmp_path / 'commodity' / 'date=2026-09-17' / 'part.parquet',
+                      _as_frame([legacy, _row('NATURAL_GAS', 3.2)]))
+    repo.rebuild_views()
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(repo=repo)))
+    result = commodity_api.list_commodities(request, limit=100)
+    assert [item['symbol'] for item in result['items']] == ['NATURAL_GAS']
+    stats = _safe_aggregate_commodity(repo)
+    assert set(stats['latest_values']) == {'NATURAL_GAS'}
+    assert stats['rows'] == 1
+    assert stats['symbols_covered'] == 1
+    with pytest.raises(HTTPException) as error:
+        commodity_api.list_commodities(request, category='energy_fundamental', limit=100)
+    assert error.value.status_code == 400
+    for symbol in ['CRUDE_STOCKS', 'CRUDE_PRODUCTION', 'GASOLINE_STOCKS', 'REFINERY_UTILIZATION']:
+        with pytest.raises(ValueError, match='不支持的商品'):
+            definitions_for([symbol])
+    assert repo.execute_one('SELECT count(*) FROM commodity')[0] == 2

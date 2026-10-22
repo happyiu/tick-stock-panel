@@ -397,3 +397,17 @@ datasets:
 复权源失败必须抛出异常, 不能返回空表冒充「无除权事件」; 空表只表示成功查询后
 没有事件。正式历史入库仍需在盘后同步流程校验质量, 不应将展示中的形成中K线
 或估算成交额直接覆盖分析数据。
+
+## ETF池日K独立路由
+
+设置页在通用能力路由下方提供「ETF 能力路由」, 其中「ETF池日K」使用
+`etf_daily_data_provider` 偏好, 默认 `tickflow`。该路由控制盘后 ETF 日K同步
+与 ETF 历史扩展/区间回补, 与股票日K及图表按需行情独立; 切换后在下次同步时生效。
+ETF 代码/名称目录仍使用 TickFlow 标的信息接口, ETF 复权因子仍使用已有除权因子路由。
+
+候选源必须显式声明 `etf_daily`, 只声明 `daily` 不代表支持 ETF。
+Python 插件实现 `get_daily(..., asset_type="etf")`, 返回与 `daily` 相同的标准列、
+不复权价格、成交量(手)与成交额(元)。内置 a-stock-data 已声明此能力。
+HTTP 自定义源可配置 `datasets.etf_daily` 指向其 ETF 日K接口, 字段映射/请求参数
+与 `datasets.daily` 相同; 股票请求继续使用 `datasets.daily`。
+ETF 数据仍写入独立 `kline_etf_daily` / `kline_etf_enriched`, 不改写股票分区。

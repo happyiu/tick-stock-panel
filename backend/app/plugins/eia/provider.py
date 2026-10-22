@@ -19,10 +19,6 @@ SOURCE = "eia"
 # series facet and remain the stable source_series_id in our stored rows.
 EIA_SERIES_ROUTES = {
     "RNGWHHD": ("natural-gas/pri/fut/data/", "daily"),
-    "WCRSTUS1": ("petroleum/stoc/wstk/data/", "weekly"),
-    "WCRFPUS2": ("petroleum/sum/sndw/data/", "weekly"),
-    "WGTSTUS1": ("petroleum/stoc/wstk/data/", "weekly"),
-    "WPULEUS3": ("petroleum/pnp/wiup/data/", "weekly"),
 }
 
 

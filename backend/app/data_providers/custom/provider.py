@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 _REQUIRED = {
     "daily": {"symbol", "date", "open", "high", "low", "close", "volume", "amount"},
+    "etf_daily": {"symbol", "date", "open", "high", "low", "close", "volume", "amount"},
     "adj_factor": {"symbol", "trade_date", "ex_factor"},
     "realtime": {"symbol", "last_price", "prev_close", "open", "high", "low", "volume"},
     "minute": {"symbol", "datetime", "open", "high", "low", "close", "volume", "amount"},
@@ -159,7 +160,7 @@ class GenericHTTPProvider:
         asset_type: str = "stock",  # noqa: ARG002
         on_chunk_done=None,
     ) -> pl.DataFrame:
-        cfg = self._dataset("daily")
+        cfg = self._dataset("etf_daily" if asset_type == "etf" and "etf_daily" in self.config.datasets else "daily")
         frames: list[pl.DataFrame] = []
         chunks = chunked(symbols, cfg.batch)
         failed: list[str] = []
@@ -414,7 +415,7 @@ class GenericHTTPProvider:
                 override_params=override or None,
                 override_body=override or None,
             )
-        elif dataset in {"daily", "adj_factor"}:
+        elif dataset in {"daily", "etf_daily", "adj_factor"}:
             rows = self._request_rows(
                 cfg,
                 symbols=test_symbols,

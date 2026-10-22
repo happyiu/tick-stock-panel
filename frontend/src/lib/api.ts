@@ -2407,6 +2407,7 @@ export interface PluginDataSourceItem {
 export type ProviderField =
   | 'chart_data_provider'
   | 'daily_data_provider'
+  | 'etf_daily_data_provider'
   | 'adj_factor_provider'
   | 'minute_data_provider'
   | 'full_minute_data_provider'
@@ -2427,6 +2428,7 @@ export interface CapabilityCandidate {
 
 /** 一个能力 (标准化数据集) 的路由视图 */
 export interface CapabilityRoute {
+  group?: string
   id: string
   label: string
   desc: string
@@ -2539,6 +2541,7 @@ export interface Preferences {
   minute_refresh_interval: number
   chart_data_provider?: string
   daily_data_provider?: string
+  etf_daily_data_provider?: string
   adj_factor_provider?: string
   minute_data_provider?: string
   /** 全量分钟 (盘中全市场分钟落盘) 生效源; 默认 tickflow (需 Expert 档) */
@@ -5206,8 +5209,8 @@ export interface ExchangeRateSyncResult {
 export interface CommodityDefinition {
   symbol: string
   name: string
-  category: 'precious_metal' | 'crypto' | 'energy' | 'energy_fundamental'
-  kind: 'price' | 'inventory' | 'production' | 'utilization'
+  category: 'precious_metal' | 'crypto' | 'energy'
+  kind: 'price'
   unit: string
   frequency: string
   source: 'goldapi' | 'fred' | 'eia'

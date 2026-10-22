@@ -283,6 +283,12 @@ def get_daily_data_provider() -> str:
     return provider if provider in _allowed_data_providers() else "tickflow"
 
 
+def get_etf_daily_data_provider() -> str:
+    """ETF池日K独立选源, 存量配置缺字段时保持 TickFlow。"""
+    provider = str(load().get("etf_daily_data_provider", "tickflow") or "tickflow").lower()
+    return provider if provider in _allowed_data_providers() else "tickflow"
+
+
 def get_chart_data_provider() -> str:
     provider = str(load().get("chart_data_provider", "tickflow") or "tickflow").lower()
     return provider if provider in _allowed_data_providers() else "tickflow"

@@ -49,6 +49,7 @@ import { TickFlowKeySection, TierHelpPopover, useInvalidateTierRelated } from '.
 const DATASET_LABEL: Record<string, string> = {
   realtime: '实时',
   daily: '日K',
+  etf_daily: 'ETF池日K',
   minute: '分钟',
   adj_factor: '除权',
   depth5: '五档',
@@ -62,6 +63,7 @@ const DATASET_LABEL: Record<string, string> = {
 const CAP_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
   realtime: Radio,
   daily: CandlestickIcon,
+  etf_daily: CandlestickIcon,
   minute: Timer,
   full_minute: Zap,
   adj_factor: Scale,
@@ -153,6 +155,7 @@ function patchMatrix(
 const DEFAULT_ROUTING: Record<ProviderField, string> = {
   chart_data_provider: 'tickflow',
   daily_data_provider: 'tickflow',
+  etf_daily_data_provider: 'tickflow',
   adj_factor_provider: 'tickflow',
   minute_data_provider: 'tickflow',
   full_minute_data_provider: 'tickflow',
@@ -283,7 +286,7 @@ function ExchangeRateHistoryCard() {
 }
 
 /** 能力路由区 (页面主视图): 每个能力一张卡, 点候选标签即刻切换 (乐观更新) */
-function CapabilityRoutingSection() {
+export function CapabilityRoutingSection({ group = 'general', title = '能力路由' }: { group?: string; title?: string }) {
   const qc = useQueryClient()
   const matrix = useQuery({ queryKey: QK.capabilityMatrix, queryFn: api.capabilityMatrix })
   const [pendingKey, setPendingKey] = useState<string | null>(null)
@@ -337,12 +340,14 @@ function CapabilityRoutingSection() {
     },
   })
 
+  const list = (matrix.data?.capabilities ?? []).filter(cap => (cap.group ?? 'general') === group)
+  const defaults = Object.fromEntries(list.filter(cap => cap.field).map(cap => [cap.field, cap.default])) as Partial<Record<ProviderField, string>>
   const resetMut = useMutation({
-    mutationFn: () => api.updateDataProviders(DEFAULT_ROUTING),
+    mutationFn: () => api.updateDataProviders(defaults),
     onMutate: async () => {
       await qc.cancelQueries({ queryKey: QK.capabilityMatrix })
       await qc.cancelQueries({ queryKey: QK.preferences })
-      return applyOptimistic(DEFAULT_ROUTING)
+      return applyOptimistic(defaults)
     },
     onSuccess: () => toast('能力路由已恢复默认', 'success'),
     onError: (e: Error, _v, ctx) => {
@@ -352,7 +357,6 @@ function CapabilityRoutingSection() {
     onSettled: invalidateRouting,
   })
 
-  const list = matrix.data?.capabilities ?? []
   const exchangeRate = list.find(cap => cap.id === 'exchange_rate')
   const otherCapabilities = list.filter(cap => cap.id !== 'exchange_rate')
   const anyCustom = list.some(c => c.current !== c.default)
@@ -362,7 +366,7 @@ function CapabilityRoutingSection() {
       <div className="flex items-center justify-between mb-1 gap-3">
         <div className="flex items-center gap-2.5 min-w-0">
           <Route className="h-4 w-4 text-secondary shrink-0" />
-          <h2 className="text-sm font-medium text-foreground">能力路由</h2>
+          <h2 className="text-sm font-medium text-foreground">{title}</h2>
           <span className="text-[10px] text-muted/60 shrink-0">{list.length + (exchangeRate ? 1 : 0)} 个能力</span>
         </div>
         {anyCustom && (
@@ -661,6 +665,7 @@ export function SettingsDataSourcesPanel({ highlight }: { highlight?: string } =
   const adjPref = prefs.data?.adj_factor_provider || 'same_as_daily'
   const effProvider: Record<string, string> = {
     daily: dailyPref,
+    etf_daily: prefs.data?.etf_daily_data_provider || 'tickflow',
     adj_factor: adjPref === 'same_as_daily' ? dailyPref : adjPref,
     minute: prefs.data?.minute_data_provider || 'tickflow',
     full_minute: prefs.data?.full_minute_data_provider || 'tickflow',
@@ -715,6 +720,7 @@ export function SettingsDataSourcesPanel({ highlight }: { highlight?: string } =
         supported.has(dataset) ? name : DEFAULT_ROUTING[`${dataset}_data_provider` as ProviderField] ?? 'tickflow'
       return api.updateDataProviders({
         daily_data_provider: pick('daily'),
+        etf_daily_data_provider: pick('etf_daily'),
         adj_factor_provider: pick('adj_factor'),
         realtime_data_provider: pick('realtime'),
         minute_data_provider: pick('minute'),
@@ -768,6 +774,7 @@ export function SettingsDataSourcesPanel({ highlight }: { highlight?: string } =
     <div className="space-y-5 max-w-5xl">
       {/* ===== 上区: 能力路由 (能力为主视图, 点标签切换提供方) ===== */}
       <CapabilityRoutingSection />
+      <CapabilityRoutingSection group="etf" title="ETF 能力路由" />
 
       {/* ===== 下区: 数据源 (源为主视图, 配置/接入) ===== */}
       <AnchorWrap highlight={highlight} anchor="data-sources">
