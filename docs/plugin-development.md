@@ -76,14 +76,22 @@ provider 实现 'get_commodity_series(start, end, symbols)'，返回包含
 > 详见 [deployment.md](./deployment.md)。
 
 仓库还提供 `backend/app/plugins/astockdata/` 作为 Python 型可选插件：当前适配
-[a-stock-data](https://github.com/simonlin1212/a-stock-data) `v3.8.0`
-（commit `2012ce7cd0e75d379c5e6cbd3115514f300f3bc8`）的行情层，接入 mootdx
-日K/分钟K/沪深五档盘口（7709 不可达时分钟K降级腾讯）、新浪复权因子和腾讯实时行情，当前声明 `daily`、`adj_factor`、`minute`、
-`realtime`、`depth5` 五个标准数据集。上游 v3.8.0 新增的官方指数成分/权重、指数估值、交易日历、
-沪深两融和北交所备胎没有对应的系统 service/API，因此暂不随 provider 暴露；研报、资金流、
-新闻、公告等既有端点同理。标的维表也继续走系统现有 TickFlow/本地 instruments 路径。它随基础环境默认安装；
-由于 mootdx 的上游元数据包含过时的 httpx/py-mini-racer 约束，安装入口对 mootdx 本体使用 `--no-deps`，
-其 `quotes` 路径所需的兼容依赖由后端基础环境锁定。
+[a-stock-data](https://github.com/simonlin1212/a-stock-data) `v3.10.2`
+（commit `29b07d2e37005b9fd568bca1262f6e572b5f9407`）的行情层，声明 `daily`、
+`adj_factor`、`minute`、`realtime`、`depth5` 五个标准数据集。
+
+- 沪深日K使用腾讯不复权接口，长区间分段获取；腾讯没有成交额，`amount` 保留 null，依赖成交额的指标可能不可计算。
+- 北交所股票日K按腾讯上证日K返回的实际交易日期下载通达信官网 HTTP 盘后包，每日包对本批所有北交所标的共用一次下载；
+  交易日包 404 表示尚未发布或超出官网保留范围，明确失败并提示稍后重试，不把缺包视为休市。
+  官网通常收盘数小时后才发布，因此不保证 15:35 同步取得当日日K；长历史窗口会逐日下载，不建议用于高频全量回补。
+  网络或包结构异常直接失败，不提交本次部分数据。北交所包成交量按股转手，成交额为真实元值。
+- 分钟K直接使用腾讯，支持 1/5/15/30/60 分钟，最多最近 320 根（1m 约 1.3 个交易日），不支持北交所和历史分页。
+  科创板 `688/689` 的日K/分钟K成交量由股转手，`588` ETF 不转换；分钟成交额仍按价格和量估算，图表携带质量标记。
+- 实时行情和五档盘口直接使用腾讯，不再尝试已失效的通达信 TCP 行情命令；复权因子继续使用新浪。
+
+行情依赖检查只要求 `requests`。基础环境中原有 mootdx 安装保留，用于兼容已有环境和标的目录查询，
+不再作为行情可用的前提。上游研报、资金流、新闻、期货、可转债等入口没有对应的系统 service/API，
+暂不通过 provider 暴露；标的维表继续走系统现有 TickFlow/本地 instruments 路径。
 
 `runtime` 字段当前仅用于 UI 展示, 实际依赖检测由 `check` 函数负责。
 

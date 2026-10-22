@@ -2,15 +2,15 @@
 
 """将 a-stock-data 的行情层接入 tick-stock-panel 标准 Provider 契约。
 
-适配基线为 a-stock-data v3.8.0 (`2012ce7cd0e75d379c5e6cbd3115514f300f3bc8`)。
-上游该版本新增的官方指数/交易基础数据不属于当前 Provider 的标准数据集，仍由
+适配基线为 a-stock-data v3.10.2 (`29b07d2e37005b9fd568bca1262f6e572b5f9407`)。
+上游的官方指数/交易基础数据不属于当前 Provider 的标准数据集，仍由
 本插件明确限制在系统已实现的行情契约内。
 
 来源与口径对齐 a-stock-data:
 
-* mootdx: 通达信 TCP 行情，返回不复权日K/分钟K和沪深五档盘口；
+* 腾讯: 不复权日K/分钟K、实时行情和五档盘口；
+* 通达信官网: 北交所盘后日K包（HTTP），不依赖已失效的 TCP 行情命令；
 * 新浪: qfq/hfq 阶梯因子，转换为项目需要的单事件 ex_factor；
-* 腾讯: GBK 编码的批量实时行情。
 
 这里只接入系统已有的五类标准数据集。研报、资金流、新闻、公告等端点仍需要
 各自的 service/API 契约，不在插件里偷偷扩展成未注册的字段。
@@ -20,12 +20,15 @@ from __future__ import annotations
 
 import contextlib
 import importlib
+import io
 import json
 import logging
 import math
 import re
 import socket
+import struct
 import time
+import zipfile
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from datetime import time as dt_time
@@ -44,15 +47,18 @@ from app.tickflow.rate_limits import chunked
 logger = logging.getLogger(__name__)
 
 UPSTREAM_REPOSITORY = "https://github.com/simonlin1212/a-stock-data"
-UPSTREAM_VERSION = "v3.8.0"
-UPSTREAM_COMMIT = "2012ce7cd0e75d379c5e6cbd3115514f300f3bc8"
+UPSTREAM_VERSION = "v3.10.2"
+UPSTREAM_COMMIT = "29b07d2e37005b9fd568bca1262f6e572b5f9407"
 
 _DATASETS = ("daily", "adj_factor", "minute", "realtime", "depth5")
 _BATCH = 40
 _REALTIME_BATCH = 200
-_TDX_PAGE_SIZE = 800  # mootdx StdQuotes.bars() 对 offset 的硬上限
-_MAX_TDX_BARS = 8_000
-_TENCENT_MINUTE_BARS = 320  # 腾讯分钟接口的稳定上限；只作为通达信降级源
+_TENCENT_MINUTE_BARS = 320  # 腾讯分钟接口稳定上限，1m 约覆盖最近 1.3 个交易日
+_TENCENT_KLINE_HOSTS = (
+    "https://web.ifzq.gtimg.cn",
+    "https://proxy.finance.qq.com/ifzqgtimg",
+    "https://ifzq.gtimg.cn",
+)
 _BEIJING = ZoneInfo("Asia/Shanghai")
 _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
@@ -95,7 +101,7 @@ class _AStockDataConfig:
 
 def availability() -> tuple[bool, str]:
     """检查依赖是否能导入，不发网络请求。"""
-    for module_name in ("mootdx.quotes", "requests"):
+    for module_name in ("requests",):
         try:
             importlib.import_module(module_name)
         except ModuleNotFoundError:
@@ -193,16 +199,6 @@ def _datetime_window(
     )
 
 
-def _tdx_window(start_date: date, end_date: date, bars_per_day: int) -> tuple[int, int]:
-    """把日期范围估算成 mootdx 的 start/offset 窗口，并留周末/节假日余量。"""
-    today = datetime.now(_BEIJING).date()
-    lag_days = max((today - end_date).days, 0)
-    query_start = max(0, int(lag_days * 7 / 5 * bars_per_day) - bars_per_day * 3)
-    calendar_days = max((end_date - start_date).days + 1, 1)
-    count = int(calendar_days * 7 / 5 * bars_per_day) + bars_per_day * 4
-    return query_start, max(count, bars_per_day)
-
-
 def _has_rows(frame: Any) -> bool:
     if frame is None:
         return False
@@ -257,32 +253,6 @@ def _tdx_client() -> Any:
     # 不在业务请求里调用 mootdx 的 bestip 探测：它会同步扫描多组节点，
     # 当前网络不可达时没有可靠的请求级超时；上面的固定候选已覆盖 a-stock-data 的节点。
     raise RuntimeError("所有 mootdx 服务器均无法取到数据；通达信 TCP 7709 在当前网络可能不可达。")
-
-
-def _tdx_pages(
-    client: Any,
-    code: str,
-    frequency: int,
-    start: int,
-    count: int,
-    asset_type: str,
-) -> list[Any]:
-    method = client.index_bars if asset_type == "index" else client.bars
-    frames: list[Any] = []
-    cursor = max(start, 0)
-    remaining = min(max(count, 0), _MAX_TDX_BARS)
-    while remaining:
-        page_size = min(remaining, _TDX_PAGE_SIZE)
-        frame = method(symbol=code, frequency=frequency, start=cursor, offset=page_size)
-        if not _has_rows(frame):
-            break
-        frames.append(frame)
-        received = len(frame)
-        cursor += received
-        remaining -= received
-        if received < page_size:
-            break
-    return frames
 
 
 def _normalise_freq(freq: str) -> tuple[str, int, int]:
@@ -350,44 +320,127 @@ def _normalise_minute(data: Any, symbol: str) -> pl.DataFrame:
     return df.select(required).filter(pl.col("datetime").is_not_null())
 
 
+def _tencent_kline_data(key: str, period: str, param: str, *, daily: bool = False) -> list:
+    """三个腾讯 HTTP 入口轮换；空响应和结构变化不能伪装成无数据。"""
+    path = "/appstock/app/fqkline/get" if daily else "/appstock/app/kline/mkline"
+    for host in _TENCENT_KLINE_HOSTS:
+        try:
+            response = _http_get(
+                f"{host}{path}?param={param}",
+                headers={"User-Agent": _UA, "Referer": "https://gu.qq.com/"},
+                timeout=10,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            rows = payload["data"][key][period]
+            if isinstance(rows, list) and (rows or daily):
+                return rows
+        except (KeyError, TypeError, ValueError):
+            continue
+        except Exception as exc:
+            logger.warning("腾讯 K 线入口不可用: %s", type(exc).__name__)
+    raise RuntimeError("腾讯 K 线三个入口均不可用或无数据")
+
+
+def _tencent_volume(code: str, market: str, value: Any) -> float:
+    # 只有科创板 K 线返回股；588 ETF、实时快照和盘口仍是手。
+    volume = float(value)
+    if not math.isfinite(volume) or volume < 0:
+        raise ValueError("腾讯 K 线成交量无效")
+    return volume / 100 if market == "sh" and code.startswith(("688", "689")) else volume
+
+
 def _tencent_minute(raw_symbol: str, freq: str) -> pl.DataFrame:
-    """通达信不可达时取腾讯最近分钟K；字段 7 是换手率，不是成交额。"""
+    """腾讯最近分钟K：成交量归一为手，成交额按均价估算。"""
     freq_name, _, _ = _normalise_freq(freq)
     period = f"m{freq_name[:-1]}"
     code, market, symbol = _symbol_parts(raw_symbol)
+    if market == "bj":
+        raise ValueError("腾讯分钟K不支持北交所")
     key = f"{market}{code}"
-    response = _http_get(
-        "https://ifzq.gtimg.cn/appstock/app/kline/mkline"
-        f"?param={key},{period},,{_TENCENT_MINUTE_BARS}",
-        headers={"User-Agent": _UA, "Referer": "https://gu.qq.com/"},
-        timeout=10,
-    )
-    response.raise_for_status()
-    item = (response.json().get("data") or {}).get(key) or {}
+    data = _tencent_kline_data(key, period, f"{key},{period},,{_TENCENT_MINUTE_BARS}")
     rows: list[dict] = []
-    for raw in item.get(period, []) or []:
-        if not isinstance(raw, (list, tuple)) or len(raw) < 6:
-            continue
-        try:
-            stamp = datetime.strptime(str(raw[0]), "%Y%m%d%H%M")
-            open_price, close, high, low = (float(raw[i]) for i in (1, 2, 3, 4))
-            volume = float(raw[5])
-        except (TypeError, ValueError):
-            continue
-        rows.append(
-            {
-                "datetime": stamp,
-                "open": open_price,
-                "close": close,
-                "high": high,
-                "low": low,
-                "volume": volume,
-                # 腾讯只给成交量(手)，按均价估算成交额(元)；raw[7] 是换手率。
-                "amount": volume * 100 * ((open_price + close) / 2),
-            }
-        )
+    seen: set[datetime] = set()
+    for raw in data:
+        stamp = datetime.strptime(str(raw[0]), "%Y%m%d%H%M")
+        open_price, close, high, low = (float(raw[i]) for i in (1, 2, 3, 4))
+        if stamp in seen or not all(math.isfinite(v) and v > 0 for v in (open_price, close, high, low)):
+            raise ValueError("腾讯分钟K重复时间或价格无效")
+        seen.add(stamp)
+        volume = _tencent_volume(code, market, raw[5])
+        rows.append({
+            "datetime": stamp, "open": open_price, "close": close, "high": high, "low": low,
+            "volume": volume,
+            # raw[7] 是换手率基点，不是成交额。
+            "amount": volume * 100 * ((open_price + close) / 2),
+        })
     frame = _normalise_minute(rows, symbol)
-    return frame.with_columns(pl.lit(True).alias("amount_estimated")) if not frame.is_empty() else frame
+    return frame.with_columns(pl.lit(True).alias("amount_estimated"))
+
+
+def _tencent_daily(raw_symbol: str, start: date, end: date) -> pl.DataFrame:
+    code, market, symbol = _symbol_parts(raw_symbol)
+    if market == "bj":
+        raise ValueError("腾讯历史日K不支持北交所")
+    key = f"{market}{code}"
+    rows = []
+    cursor = start
+    while cursor <= end:
+        stop = min(cursor + timedelta(days=699), end)
+        data = _tencent_kline_data(
+            key, "day", f"{key},day,{cursor.isoformat()},{stop.isoformat()},640,", daily=True,
+        )
+        for raw in data:
+            stamp = date.fromisoformat(str(raw[0]))
+            prices = [float(raw[i]) for i in (1, 2, 3, 4)]
+            if not all(math.isfinite(v) and v > 0 for v in prices):
+                raise ValueError("腾讯日K价格无效")
+            if start <= stamp <= end:
+                rows.append({
+                    "symbol": symbol, "date": stamp, "open": prices[0], "close": prices[1],
+                    "high": prices[2], "low": prices[3],
+                    "volume": _tencent_volume(code, market, raw[5]),
+                    "amount": None,  # 上游不提供成交额，不能把估算值存成真实金额。
+                })
+        cursor = stop + timedelta(days=1)
+    frame = _normalise_daily(rows, symbol)
+    return frame.unique(subset=["symbol", "date"]).sort("date") if not frame.is_empty() else frame
+
+
+def _tdx_package_bj(content: bytes, day: date, symbols: set[str]) -> pl.DataFrame:
+    """官网包 .cod/.md1：仅解析北交所股票，股转手；不猜测指数原始量单位。"""
+    ymd = day.strftime("%y%m%d")
+    with zipfile.ZipFile(io.BytesIO(content)) as archive:
+        cod, md1 = archive.read(f"bj{ymd}.cod"), archive.read(f"bj{ymd}.md1")
+    if len(cod) % 150 or len(md1) % 512 or len(cod) // 150 != len(md1) // 512:
+        raise ValueError("通达信北交所盘后包长度异常")
+    rows, codes, sequences = [], set(), set()
+    priced = 0
+    for offset in range(0, len(cod), 150):
+        record = cod[offset:offset + 150]
+        code = record[:6].rstrip(b"\x00 ").decode("ascii")
+        seq = struct.unpack_from("<H", record, 32)[0]
+        if not re.fullmatch(r"[0-9]{6}", code) or code in codes or seq in sequences:
+            raise ValueError("通达信北交所代码或序号异常")
+        codes.add(code)
+        sequences.add(seq)
+        block = md1[seq * 512:(seq + 1) * 512]
+        if len(block) != 512:
+            raise ValueError("通达信北交所行情块越界")
+        open_, high, low, close = struct.unpack_from("<4d", block, 12)
+        amount = struct.unpack_from("<d", block, 72)[0]
+        if not all(math.isfinite(v) for v in (open_, high, low, close, amount)):
+            raise ValueError("通达信北交所价格或成交额无效")
+        priced += close > 0
+        symbol = f"{code}.BJ"
+        if close > 0 and symbol in symbols:
+            rows.append({"symbol": symbol, "date": day, "open": open_, "high": high,
+                         "low": low, "close": close,
+                         "volume": struct.unpack_from("<Q", block, 56)[0] / 100,
+                         "amount": amount})
+    if priced < 50:
+        raise ValueError("通达信北交所盘后包不完整")
+    return _normalise_daily(rows, "")
 
 
 def _normalise_daily(data: Any, symbol: str) -> pl.DataFrame:
@@ -582,7 +635,7 @@ def _parse_tencent_depth(
 
 
 def _fetch_tencent_depth(requested: list[tuple[str, str]]) -> dict[str, dict]:
-    """批量读取腾讯五档字段；失败批次隔离，供 mootdx 降级使用。"""
+    """批量读取腾讯五档字段；失败批次隔离，供 provider 直接使用。"""
     result: dict[str, dict] = {}
     for index in range(0, len(requested), _REALTIME_BATCH):
         if index:
@@ -682,8 +735,8 @@ class AStockDataProvider:
     minute_frequencies = tuple(_FREQUENCIES)
     minute_adjustment = "none"
     builtin = True
-    # mootdx 分页有总量上限；与前端分时档位保持一致，默认只请求最近 5 个交易日。
-    minute_history_days = 5
+    # m1 最多 320 根，通常只有最近约 1.3 个交易日，旧日期不承诺覆盖。
+    minute_history_days = 1
 
     def __init__(self) -> None:
         self.config = _AStockDataConfig()
@@ -726,38 +779,31 @@ class AStockDataProvider:
         start_date, end_date = _window(start_time, end_time, 365)
         if start_date > end_date:
             return pl.DataFrame()
-        query_start, count = _tdx_window(start_date, end_date, 1)
-        if query_start >= _MAX_TDX_BARS:
-            logger.warning("a-stock-data daily 请求范围超出 mootdx 保留窗口")
-            return pl.DataFrame()
-
         frames: list[pl.DataFrame] = []
-        chunks = chunked(symbols, _BATCH)
-        try:
-            client = self._get_tdx()
-        except Exception as exc:
-            logger.warning("a-stock-data daily mootdx 不可用: %s", exc)
-            client = None
-        for index, current in enumerate(chunks):
-            if client is not None:
-                for raw_symbol in current:
-                    try:
-                        code, _, symbol = _symbol_parts(raw_symbol)
-                        with self._tdx_lock:
-                            pages = _tdx_pages(client, code, 9, query_start, count, str(asset_type))
-                        for page in pages:
-                            df = _normalise_daily(page, symbol)
-                            if not df.is_empty():
-                                frames.append(
-                                    df.filter(
-                                        (pl.col("date") >= start_date)
-                                        & (pl.col("date") <= end_date)
-                                    ).with_columns(pl.lit(symbol).alias("symbol"))
-                                )
-                    except Exception as exc:
-                        logger.warning("a-stock-data daily %s 拉取失败: %s", raw_symbol, exc)
-            if on_chunk_done:
-                on_chunk_done(index + 1, len(chunks))
+        bj_symbols = set()
+        for raw_symbol in symbols:
+            _, market, symbol = _symbol_parts(raw_symbol)
+            if market == "bj":
+                if str(asset_type) != "stock":
+                    raise ValueError("北交所盘后包仅支持股票日K")
+                bj_symbols.add(symbol)
+            else:
+                # 任何标的取数失败都抛出，避免调用方把部分结果当作完整同步。
+                frames.append(_tencent_daily(symbol, start_date, end_date))
+        if bj_symbols:
+            # 用上证日线的实际日期枚举交易日，不能把工作日节假日当作缺包。
+            calendar = _tencent_daily("000001.SH", start_date, end_date)
+            for day in calendar.get_column("date").to_list() if not calendar.is_empty() else []:
+                response = _http_get(
+                    f"https://www.tdx.com.cn/products/data/data/g4day/{day:%Y%m%d}.zip",
+                    timeout=30,
+                )
+                if response.status_code == 404:
+                    raise RuntimeError(f"{day} 通达信盘后包尚未发布或超出保留范围，请稍后重试")
+                response.raise_for_status()
+                frames.append(_tdx_package_bj(response.content, day, bj_symbols))
+        if on_chunk_done:
+            on_chunk_done(1, 1)
         non_empty = [frame for frame in frames if not frame.is_empty()]
         return pl.concat(non_empty, how="diagonal_relaxed") if non_empty else pl.DataFrame()
 
@@ -808,56 +854,20 @@ class AStockDataProvider:
     ) -> pl.DataFrame:
         if not symbols:
             return pl.DataFrame()
-        _, frequency, bars_per_day = _normalise_freq(freq)
+        _normalise_freq(freq)
         start_date, end_date = _window(start_time, end_time, self.minute_history_days)
         if start_date > end_date:
             return pl.DataFrame()
-        query_start, count = _tdx_window(start_date, end_date, bars_per_day)
-        try:
-            client = self._get_tdx()
-        except Exception as exc:
-            logger.warning("a-stock-data mootdx 分时不可用，降级腾讯分钟K: %s", exc)
-            client = None
-        if client is not None and query_start + count > _MAX_TDX_BARS:
-            raise ValueError("a-stock-data mootdx 分钟K查询范围超过约一个月，交由 TickFlow 回退")
         start_dt, end_dt = _datetime_window(start_time, end_time, start_date, end_date)
         frames: list[pl.DataFrame] = []
-        chunks = chunked(symbols, _BATCH)
-        for index, current in enumerate(chunks):
-            for raw_symbol in current:
-                received = False
-                try:
-                    if client is not None:
-                        code, _, symbol = _symbol_parts(raw_symbol)
-                        with self._tdx_lock:
-                            pages = _tdx_pages(
-                                client, code, frequency, query_start, count, str(asset_type)
-                            )
-                        for page in pages:
-                            df = _normalise_minute(page, symbol)
-                            if not df.is_empty():
-                                filtered = df.filter(
-                                    (pl.col("datetime") >= start_dt)
-                                    & (pl.col("datetime") <= end_dt)
-                                )
-                                if not filtered.is_empty():
-                                    frames.append(filtered)
-                                    received = True
-                except Exception as exc:
-                    logger.warning("a-stock-data minute %s 拉取失败: %s", raw_symbol, exc)
-                if not received:
-                    try:
-                        df = _tencent_minute(raw_symbol, freq)
-                        if not df.is_empty():
-                            filtered = df.filter(
-                                (pl.col("datetime") >= start_dt) & (pl.col("datetime") <= end_dt)
-                            )
-                            if not filtered.is_empty():
-                                frames.append(filtered)
-                    except Exception as exc:
-                        logger.warning("a-stock-data 腾讯分钟K %s 拉取失败: %s", raw_symbol, exc)
+        for index, raw_symbol in enumerate(symbols):
+            df = _tencent_minute(raw_symbol, freq)
+            if not df.is_empty():
+                frames.append(df.filter(
+                    (pl.col("datetime") >= start_dt) & (pl.col("datetime") <= end_dt)
+                ))
             if on_chunk_done:
-                on_chunk_done(index + 1, len(chunks))
+                on_chunk_done(index + 1, len(symbols))
         non_empty = [frame for frame in frames if not frame.is_empty()]
         result = pl.concat(non_empty, how="diagonal_relaxed") if non_empty else pl.DataFrame()
         if not include_quality and "amount_estimated" in result.columns:
@@ -931,7 +941,7 @@ class AStockDataProvider:
         return rows
 
     def get_depth_batch(self, symbols: list[str]) -> dict[str, dict]:
-        """通过 mootdx 获取五档盘口，缺失标的降级到腾讯实时行情。"""
+        """直接通过腾讯获取五档盘口，不探测已失效的 TCP 行情命令。"""
         if not symbols:
             return {}
 
@@ -948,23 +958,7 @@ class AStockDataProvider:
         if not requested:
             return {}
 
-        # tdxpy 的 get_security_quotes 会拒绝包含北交所代码的整批请求，先把
-        # BJ 分离；其余标的仍保持一次批量请求。
-        tdx_requested = [item for item in requested if not item[1].endswith(".BJ")]
-        result: dict[str, dict] = {}
-        if tdx_requested:
-            try:
-                client = self._get_tdx()
-                with self._tdx_lock:
-                    data = client.quotes(symbol=[query_key for query_key, _ in tdx_requested])
-                result = _normalise_depth_quotes(data, tdx_requested, int(time.time() * 1000))
-            except Exception as exc:
-                logger.warning("a-stock-data depth5 mootdx 不可用，降级腾讯: %s", exc)
-
-        missing = [item for item in requested if item[1] not in result]
-        if missing:
-            result.update(_fetch_tencent_depth(missing))
-        return result
+        return _fetch_tencent_depth(requested)
 
     def test_dataset(self, dataset: str, symbols: list[str] | None = None) -> dict:
         sample = symbols or ["600519.SH"]

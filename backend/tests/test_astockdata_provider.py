@@ -2,26 +2,28 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
+import polars as pl
 import pytest
 
 from app.plugins.astockdata import provider as ap
 from app.plugins.astockdata.provider import AStockDataProvider
 
 
-def test_native_30m_routes_etf_and_uses_frequency_two(monkeypatch):
+def test_native_30m_uses_tencent_and_filters_requested_window(monkeypatch):
+    frame = pl.DataFrame({"datetime": [datetime(2026, 9, 2, 10), datetime(2026, 9, 2, 10, 30)],
+                          "symbol": ["510300.SH"] * 2, "amount_estimated": [True] * 2})
+    calls = []
+    monkeypatch.setattr(ap, "_tencent_minute", lambda symbol, freq: (calls.append((symbol, freq)) or frame))
     provider = AStockDataProvider()
-    frame = _bars()
-    frame.index = pd.DatetimeIndex(pd.to_datetime(["2026-09-02 10:00", "2026-09-02 10:30"]), name="datetime")
-    fake = _FakeTdx(frame)
-    monkeypatch.setattr(provider, "_get_tdx", lambda: fake)
-    result = provider.get_minute(["510300.SH"], datetime(2026, 9, 2), datetime(2026, 9, 3), asset_type="etf", freq="30m")
-    assert fake.calls[0]["frequency"] == 2
-    assert result["symbol"].unique().to_list() == ["510300.SH"]
-    assert result.height == 2
+    monkeypatch.setattr(provider, "_get_tdx", lambda: pytest.fail("不应连接 TCP"))
+    result = provider.get_minute(["510300.SH"], datetime(2026, 9, 2, 10, 15), datetime(2026, 9, 3), asset_type="etf", freq="30m")
+    assert calls == [("510300.SH", "30m")]
+    assert result["datetime"].to_list() == [datetime(2026, 9, 2, 10, 30)]
+    assert "amount_estimated" not in result.columns
 
 
 @pytest.mark.parametrize(
@@ -80,61 +82,32 @@ def _bars() -> pd.DataFrame:
     )
 
 
-def test_daily_uses_mootdx_raw_bars_and_normalizes_symbol(monkeypatch):
+def test_daily_uses_tencent_raw_bars_and_keeps_missing_amount_null(monkeypatch):
+    calls = []
+    def fake(key, period, param, **kwargs):
+        calls.append((key, period, param, kwargs))
+        return [["2026-09-01", "10", "10.2", "10.4", "9.9", "1000"],
+                ["2026-09-02", "10.2", "10.4", "10.5", "10.1", "1200"]]
+    monkeypatch.setattr(ap, "_tencent_kline_data", fake)
     provider = AStockDataProvider()
-    fake = _FakeTdx(_bars())
-    monkeypatch.setattr(provider, "_get_tdx", lambda: fake)
-
+    monkeypatch.setattr(provider, "_get_tdx", lambda: pytest.fail("不应连接 TCP"))
     frame = provider.get_daily(["600519.SH"], datetime(2026, 9, 1), datetime(2026, 9, 2))
-
-    assert frame.columns == ["symbol", "date", "open", "high", "low", "close", "volume", "amount"]
-    assert frame.height == 2
-    assert frame["symbol"].unique().to_list() == ["600519.SH"]
-    assert frame["volume"].to_list() == [1000.0, 1200.0]
-    assert fake.calls[0]["frequency"] == 9
+    assert frame["volume"].to_list() == [1000, 1200]
+    assert frame["close"].to_list() == [10.2, 10.4]
+    assert frame["amount"].to_list() == [None, None]
+    assert calls == [("sh600519", "day", "sh600519,day,2026-09-01,2026-09-02,640,", {"daily": True})]
 
 
-def test_minute_converts_datetime_and_keeps_canonical_columns(monkeypatch):
-    provider = AStockDataProvider()
+def test_minute_normalizes_datetime_and_keeps_canonical_columns():
     minute = _bars()
-    minute.index = pd.DatetimeIndex(
-        pd.to_datetime(["2026-09-02 09:35", "2026-09-02 09:36"]), name="datetime"
-    )
-    fake = _FakeTdx(minute)
-    monkeypatch.setattr(provider, "_get_tdx", lambda: fake)
-
-    frame = provider.get_minute(["600519.SH"], datetime(2026, 9, 2), datetime(2026, 9, 2, 10))
-
-    assert set(frame.columns) == {
-        "symbol",
-        "datetime",
-        "open",
-        "high",
-        "low",
-        "close",
-        "volume",
-        "amount",
-    }
+    minute.index = pd.DatetimeIndex(pd.to_datetime(["2026-09-02 09:35", "2026-09-02 09:36"]), name="datetime")
+    frame = ap._normalise_minute(minute, "600519.SH")
+    assert set(frame.columns) == {"symbol", "datetime", "open", "high", "low", "close", "volume", "amount"}
     assert frame.height == 2
     assert (frame["datetime"][0].hour, frame["datetime"][0].minute) == (9, 35)
-    assert fake.calls[0]["frequency"] == 8
 
 
-def test_default_minute_window_fits_mootdx_limit(monkeypatch):
-    provider = AStockDataProvider()
-    fake = _FakeTdx(_bars())
-    today = datetime.now(ap._BEIJING).date()
-    fake.frame.index = pd.DatetimeIndex(
-        pd.to_datetime([today - timedelta(days=1), today]), name="datetime"
-    )
-    monkeypatch.setattr(provider, "_get_tdx", lambda: fake)
-
-    frame = provider.get_minute(["600519.SH"], None, None)
-
-    assert frame.height == 2
-
-
-def test_minute_falls_back_to_tencent_when_mootdx_is_unavailable(monkeypatch):
+def test_minute_uses_tencent_and_exposes_quality_only_for_chart(monkeypatch):
     provider = AStockDataProvider()
     monkeypatch.setattr(ap, "_tdx_client", lambda: (_ for _ in ()).throw(RuntimeError("offline")))
 
@@ -167,7 +140,7 @@ def test_minute_falls_back_to_tencent_when_mootdx_is_unavailable(monkeypatch):
 
     assert frame.height == 2
     assert frame["amount"].to_list() == [1_200_500.0, 2_403_000.0]
-    assert calls == ["https://ifzq.gtimg.cn/appstock/app/kline/mkline?param=sh600519,m1,,320"]
+    assert calls == ["https://web.ifzq.gtimg.cn/appstock/app/kline/mkline?param=sh600519,m1,,320"]
     assert "amount_estimated" not in frame.columns
     chart = provider.get_chart_minute(
         ["600519.SH"], datetime(2026, 9, 4, 9, 30), datetime(2026, 9, 4, 10),
@@ -334,7 +307,7 @@ def test_realtime_batches_etf_catalog_and_continues_after_failed_batch(monkeypat
     assert all(row["last_price"] == 4.1 for row in rows)
 
 
-def test_depth_batch_maps_mootdx_five_levels_and_keeps_explicit_market(monkeypatch):
+def test_legacy_depth_normalizer_keeps_explicit_market():
     quotes = pd.DataFrame([
         {
             "market": 1,
@@ -370,45 +343,23 @@ def test_depth_batch_maps_mootdx_five_levels_and_keeps_explicit_market(monkeypat
             "ask_vol1": 200,
         },
     ])
-    provider = AStockDataProvider()
-    fake = _FakeTdx(quotes)
-    monkeypatch.setattr(provider, "_get_tdx", lambda: fake)
-
-    result = provider.get_depth_batch(["000016.SH", "000001.SZ"])
-
-    assert fake.calls == [{"symbol": ["sh000016", "sz000001"]}]
+    result = ap._normalise_depth_quotes(quotes, [("sh000016", "000016.SH"), ("sz000001", "000001.SZ")], 123)
     assert result["000016.SH"]["bid_prices"] == [3000.0, 2999.0, 2998.0, 2997.0, 2996.0]
     assert result["000016.SH"]["ask_volumes"] == [11, 21, 31, 41, 51]
     assert result["000016.SH"]["timestamp"] == 1789196399000
     assert result["000001.SZ"]["bid_volumes"] == [100, None, None, None, None]
 
 
-def test_depth_batch_isolates_bse_symbols_before_mootdx(monkeypatch):
+def test_depth_batch_sends_bse_and_shares_directly_to_tencent(monkeypatch):
     provider = AStockDataProvider()
-    fake = _FakeTdx(pd.DataFrame([{
-        "market": 1,
-        "code": "600519",
-        "bid1": 1200,
-        "ask1": 1201,
-        "bid_vol1": 1,
-        "ask_vol1": 2,
-    }]))
-    monkeypatch.setattr(provider, "_get_tdx", lambda: fake)
-    fallback_calls: list[list[tuple[str, str]]] = []
-    monkeypatch.setattr(
-        ap,
-        "_fetch_tencent_depth",
-        lambda requested: (fallback_calls.append(requested) or {}),
-    )
-
-    result = provider.get_depth_batch(["920982.BJ", "600519.SH"])
-
-    assert list(result) == ["600519.SH"]
-    assert fake.calls == [{"symbol": ["sh600519"]}]
-    assert fallback_calls == [[("bj920982", "920982.BJ")]]
+    monkeypatch.setattr(provider, "_get_tdx", lambda: pytest.fail("不应连接 TCP"))
+    calls = []
+    monkeypatch.setattr(ap, "_fetch_tencent_depth", lambda requested: (calls.append(requested) or {}))
+    assert provider.get_depth_batch(["920982.BJ", "600519.SH", "600519.SH"]) == {}
+    assert calls == [[("bj920982", "920982.BJ"), ("sh600519", "600519.SH")]]
 
 
-def test_depth_batch_falls_back_to_tencent_when_mootdx_is_unavailable(monkeypatch):
+def test_depth_batch_uses_tencent(monkeypatch):
     provider = AStockDataProvider()
     monkeypatch.setattr(
         provider,
@@ -460,11 +411,145 @@ def test_manifest_declares_standard_datasets():
     assert AStockDataProvider().capabilities.depth5 is True
     assert "financial" not in manifest["datasets"]
     assert manifest["upstream"]["repository"] == ap.UPSTREAM_REPOSITORY
-    assert manifest["upstream"]["version"] == ap.UPSTREAM_VERSION == "v3.8.0"
+    assert manifest["upstream"]["version"] == ap.UPSTREAM_VERSION == "v3.10.2"
     assert manifest["upstream"]["commit"] == ap.UPSTREAM_COMMIT
 
 
-def test_mootdx_failure_returns_empty_daily(monkeypatch):
-    provider = AStockDataProvider()
-    monkeypatch.setattr(ap, "_tdx_client", lambda: (_ for _ in ()).throw(RuntimeError("offline")))
-    assert provider.get_daily(["600519.SH"], None, None).is_empty()
+def test_daily_transport_failure_propagates(monkeypatch):
+    monkeypatch.setattr(ap, "_tencent_kline_data", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("offline")))
+    with pytest.raises(RuntimeError, match="offline"):
+        AStockDataProvider().get_daily(["600519.SH"], None, None)
+
+
+@pytest.mark.parametrize(("symbol", "lots"), [("688981.SH", 10), ("689009.SH", 10), ("588000.SH", 1000), ("300750.SZ", 1000)])
+def test_tencent_kline_volume_units_for_daily_and_minute(monkeypatch, symbol, lots):
+    def fake(key, period, param, **kwargs):
+        return [["2026-10-22" if period == "day" else "202610221000", "100", "100", "101", "99", "1000", {}, "987654"]]
+    monkeypatch.setattr(ap, "_tencent_kline_data", fake)
+    minute = ap._tencent_minute(symbol, "5m")
+    assert minute["volume"][0] == lots
+    assert minute["amount"][0] == lots * 100 * 100
+    daily = ap._tencent_daily(symbol, date(2026, 10, 22), date(2026, 10, 22))
+    assert daily["volume"][0] == lots
+    assert daily["amount"][0] is None
+
+
+def test_tencent_kline_rotates_hosts_and_rejects_all_empty_payloads(monkeypatch):
+    calls = []
+    class Response:
+        def raise_for_status(self): pass
+        def json(self):
+            return {} if len(calls) == 1 else {"data": {"sh600519": {"m1": [["valid"]]}}}
+    monkeypatch.setattr(ap, "_http_get", lambda url, **kw: (calls.append(url) or Response()))
+    assert ap._tencent_kline_data("sh600519", "m1", "test") == [["valid"]]
+    assert len(calls) == 2
+    class Empty(Response):
+        def json(self): return {}
+    monkeypatch.setattr(ap, "_http_get", lambda *a, **kw: Empty())
+    with pytest.raises(RuntimeError, match="三个入口"):
+        ap._tencent_kline_data("sh600519", "m1", "test")
+
+
+def test_tencent_daily_segments_long_ranges_without_adjustment(monkeypatch):
+    calls = []
+    def fake(key, period, param, **kw):
+        calls.append(param)
+        return [[param.split(",")[2], "10", "11", "12", "9", "100"]]
+    monkeypatch.setattr(ap, "_tencent_kline_data", fake)
+    frame = ap._tencent_daily("510300.SH", date(2020, 1, 1), date(2026, 1, 1))
+    assert len(calls) == 4
+    assert all(p.endswith(",640,") for p in calls)
+    assert frame.height == 4
+
+
+@pytest.mark.parametrize("case", ["duplicate", "bad_price", "short"])
+def test_tencent_minute_rejects_corrupt_rows(monkeypatch, case):
+    raw = ["202610221000", "100", "100", "101", "99", "1000"]
+    rows = [raw, raw] if case == "duplicate" else [raw[:3] if case == "short" else [*raw[:1], "nan", *raw[2:]]]
+    monkeypatch.setattr(ap, "_tencent_kline_data", lambda *a, **kw: rows)
+    with pytest.raises((ValueError, IndexError)):
+        ap._tencent_minute("688981.SH", "5m")
+
+
+def _bj_package(*, corrupt=False, zero_prices=False):
+    import io
+    import struct
+    import zipfile
+    cod, md1 = bytearray(), bytearray()
+    for i in range(50):
+        record, block = bytearray(150), bytearray(512)
+        record[:6] = str(920000 + i).encode()
+        struct.pack_into("<H", record, 32, i)
+        struct.pack_into("<4d", block, 12, 10, 12, 9, 0 if zero_prices else 11)
+        struct.pack_into("<Q", block, 56, 123400)
+        struct.pack_into("<d", block, 72, 1357400)
+        cod.extend(record)
+        md1.extend(block)
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as z:
+        z.writestr("bj261021.cod", cod[:-1] if corrupt else cod)
+        z.writestr("bj261021.md1", md1)
+    return output.getvalue()
+
+
+def test_bj_daily_package_filters_symbols_and_converts_shares(monkeypatch):
+    class Response:
+        status_code = 200
+        content = _bj_package()
+        def raise_for_status(self): pass
+    calls = []
+    monkeypatch.setattr(ap, "_tencent_daily", lambda *a: pl.DataFrame({"date": [date(2026, 10, 21)]}))
+    monkeypatch.setattr(ap, "_http_get", lambda url, **kw: (calls.append(url) or Response()))
+    frame = AStockDataProvider().get_daily(["920001.BJ", "920002.BJ"], date(2026, 10, 21), date(2026, 10, 21))
+    assert frame["symbol"].to_list() == ["920001.BJ", "920002.BJ"]
+    assert frame["volume"].to_list() == [1234, 1234]
+    assert frame["amount"].to_list() == [1357400, 1357400]
+    assert len(calls) == 1
+
+
+def test_bj_package_rejects_truncation():
+    with pytest.raises(ValueError, match="长度"):
+        ap._tdx_package_bj(_bj_package(corrupt=True), date(2026, 10, 21), {"920001.BJ"})
+
+
+def test_bj_missing_package_and_minutes_fail_explicitly(monkeypatch):
+    class Response:
+        status_code = 404
+    monkeypatch.setattr(ap, "_http_get", lambda *a, **kw: Response())
+    monkeypatch.setattr(ap, "_tencent_daily", lambda *a: pl.DataFrame({"date": [date(2026, 10, 21)]}))
+    with pytest.raises(RuntimeError, match="尚未发布"):
+        AStockDataProvider().get_daily(["920001.BJ"], date(2026, 10, 21), date(2026, 10, 21))
+    with pytest.raises(ValueError, match="北交所"):
+        ap._tencent_minute("920001.BJ", "1m")
+
+
+def test_missing_daily_amount_survives_indicator_pipeline(monkeypatch):
+    from app.indicators.pipeline import compute_enriched
+
+    monkeypatch.setattr(ap, "_tencent_kline_data", lambda *a, **kw: [
+        ["2026-10-21", "100", "101", "102", "99", "1000"],
+        ["2026-10-22", "101", "102", "103", "100", "1100"],
+    ])
+    raw = ap._tencent_daily("688981.SH", date(2026, 10, 21), date(2026, 10, 22))
+    enriched = compute_enriched(raw)
+    assert enriched.height == 2
+    assert enriched["amount"].is_null().all()
+    assert enriched["close"].to_list() == [101, 102]
+
+
+def test_bj_holiday_does_not_request_package(monkeypatch):
+    monkeypatch.setattr(ap, "_tencent_daily", lambda *a: pl.DataFrame())
+    monkeypatch.setattr(ap, "_http_get", lambda *a, **kw: pytest.fail("休市无盘后包请求"))
+    assert AStockDataProvider().get_daily(["920001.BJ"], date(2026, 10, 1), date(2026, 10, 1)).is_empty()
+
+
+def test_availability_does_not_require_mootdx(monkeypatch):
+    calls = []
+    monkeypatch.setattr(ap.importlib, "import_module", lambda name: calls.append(name))
+    assert ap.availability() == (True, "ok")
+    assert calls == ["requests"]
+
+
+def test_bj_package_rejects_market_without_priced_rows():
+    with pytest.raises(ValueError, match="不完整"):
+        ap._tdx_package_bj(_bj_package(zero_prices=True), date(2026, 10, 21), {"920001.BJ"})
