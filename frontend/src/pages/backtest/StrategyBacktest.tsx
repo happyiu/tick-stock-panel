@@ -192,7 +192,7 @@ const BASIC_FILTER_RANGES = [
   { minKey: 'amount_min', maxKey: 'amount_max', label: '成交额', unit: '亿', scale: 1e8, step: '0.5' },
   { minKey: 'turnover_min', maxKey: 'turnover_max', label: '换手率', unit: '%', step: '0.5' },
 ]
-type AdvancedSettingsTab = 'params' | 'filter' | 'entry' | 'exit' | 'scoring' | 'risk' | 'range'
+type AdvancedSettingsTab = 'params' | 'filter' | 'entry' | 'exit' | 'scoring' | 'risk'
 type StrategyGroup = 'all' | 'custom' | 'ai' | 'builtin' | 'composite'
 const STRATEGY_GROUPS: { id: StrategyGroup; label: string }[] = [
   { id: 'all', label: '全部' },
@@ -208,7 +208,6 @@ const ADVANCED_TABS: { id: AdvancedSettingsTab; label: string }[] = [
   { id: 'exit', label: '出场触发器' },
   { id: 'scoring', label: '评分权重' },
   { id: 'risk', label: '风控' },
-  { id: 'range', label: '回测范围' },
 ]
 const toSignalId = (sig: string) => (sig.startsWith('signal_') || sig.startsWith('csg_')) ? sig : `signal_${sig}`
 
@@ -781,7 +780,8 @@ function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: stri
   const [open, setOpen] = useState(false)
   const [symbolNames, setSymbolNames] = useState<Record<string, string>>({})
   const ref = useRef<HTMLDivElement>(null)
-  const searchAssetTypes = assetType === 'etf' ? 'stock,etf' : 'stock'
+  const searchAssetTypes = assetType
+  const assetLabel = assetType === 'etf' ? 'ETF' : '股票'
   const search = useQuery({
     queryKey: QK.instrumentSearch(query, searchAssetTypes),
     queryFn: () => api.instrumentSearch(query, 20, searchAssetTypes),
@@ -853,15 +853,15 @@ function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: stri
 
   return (
     <div className="space-y-2" ref={ref}>
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-0 basis-full sm:flex-1 sm:basis-auto xl:basis-full">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
           <input
             type="text"
             value={query}
             onChange={e => { setQuery(e.target.value); setOpen(true) }}
             onFocus={() => { if (query.trim()) setOpen(true) }}
-            placeholder="搜索股票名称/代码添加股票池"
+            placeholder={`搜索${assetLabel}名称/代码添加标的`}
             className="w-full rounded-input border border-border bg-surface py-1.5 pl-8 pr-2.5 text-xs focus:border-accent focus:outline-none"
           />
           {open && results.length > 0 && (
@@ -925,10 +925,8 @@ function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: stri
           </button>
         </div>
       </div>
-      <div className="flex flex-wrap gap-1.5">
-        {symbols.length === 0 ? (
-          <span className="text-[11px] text-muted">默认全市场回测，由基础过滤和策略条件筛选。</span>
-        ) : symbols.map(symbol => {
+      {symbols.length > 0 && <div className="flex flex-wrap gap-1.5">
+        {symbols.map(symbol => {
           const name = symbolNames[symbol]
           return (
           <span key={symbol} className="inline-flex items-center gap-1 rounded-btn border border-accent/30 bg-accent/10 px-2 py-1 text-[10px] text-accent">
@@ -940,7 +938,7 @@ function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: stri
           </span>
           )
         })}
-      </div>
+      </div>}
     </div>
   )
 }
@@ -1069,6 +1067,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
     queryFn: () => api.screenerStrategies(assetType, 'all'),
   })
   const strategyList = useMemo(() => strategies.data?.presets ?? [], [strategies.data])
+  const strategyAvailable = strategies.isSuccess && strategyList.some(st => st.id === selectedStrategy)
   const filteredStrategyList = useMemo(() => (
     strategyGroup === 'all' ? strategyList : strategyList.filter(st => st.source === strategyGroup)
   ), [strategyGroup, strategyList])
@@ -1077,14 +1076,16 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
   // 连带清除其专属的 params/overrides/result(这些是该策略的运行配置/产物,
   // 策略失效后留着会造成"孤儿"状态:界面显示旧回测结果却无对应策略)。
   useEffect(() => {
-    if (strategies.isLoading || strategyList.length === 0) return
+    if (!strategies.isSuccess) return
     if (selectedStrategy && !strategyList.some(st => st.id === selectedStrategy)) {
       setSelectedStrategy(null)
       setStrategyParams({})
       setOverrides({})
       setResult(null)
+      setSettingsTab('params')
+      setSettingsOpen(false)
     }
-  }, [strategies.isLoading, strategyList, selectedStrategy])
+  }, [strategies.isSuccess, strategyList, selectedStrategy])
 
   const strategyDetail = useQuery({
     queryKey: QK.strategyDetail(selectedStrategy ?? ''),
@@ -1205,7 +1206,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
   }, [backtestTask])
 
   const handleRun = () => {
-    if (!selectedStrategy || backtestDataUnavailable) return
+    if (!selectedStrategy || !strategyAvailable || backtestDataUnavailable) return
     const requestOverrides = detail
       ? normalizeStrategyOverrides(detail, overrides)
       : overrides
@@ -1576,7 +1577,8 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
   const selectedStrategyName = detail?.name ?? strategyList.find(st => st.id === selectedStrategy)?.name ?? '未选择策略'
   const selectedStrategySource = detail?.source ?? strategyList.find(st => st.id === selectedStrategy)?.source
   const stockPoolCount = symbols.split(',').map(s => s.trim()).filter(Boolean).length
-  const stockPoolSummary = stockPoolCount > 0 ? `股票池 已限定 ${stockPoolCount} 只` : '股票池 全市场'
+  const assetLabel = assetType === 'etf' ? 'ETF' : '股票'
+  const stockPoolSummary = stockPoolCount > 0 ? `已限定 ${stockPoolCount} 只${assetLabel}` : `全部${assetLabel}`
   const resultStartDate = result?.config?.start ?? result?.equity_curve?.[0]?.date ?? start
   const resultEndDate = result?.config?.end ?? result?.equity_curve?.[result.equity_curve.length - 1]?.date ?? end
   const resultTradeDays = result?.equity_curve?.length ?? 0
@@ -1625,6 +1627,35 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
     <div className="h-full min-h-0 overflow-hidden rounded-card border border-border bg-surface/80 grid grid-cols-1 xl:grid-cols-[18rem_minmax(0,1fr)]">
       {/* 配置面板 */}
       <section className="space-y-3 border-b xl:border-b-0 xl:border-r border-border bg-base/25 px-3 py-3 xl:overflow-y-auto">
+        <section aria-label="回测资产范围" className="space-y-2.5 rounded-btn border border-border bg-surface p-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-medium text-secondary">回测资产范围</span>
+            <span className="text-[10px] text-muted">{stockPoolSummary}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] text-muted">资产类型</span>
+            <div className="inline-flex h-8 overflow-hidden rounded-btn border border-border">
+              {(['stock', 'etf'] as const).map(t => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => {
+                    if (t === assetType) return
+                    setAssetType(t)
+                    setSymbols('')
+                    setResult(null)
+                  }}
+                  aria-pressed={assetType === t}
+                  className={`h-full px-3 text-xs font-medium transition-colors ${assetType === t ? 'bg-accent/10 text-accent' : 'text-muted hover:text-foreground'}`}
+                >
+                  {t === 'stock' ? '股票' : 'ETF'}
+                </button>
+              ))}
+            </div>
+          </div>
+          <StockPoolPicker key={assetType} value={symbols} onChange={setSymbols} assetType={assetType} />
+        </section>
+
         <div>
           <div className="flex items-center justify-between mb-1.5">
             <label className="text-xs font-medium text-secondary">选择策略</label>
@@ -1738,7 +1769,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
 
         <button
           type="button"
-          onClick={() => detail && setSettingsOpen(true)}
+          onClick={() => setSettingsOpen(true)}
           disabled={!detail || strategyDetail.isLoading}
           className="group w-full rounded-btn border border-border bg-surface px-3 py-2.5 text-left transition-colors hover:border-accent/40 hover:bg-elevated/70 disabled:cursor-not-allowed disabled:opacity-55"
         >
@@ -1755,7 +1786,6 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
               </span>
             )}
           </span>
-          <span className="mt-1 block text-[10px] font-medium text-secondary">{stockPoolSummary}</span>
           <span className="mt-1 block text-[10px] leading-4 text-muted">{advancedSummary}</span>
         </button>
 
@@ -1994,7 +2024,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
         ) : (
           <button
             onClick={handleRun}
-            disabled={!selectedStrategy || strategyDetail.isLoading || backtestDataUnavailable}
+            disabled={!strategyAvailable || strategyDetail.isLoading || backtestDataUnavailable}
             className="group w-full inline-flex items-center justify-center gap-2.5 rounded-btn border border-accent/40
               bg-gradient-to-r from-accent to-blue-500 px-3 py-2.5 text-white shadow-[0_10px_24px_rgba(59,130,246,0.22)]
               transition-all duration-150 ease-smooth hover:-translate-y-0.5 hover:shadow-[0_14px_28px_rgba(59,130,246,0.28)]
@@ -2821,30 +2851,6 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
                 <div>最大持仓数控制同时持股数量，最大总仓位控制资金投入比例；剩余现金不等于可新增持仓名额。</div>
                 {matrixStrategy && <div className="text-accent">当前为 Matrix 策略，进出场信号由策略公式生成，不能用列信号覆盖。</div>}
               </div>
-
-              {settingsTab === 'range' && (
-                <ConfigSection title="回测范围">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[11px] text-muted">资产类型</span>
-                    <div className="inline-flex h-8 rounded-btn border border-border overflow-hidden">
-                      {(['stock', 'etf'] as const).map(t => (
-                        <button
-                          key={t}
-                          type="button"
-                          onClick={() => { setAssetType(t); setSelectedStrategy(null); setSymbols('') }}
-                          className={`h-full px-3 text-xs font-medium transition-colors cursor-pointer
-                            ${assetType === t ? 'bg-accent/10 text-accent' : 'text-muted hover:text-foreground'}`}
-                        >
-                          {t === 'stock' ? '股票' : 'ETF'}
-                        </button>
-                      ))}
-                    </div>
-                    <span className="text-[11px] text-muted/70">ETF 仅技术类策略,读 ETF enriched</span>
-                  </div>
-                  <StockPoolPicker value={symbols} onChange={setSymbols} assetType={assetType} />
-                  <div className="text-[11px] leading-5 text-muted">默认全市场回测，由基础过滤、策略条件和买卖触发器筛选；需要单票调试或自选池回测时再限定股票池。</div>
-                </ConfigSection>
-              )}
 
               {settingsTab === 'params' && (
                 <ConfigSection title="策略参数" hint="自动限制 min/max">
