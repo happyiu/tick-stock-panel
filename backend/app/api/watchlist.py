@@ -106,6 +106,11 @@ def _with_names(rows: list[dict], request: Request) -> list[dict]:
     try:
         # 股票 + ETF 名称统一由 repo.get_name_map 解析, 自选列表可混合持有
         name_by_symbol = request.app.state.repo.get_name_map([r.get("symbol") for r in rows])
+        # 写接口也会直接回填前端共享自选缓存, 必须与列表接口保持同一资产元数据。
+        rows = [
+            {**row, "asset_type": request.app.state.repo.resolve_asset_type(row["symbol"])}
+            for row in rows
+        ]
         if not name_by_symbol:
             return rows
         return [{**row, "name": name_by_symbol.get(row.get("symbol"))} for row in rows]

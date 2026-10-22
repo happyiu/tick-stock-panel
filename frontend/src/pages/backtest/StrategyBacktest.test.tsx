@@ -16,7 +16,11 @@ vi.mock('@/lib/api', async importOriginal => {
     factorColumns: async () => ({ columns: [] }),
     factorLibrary: async () => ({ factors: [] }),
     customSignalsList: async () => ({ signals: [] }),
-    watchlistList: async () => ({ symbols: [] }),
+    watchlistList: vi.fn(),
+    watchlistGroups: async () => ({ groups: [
+      { id: 'mixed', name: '混合分组', color: 'sky', created_at: '' },
+      { id: 'stock-only', name: '股票分组', color: 'sky', created_at: '' },
+    ] }),
   } }
 })
 vi.mock('@/lib/backtestTask', () => ({
@@ -62,6 +66,7 @@ beforeEach(() => {
   vi.mocked(api.instrumentSearch).mockResolvedValue({ results: [
     { symbol: '510300.SH', code: '510300', name: '沪深300ETF', asset_type: 'etf' },
   ] })
+  vi.mocked(api.watchlistList).mockResolvedValue({ symbols: [] })
   host = document.createElement('div')
   document.body.append(host)
   root = createRoot(host)
@@ -154,4 +159,50 @@ it.each([false, true])('keeps asset controls available when the strategy is inco
   await click(button('股票'))
   await click(button('天使魔鬼自定义'))
   expect(button('运行回测').disabled).toBe(false)
+})
+
+it('imports only the active asset type for all, grouped and ungrouped watchlists', async () => {
+  vi.mocked(api.watchlistList).mockResolvedValue({ symbols: [
+    { symbol: '600519.SH', name: '贵州茅台', asset_type: 'stock', added_at: '', group_ids: ['mixed', 'stock-only'] },
+    { symbol: '000001.SZ', name: '平安银行', asset_type: 'stock', added_at: '', group_ids: [] },
+    { symbol: '510300.SH', name: '沪深300ETF', asset_type: 'etf', added_at: '', group_ids: ['mixed'] },
+    { symbol: '159605.SZ', name: '中概互联ETF', asset_type: 'etf', added_at: '', group_ids: [] },
+    { symbol: '000001.SH', name: '上证指数', asset_type: 'index', added_at: '', group_ids: ['mixed'] },
+    { symbol: 'unknown', added_at: '', group_ids: ['mixed'] },
+  ] })
+  await render()
+  const importButton = () => host.querySelector<HTMLButtonElement>('[aria-label="从自选分组导入回测范围"]')!
+  const menuItem = (label: string) => Array.from(document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')).find(b => b.textContent?.includes(label))!
+  expect(importButton().textContent).toContain('导入自选股(2)')
+  await click(importButton())
+  expect(menuItem('全部自选').textContent).toContain('2')
+  expect(menuItem('混合分组').textContent).toContain('1')
+  await click(menuItem('全部自选'))
+  expect(assetScope().textContent).toContain('600519.SH')
+  expect(assetScope().textContent).toContain('000001.SZ')
+  expect(assetScope().textContent).not.toContain('510300.SH')
+  await click(button('ETF'))
+  expect(importButton().textContent).toContain('导入自选ETF(2)')
+  await click(importButton())
+  expect(menuItem('股票分组').disabled).toBe(true)
+  expect(menuItem('未分组').textContent).toContain('1')
+  await click(menuItem('混合分组'))
+  expect(assetScope().textContent).toContain('510300.SH')
+  expect(assetScope().textContent).not.toContain('600519.SH')
+  expect(assetScope().textContent).not.toContain('000001.SH')
+  expect(assetScope().textContent).not.toContain('unknown')
+  await click(importButton())
+  await click(menuItem('未分组'))
+  await click(button('运行回测'))
+  expect(startBacktest).toHaveBeenCalledWith(expect.objectContaining({ asset_type: 'etf', symbols: ['510300.SH', '159605.SZ'] }))
+})
+
+it('disables importing when only other assets are available', async () => {
+  vi.mocked(api.watchlistList).mockResolvedValue({ symbols: [
+    { symbol: '510300.SH', asset_type: 'etf', added_at: '' },
+  ] })
+  await render()
+  expect(host.querySelector<HTMLButtonElement>('[aria-label="从自选分组导入回测范围"]')!.disabled).toBe(true)
+  await click(button('ETF'))
+  expect(host.querySelector<HTMLButtonElement>('[aria-label="从自选分组导入回测范围"]')!.disabled).toBe(false)
 })

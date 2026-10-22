@@ -711,6 +711,7 @@ export interface KlineDailyLatestResponse {
 // ===== Watchlist =====
 export interface WatchlistEntry {
   symbol: string
+  asset_type?: 'stock' | 'etf' | 'index'
   added_at: string
   note?: string
   name?: string | null

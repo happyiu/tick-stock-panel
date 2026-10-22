@@ -795,7 +795,10 @@ function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: stri
     queryFn: () => api.watchlistList(),
     staleTime: 30_000,
   })
-  const watchlistEntries = watchlist.data?.symbols ?? []
+  const watchlistEntries = useMemo(
+    () => (watchlist.data?.symbols ?? []).filter(entry => entry.asset_type === assetType),
+    [watchlist.data, assetType],
+  )
   const watchlistCounts = useMemo(() => {
     // 多组并存: 一股计入每个所属分组
     const counts: Record<string, number> = { ungrouped: 0 }
@@ -904,14 +907,14 @@ function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: stri
             counts={watchlistCounts}
             total={watchlistCount}
             disableEmpty
-            menuLabel="导入自选分组"
+            menuLabel={assetType === 'etf' ? '导入自选ETF分组' : '导入自选股分组'}
             align="right"
             triggerClassName="inline-flex items-center gap-1 whitespace-nowrap rounded-input border border-border bg-surface px-2 py-1.5 text-[11px] text-secondary transition-colors hover:border-accent/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
             title="选择自选分组并加入回测范围"
             ariaLabel="从自选分组导入回测范围"
           >
             <ListPlus className="h-3 w-3" />
-            {watchlist.isLoading ? '加载…' : watchlistCount === 0 ? '自选空' : `导入自选(${watchlistCount})`}
+            {watchlist.isLoading ? '加载…' : `${assetType === 'etf' ? '导入自选ETF' : '导入自选股'}(${watchlistCount})`}
           </WatchlistGroupMenu>
           <button
             type="button"

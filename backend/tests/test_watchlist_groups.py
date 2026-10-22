@@ -14,7 +14,45 @@ from app.services import watchlist
 def _request():
     repo = MagicMock()
     repo.get_name_map.return_value = {}
+    repo.resolve_asset_type.return_value = "stock"
     return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(repo=repo)))
+
+
+@pytest.mark.parametrize("with_names", [True, False])
+def test_watchlist_api_returns_asset_types_for_list_and_mutations(monkeypatch, tmp_path, with_names):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    request = _request()
+    repo = request.app.state.repo
+    types = {"600000.SH": "stock", "510300.SH": "etf", "000001.SH": "index"}
+    names = {"600000.SH": "浦发银行", "510300.SH": "沪深300ETF", "000001.SH": "上证指数"}
+    repo.resolve_asset_type.side_effect = types.__getitem__
+    repo.get_name_map.return_value = names if with_names else {}
+    for symbol, asset_type in types.items():
+        result = watchlist_api.add_one(watchlist_api.AddRequest(symbol=symbol), request)
+        added = next(row for row in result["symbols"] if row["symbol"] == symbol)
+        assert added["asset_type"] == asset_type
+    app = FastAPI()
+    app.state.repo = repo
+    app.include_router(watchlist_api.router)
+    with TestClient(app) as client:
+        response = client.get("/api/watchlist")
+    assert response.status_code == 200
+    rows = response.json()["symbols"]
+    assert {row["symbol"]: row["asset_type"] for row in rows} == types
+    if with_names:
+        assert {row["symbol"]: row["name"] for row in rows} == names
+    assert all("asset_type" not in row for row in watchlist.list_symbols())
+
+
+def test_watchlist_asset_metadata_failure_does_not_guess_type(monkeypatch):
+    request = _request()
+    request.app.state.repo.resolve_asset_type.side_effect = RuntimeError("catalog unavailable")
+    entries = [{"symbol": "510300.SH", "group_ids": []}]
+    monkeypatch.setattr(watchlist_api.watchlist, "list_symbols", lambda: entries)
+    assert watchlist_api.list_all(request)["symbols"] == entries
 
 
 def test_historical_watchlist_is_read_as_ungrouped(monkeypatch, tmp_path):
