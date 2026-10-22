@@ -8,8 +8,8 @@ import type { EtfPoolResponse } from '@/lib/api'
 import { ETFPool } from './ETFPool'
 import { useQuoteStream } from '@/lib/useQuoteStream'
 
-const fixtures = vi.hoisted(() => ({ request: vi.fn() }))
-vi.mock('@/lib/api', () => ({ api: { etfPool: fixtures.request } }))
+const fixtures = vi.hoisted(() => ({ request: vi.fn(), customSignals: vi.fn() }))
+vi.mock('@/lib/api', () => ({ api: { etfPool: fixtures.request, customSignalsList: fixtures.customSignals } }))
 vi.mock('@/components/StockPreviewDialog', () => ({ StockPreviewDialog: ({ symbol }: { symbol: string }) => <div role="dialog">{symbol}</div> }))
 let host: HTMLDivElement
 let root: Root
@@ -21,6 +21,11 @@ const response = (total = 45): EtfPoolResponse => ({
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   fixtures.request.mockReset().mockResolvedValue(response())
+  fixtures.customSignals.mockReset().mockResolvedValue({ signals: [
+    { id: 'daily_test', name: '自定义日线', enabled: true, kind: 'entry', conditions: [], timeframe: 'daily' },
+    { id: 'minute_test', name: '分钟信号', enabled: true, kind: 'entry', conditions: [], timeframe: 'intraday' },
+    { id: 'disabled_test', name: '停用信号', enabled: false, kind: 'entry', conditions: [] },
+  ] })
   host = document.createElement('div')
   document.body.append(host)
   root = createRoot(host)
@@ -54,6 +59,52 @@ async function select(label: string, value: string) {
   })
   await settle()
 }
+async function pressText(text: string, selector = 'button') {
+  await act(async () => Array.from(host.querySelectorAll<HTMLButtonElement>(selector)).find(b => b.textContent?.includes(text))!.click())
+  await settle()
+}
+it('applies multiple daily signals, changes match mode and preserves sorting', async () => {
+  await render()
+  await click('按涨跌幅排序')
+  await click('下一页')
+  await click('信号筛选')
+  expect(host.querySelector('[role="dialog"]')?.textContent).toContain('最新可用日线')
+  expect(host.querySelector('[role="dialog"]')?.textContent).not.toContain('分钟信号')
+  expect(host.querySelector('[role="dialog"]')?.textContent).not.toContain('停用信号')
+  const limit = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="checkbox"]')).find(b => b.textContent?.includes('signal_limit_up'))!
+  expect(limit.disabled).toBe(true)
+  await pressText('MACD金叉', '[role="checkbox"]')
+  await pressText('自定义日线', '[role="checkbox"]')
+  await select('信号组合规则', 'any')
+  await pressText('应用 (2)')
+  expect(fixtures.request.mock.lastCall?.[0]).toMatchObject({ page: 1, sortChangePct: 'desc', signalIds: ['signal_macd_golden', 'csg_daily_test'], signalMatch: 'any' })
+  expect(host.querySelector('[role="dialog"]')).toBeNull()
+  await click('信号筛选')
+  expect(host.querySelectorAll('[role="checkbox"][aria-checked="true"]').length).toBe(2)
+  await pressText('MACD金叉', '[role="checkbox"]')
+  await pressText('取消')
+  expect(fixtures.request.mock.lastCall?.[0].signalIds).toHaveLength(2)
+  await click('移除信号 MACD金叉')
+  expect(fixtures.request.mock.lastCall?.[0].signalIds).toEqual(['csg_daily_test'])
+  await pressText('重置筛选')
+  expect(fixtures.request.mock.lastCall?.[0].signalIds).toEqual([])
+})
+it('shows signal date and warnings while retaining results during a filter request', async () => {
+  fixtures.request.mockResolvedValue({ ...response(), signal_date: '2026-10-22', signal_warnings: ['盘中信号, 可能变化'] })
+  await render()
+  await click('信号筛选')
+  await pressText('MACD金叉', '[role="checkbox"]')
+  let resolve!: (value: EtfPoolResponse) => void
+  fixtures.request.mockImplementationOnce(() => new Promise<EtfPoolResponse>(r => { resolve = r }))
+  await pressText('应用 (1)')
+  expect(host.querySelector('tbody')?.textContent).toContain('沪深300ETF')
+  expect(host.textContent).toContain('正在更新筛选结果')
+  await act(async () => resolve({ ...response(0), signal_date: '2026-10-22', signal_warnings: ['盘中信号, 可能变化'] }))
+  await settle()
+  expect(host.textContent).toContain('2026-10-22')
+  expect(host.textContent).toContain('盘中信号, 可能变化')
+  expect(host.textContent).toContain('没有符合条件的 ETF')
+})
 it('paginates and resets the page when filters or page size change', async () => {
   await render()
   expect(host.querySelector('[aria-current="page"]')?.textContent).toBe('1')
@@ -87,6 +138,25 @@ it('shows clickable page numbers and ellipses for a large result set', async () 
   await click('第 20 页')
   expect(host.querySelector('[aria-current="page"]')?.textContent).toBe('20')
   expect(host.querySelector<HTMLButtonElement>('[aria-label="下一页"]')!.disabled).toBe(true)
+})
+it('cycles change sorting across the full result set and resets pagination', async () => {
+  await render()
+  const header = () => host.querySelector('th[aria-sort]')!
+  expect(header().getAttribute('aria-sort')).toBe('none')
+  await click('下一页')
+  await click('按涨跌幅排序')
+  expect(fixtures.request.mock.lastCall?.[0]).toMatchObject({ sortChangePct: 'desc', page: 1 })
+  expect(header().getAttribute('aria-sort')).toBe('descending')
+  await click('下一页')
+  expect(fixtures.request.mock.lastCall?.[0]).toMatchObject({ sortChangePct: 'desc', page: 2 })
+  await select('ETF 分类', '宽基')
+  expect(fixtures.request.mock.lastCall?.[0]).toMatchObject({ sortChangePct: 'desc', category: '宽基', page: 1 })
+  await click('按涨跌幅排序')
+  expect(fixtures.request.mock.lastCall?.[0]).toMatchObject({ sortChangePct: 'asc', page: 1 })
+  expect(header().getAttribute('aria-sort')).toBe('ascending')
+  await click('按涨跌幅排序')
+  expect(fixtures.request.mock.lastCall?.[0].sortChangePct).toBeUndefined()
+  expect(header().getAttribute('aria-sort')).toBe('none')
 })
 it('debounces searches and resets pagination', async () => {
   await render()

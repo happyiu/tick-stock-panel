@@ -146,7 +146,10 @@ def load_all(data_dir: Path) -> list[dict]:
     out: list[dict] = []
     for f in sorted(d.glob("*.json")):
         try:
-            out.append(json.loads(f.read_text(encoding="utf-8")))
+            definition = json.loads(f.read_text(encoding="utf-8"))
+            if not isinstance(definition, dict):
+                raise ValueError("信号定义必须是对象")
+            out.append(definition)
         except Exception as e:
             logger.warning("custom signal load failed %s: %s", f.name, e)
     return out
@@ -234,6 +237,12 @@ def validate(sig: dict) -> None:
         raise ValueError("信号 name 不能为空")
     if sig.get("kind") not in ("entry", "exit", "both"):
         raise ValueError("kind 必须是 entry / exit / both")
+    if sig.get("definition_type", "conditions") == "formula":
+        from app.strategy import formula_signals
+        formula_signals.validate(sig)
+        return
+    if sig.get("definition_type", "conditions") != "conditions":
+        raise ValueError("未知信号创建方式")
     timeframe = sig.get("timeframe", TIMEFRAME_DAILY)
     if timeframe not in (TIMEFRAME_DAILY, TIMEFRAME_INTRADAY):
         raise ValueError(f"timeframe 必须是 {TIMEFRAME_DAILY} / {TIMEFRAME_INTRADAY}: {timeframe!r}")
@@ -295,6 +304,8 @@ def build_expressions(signals: list[dict], allow_shift: bool = True) -> dict[str
     string_fields = _string_ext_fields()
     for sig in signals:
         if sig.get("enabled") is False:
+            continue
+        if sig.get("definition_type") == "formula":
             continue
         try:
             conds = sig["conditions"]

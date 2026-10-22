@@ -108,3 +108,45 @@ async def test_run_chat_maps_studio_approval_to_409(monkeypatch: pytest.MonkeyPa
     with pytest.raises(hermes_studio.HermesStudioError, match="需要审批或澄清") as exc_info:
         await hermes_studio.run_chat("执行危险操作")
     assert exc_info.value.status_code == 409
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [409, 500, 504])
+async def test_run_chat_preserves_session_and_partial_output_on_upstream_failure(monkeypatch, status):
+    monkeypatch.setattr(secrets_store, "load", lambda: {"hermes_studio_token": "secret"})
+    def handler(_request):
+        return httpx.Response(status, json={
+            "ok": False, "session_id": "created-session", "run_id": "started-run",
+            "output": [{"text": "partial"}], "reasoning": "partial reasoning", "error": "chat-run timed out",
+        })
+    _mock_async_client(monkeypatch, handler)
+    with pytest.raises(hermes_studio.HermesStudioError) as error:
+        await hermes_studio.run_chat("analysis")
+    assert error.value.status_code == status
+    assert error.value.result["session_id"] == "created-session"
+    assert error.value.result["run_id"] == "started-run"
+    assert error.value.result["output"] == "partial"
+    assert "secret" not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_run_chat_read_timeout_keeps_supplied_session_without_resending(monkeypatch):
+    monkeypatch.setattr(secrets_store, "load", lambda: {"hermes_studio_token": "secret"})
+    calls = []
+    def handler(request):
+        calls.append(json.loads(request.content))
+        raise httpx.ReadTimeout("stream stalled", request=request)
+    _mock_async_client(monkeypatch, handler)
+    with pytest.raises(hermes_studio.HermesStudioError) as error:
+        await hermes_studio.run_chat("analysis", session_id="durable-session")
+    assert len(calls) == 1
+    assert error.value.result["session_id"] == "durable-session"
+
+
+@pytest.mark.asyncio
+async def test_reserved_id_does_not_turn_missing_acknowledgement_into_success(monkeypatch):
+    monkeypatch.setattr(secrets_store, "load", lambda: {"hermes_studio_token": "secret"})
+    _mock_async_client(monkeypatch, lambda _request: httpx.Response(200, json={"ok": True, "output": "done"}))
+    with pytest.raises(hermes_studio.HermesStudioError, match="未返回 session_id") as error:
+        await hermes_studio.run_chat("analysis", session_id="reserved-session")
+    assert error.value.result["session_id"] == "reserved-session"

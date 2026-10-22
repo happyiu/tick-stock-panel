@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import threading
+import uuid
 from pathlib import Path
 
 from app.services.fs_utils import atomic_write_text
@@ -57,7 +58,7 @@ def load() -> dict:
     return copy.deepcopy(_cache)
 
 
-_SAVE_LOCK = threading.Lock()
+_SAVE_LOCK = threading.RLock()
 
 
 def save(updates: dict) -> dict:
@@ -641,6 +642,15 @@ def get_seekhub_daily_session_id(session_date: str) -> str | None:
         return None
     value = data.get("seekhub_daily_session_id")
     return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def ensure_seekhub_daily_session_id(session_date: str) -> str:
+    """Reserve a durable, caller-supplied Studio ID before any upstream work."""
+    with _SAVE_LOCK:
+        existing = get_seekhub_daily_session_id(session_date)
+        if existing:
+            return existing
+        return set_seekhub_daily_session_id(session_date, str(uuid.uuid4()))
 
 
 def set_seekhub_daily_session_id(session_date: str, session_id: str) -> str:

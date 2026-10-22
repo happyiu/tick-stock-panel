@@ -33,6 +33,7 @@ ENRICHED_STORAGE_SCHEMA: dict[str, pl.DataType] = {
     "consecutive_limit_ups": pl.UInt32,
     "consecutive_limit_downs": pl.UInt32,
     "quote_ts": pl.Int64,
+    "quote_change_pct": pl.Float64,
 }
 
 

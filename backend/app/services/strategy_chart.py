@@ -589,7 +589,7 @@ class StrategyChartService:
             compute_signals,
             get_signal_dependencies,
         )
-        from app.strategy import custom_signals
+        from app.strategy import custom_signals, formula_signals
 
         if timeframe not in SUPPORTED_TIMEFRAMES:
             raise ValueError(f"当前 K 线不支持 {timeframe} 信号")
@@ -621,6 +621,10 @@ class StrategyChartService:
                 normalized.append(signal_id)
         if not normalized:
             return []
+        definitions = custom_signals.load_all(settings.data_dir)
+        selected_formula_ids = set(formula_signals.dependencies(definitions)) & set(normalized)
+        if selected_formula_ids and timeframe not in formula_signals.PERIODS:
+            raise ValueError("公式信号仅支持日线和30F周期")
 
         frame = self.load_frame(
             symbol=symbol,
@@ -629,7 +633,7 @@ class StrategyChartService:
             start=start,
             end=end,
             # 内置信号最长只需要 60 根; 多留历史用于均线/自定义因子预热。
-            required_bars=250,
+            required_bars=max(250, formula_signals.required_history(definitions, set(normalized))),
             days=days,
         )
         if frame.is_empty():
@@ -641,7 +645,7 @@ class StrategyChartService:
         if set(normalized) & set(_CHART_LIMIT_SIGNAL_IDS):
             indicator_dependencies.update({"change_pct", "vol_ratio_5d"})
         frame = compute_indicators(frame, needed=indicator_dependencies)
-        frame = compute_signals(frame, needed=set(normalized))
+        frame = compute_signals(frame, needed=set(normalized), period=timeframe)
         limit_ids = set(normalized) & set(_CHART_LIMIT_SIGNAL_IDS)
         if limit_ids:
             frame = compute_limit_signals(

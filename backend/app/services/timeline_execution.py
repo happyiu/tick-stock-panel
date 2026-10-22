@@ -91,6 +91,16 @@ class TimelineExecutionStore:
             )
         return run_id
 
+    def set_session(self, run_id: str, session_id: str) -> None:
+        """Persist the session while a long-running upstream turn is still running."""
+        with self.connection() as con:
+            cursor = con.execute(
+                "UPDATE timeline_task_runs SET session_id=? WHERE id=?",
+                (session_id, run_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("timeline execution not found")
+
     def finish(
         self,
         run_id: str,

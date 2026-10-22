@@ -1145,6 +1145,7 @@ def _scheduled_pipeline_task(pipeline_fn, *, timeline_time: str | None = None) -
 
 SEEKHUB_DAILY_JOB_ID = "seekhub_daily_start"
 REVIEW_JOB_ID = "scheduled_review"
+_RUNNING_SEEKHUB_DAILY_DATES: set[str] = set()
 
 
 async def _run_seekhub_daily_method(
@@ -1176,15 +1177,29 @@ async def _run_seekhub_daily_method(
         )
         return {"status": "skipped", "date": analysis_date}
 
+    # Scheduler and manual retry tasks share one event loop; reserve without an await.
+    if analysis_date in _RUNNING_SEEKHUB_DAILY_DATES:
+        _timeline_finish(
+            timeline_run_id, status="skipped", session_id=session_id,
+            result={"status": "skipped", "date": analysis_date},
+            error="同日AI追踪分析仍在执行, 本次跳过以避免重叠分析",
+        )
+        return {"status": "skipped", "date": analysis_date}
+    _RUNNING_SEEKHUB_DAILY_DATES.add(analysis_date)
+
     try:
+        session_id = _prefs.ensure_seekhub_daily_session_id(analysis_date)
+        if timeline_run_id:
+            timeline_execution_store.set_session(timeline_run_id, session_id)
         prompt = prompt_template.replace("YYYY-MM-DD", analysis_date)
         result = await hermes_studio_run_chat(
             prompt,
             session_id=session_id,
         )
-        session_id = str(result.get("session_id") or "").strip()
-        if not session_id:
+        returned_session = str(result.get("session_id") or "").strip()
+        if not returned_session:
             raise RuntimeError("Hermes Studio 未返回 session_id")
+        session_id = returned_session
         _prefs.set_seekhub_daily_session_id(analysis_date, session_id)
         timeline_result = {
             "status": "completed",
@@ -1202,15 +1217,32 @@ async def _run_seekhub_daily_method(
         logger.info("%s completed: date=%s", method, analysis_date)
         return {"status": "completed", "date": analysis_date}
     except Exception as exc:
+        partial = getattr(exc, "result", {})
+        partial = partial if isinstance(partial, dict) else {}
+        returned_session = partial.get("session_id")
+        persistence_error = ""
+        if isinstance(returned_session, str) and returned_session.strip():
+            session_id = returned_session.strip()
+            try:
+                _prefs.set_seekhub_daily_session_id(analysis_date, session_id)
+            except Exception:
+                logger.exception("failed to persist recovered AI tracking session: date=%s", analysis_date)
+                persistence_error = "; 会话偏好保存失败, 会话ID保留在时间轴记录中"
         _timeline_finish(
             timeline_run_id,
             status="failed",
-            result={"status": "failed", "date": analysis_date},
-            error=str(exc),
+            result={
+                "status": "failed", "date": analysis_date,
+                "run_id": partial.get("run_id"), "output": partial.get("output", ""),
+                "reasoning": partial.get("reasoning"), "upstream_status": getattr(exc, "status_code", None),
+            },
+            error=f"{exc}{persistence_error}",
             session_id=session_id,
         )
         logger.exception("%s failed: date=%s", method, analysis_date)
         return {"status": "failed", "date": analysis_date}
+    finally:
+        _RUNNING_SEEKHUB_DAILY_DATES.discard(analysis_date)
 
 
 async def seekhub_daily_start(scheduled_time: str = "08:00", timeline_run_id: str | None = None) -> dict[str, str]:

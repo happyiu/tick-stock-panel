@@ -1,11 +1,13 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, ChevronLeft, ChevronRight, RefreshCw, Search } from 'lucide-react'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { ArrowDown, ArrowUp, ChevronsUpDown, ChevronDown, ChevronLeft, ChevronRight, Filter, RefreshCw, Search, X } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { PageHeader } from '@/components/PageHeader'
 import { api, type EtfPoolParams, type EtfPoolRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { fmtAssetPrice, fmtPct, priceColorClass } from '@/lib/format'
+import { ChartSignalPickerDialog } from '@/components/screener/ChartSignalPickerDialog'
+import type { ChartSignalSelection } from '@/lib/signals'
 
 const StockPreviewDialog = lazy(() => import('@/components/StockPreviewDialog').then(m => ({ default: m.StockPreviewDialog })))
 const control = 'h-8 rounded-lg border border-border bg-surface px-3 py-1 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-40'
@@ -14,6 +16,8 @@ export function ETFPool() {
   const [search, setSearch] = useState('')
   const [params, setParams] = useState<EtfPoolParams>({ q: '', category: '', page: 1, pageSize: 20 })
   const [selected, setSelected] = useState<EtfPoolRow | null>(null)
+  const [showSignalPicker, setShowSignalPicker] = useState(false)
+  const [signals, setSignals] = useState<ChartSignalSelection[]>([])
   const [categories, setCategories] = useState<{ name: string; count: number }[]>([])
   useEffect(() => {
     const timer = setTimeout(() => setParams(p => p.q === search.trim() ? p : { ...p, q: search.trim(), page: 1 }), 300)
@@ -24,6 +28,7 @@ export function ETFPool() {
     queryFn: () => api.etfPool(params),
     staleTime: 30_000,
     refetchInterval: 60_000,
+    placeholderData: keepPreviousData,
   })
   const data = query.data
   useEffect(() => {
@@ -36,12 +41,19 @@ export function ETFPool() {
     : params.page >= pages - 3 ? [1, 'start', ...Array.from({ length: 5 }, (_, i) => pages - 4 + i)]
     : [1, 'start', params.page - 1, params.page, params.page + 1, 'end', pages]
   useEffect(() => {
-    if (data && params.page > pages) setParams(p => ({ ...p, page: pages }))
-  }, [data, params.page, pages])
+    if (data && !query.isPlaceholderData && params.page > pages) setParams(p => ({ ...p, page: pages }))
+  }, [data, params.page, pages, query.isPlaceholderData])
   const update = (value: Partial<EtfPoolParams>) => setParams(p => ({ ...p, ...value, page: 1 }))
+  const SortIcon = !params.sortChangePct ? ChevronsUpDown : params.sortChangePct === 'asc' ? ArrowUp : ArrowDown
   const reset = () => {
     setSearch('')
-    setParams(p => ({ ...p, q: '', category: '', page: 1 }))
+    setSignals([])
+    setParams(p => ({ ...p, q: '', category: '', page: 1, sortChangePct: undefined, signalIds: [], signalMatch: 'all' }))
+  }
+  const applySignals = (next: ChartSignalSelection[], match = params.signalMatch ?? 'all') => {
+    setSignals(next)
+    update({ signalIds: next.map(s => s.id), signalMatch: match })
+    setShowSignalPicker(false)
   }
 
   return (
@@ -61,8 +73,21 @@ export function ETFPool() {
             <option value="">全部分类</option>
             {categories.map(c => <option key={c.name} value={c.name}>{c.name}（{c.count}）</option>)}
           </select>
+          <button className={`${control} inline-flex items-center gap-1.5 ${signals.length ? 'text-accent' : ''}`} aria-label="信号筛选" onClick={() => setShowSignalPicker(true)}>
+            <Filter className="h-3.5 w-3.5" />信号筛选{signals.length > 0 && ` (${signals.length})`}
+          </button>
           <button className="text-sm text-muted hover:text-accent" onClick={reset}>重置筛选</button>
         </div>
+        {signals.length > 0 && <div className="flex shrink-0 flex-wrap items-center gap-2 text-xs">
+          <span className="text-secondary">日线 · {params.signalMatch === 'any' ? '任一满足' : '全部满足'}</span>
+          {signals.map(signal => <button key={signal.id} className="inline-flex max-w-full items-center gap-1 rounded-md bg-accent/10 px-2 py-1 text-accent" aria-label={`移除信号 ${signal.name}`} onClick={() => applySignals(signals.filter(s => s.id !== signal.id))}>
+            <span className="truncate">{signal.name}</span><X className="h-3 w-3 shrink-0" />
+          </button>)}
+          <button className="text-muted hover:text-accent" onClick={() => applySignals([])}>清空信号</button>
+          {!query.isPlaceholderData && data?.signal_date && <span className="text-muted">筛选日期：{data.signal_date}</span>}
+          {!query.isPlaceholderData && data?.signal_warnings?.map(warning => <span key={warning} className="text-warning">{warning}</span>)}
+        </div>}
+        {query.isFetching && !query.isPending && <div role="status" className="shrink-0 text-xs text-muted">正在更新筛选结果…</div>}
         {query.isError && <div role="alert" className="shrink-0 rounded-lg border border-down/30 bg-down/5 p-4 text-sm">
           ETF 列表加载失败：{query.error.message}
           <button className="ml-3 text-accent" onClick={() => void query.refetch()}>重试</button>
@@ -72,7 +97,11 @@ export function ETFPool() {
             <thead className="sticky top-0 z-10 border-b border-border bg-elevated text-xs text-muted"><tr>
               <th className="px-4 py-3 font-medium">代码</th><th className="px-4 py-3 font-medium">ETF 名称</th>
               <th className="px-4 py-3 text-right font-medium" title="场内成交价，下方为行情数据日期">最新价</th>
-              <th className="px-4 py-3 text-right font-medium">涨跌幅</th>
+              <th className="px-4 py-3 text-right font-medium" aria-sort={!params.sortChangePct ? 'none' : params.sortChangePct === 'asc' ? 'ascending' : 'descending'}>
+                <button type="button" aria-label="按涨跌幅排序" title="点击切换：降序 / 升序 / 默认顺序" className={`inline-flex items-center gap-1 hover:text-foreground ${params.sortChangePct ? 'text-accent' : ''}`} onClick={() => update({ sortChangePct: !params.sortChangePct ? 'desc' : params.sortChangePct === 'desc' ? 'asc' : undefined })}>
+                  涨跌幅<SortIcon className="h-3 w-3" />
+                </button>
+              </th>
               <th className="px-4 py-3 font-medium">分类</th>
             </tr></thead>
             <tbody className="divide-y divide-border">
@@ -109,6 +138,7 @@ export function ETFPool() {
           </div>
         </div>
       </div>
+      {showSignalPicker && <ChartSignalPickerDialog open period="1d" mode="etf-filter" selected={signals} signalMatch={params.signalMatch ?? 'all'} onClose={() => setShowSignalPicker(false)} onApply={applySignals} />}
       {selected && <Suspense fallback={<div role="status" className="p-4 text-muted">加载 ETF 详情…</div>}>
         <StockPreviewDialog symbol={selected.symbol} name={selected.name} triggerInfo={{ asset_type: 'etf' }} onClose={() => setSelected(null)} navList={data?.rows} onNavigate={(symbol, name) => setSelected({ ...selected, symbol, name: name ?? '' })} />
       </Suspense>}

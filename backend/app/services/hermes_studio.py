@@ -18,9 +18,10 @@ HERMES_STUDIO_MAX_TIMEOUT_MS = 1_800_000
 class HermesStudioError(RuntimeError):
     """Safe upstream error with the HTTP status to expose to the caller."""
 
-    def __init__(self, message: str, *, status_code: int = 502) -> None:
+    def __init__(self, message: str, *, status_code: int = 502, result: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.result = result or {}
 
 
 def normalize_studio_url(value: str) -> str:
@@ -77,6 +78,8 @@ def _response_detail(response: httpx.Response) -> str:
         error = payload.get("error")
         if isinstance(error, dict):
             return str(error.get("message") or error.get("detail") or "")
+        if isinstance(error, str):
+            return error
         return str(payload.get("detail") or payload.get("message") or "")
     return ""
 
@@ -111,6 +114,25 @@ async def _login(client: httpx.AsyncClient, base_url: str, username: str, passwo
     # 登录换来的 token 覆盖环境变量, 避免每一轮重复登录。
     secrets_store.save({"hermes_studio_token": token})
     return token
+
+
+def _chat_result(payload: dict, session_id: str | None, include_events: bool) -> dict[str, Any]:
+    """Only retain the chat result fields, including on non-200 responses."""
+    returned_session = payload.get("session_id")
+    output = payload.get("output")
+    if isinstance(output, list):
+        output = "".join(
+            str(block.get("text") or block.get("content") or "")
+            if isinstance(block, dict) else str(block)
+            for block in output
+        )
+    return {
+        "session_id": returned_session.strip() if isinstance(returned_session, str) and returned_session.strip() else session_id,
+        "run_id": payload.get("run_id"),
+        "output": str(output or ""),
+        "reasoning": payload.get("reasoning"),
+        "events": payload.get("events") if include_events else None,
+    }
 
 
 async def run_chat(
@@ -180,9 +202,15 @@ async def run_chat(
                     json=payload,
                 )
     except httpx.TimeoutException as exc:
-        raise HermesStudioError("Hermes Studio 对话超时", status_code=504) from exc
+        raise HermesStudioError("Hermes Studio 对话超时", status_code=504, result={"session_id": session_id}) from exc
     except httpx.RequestError as exc:
-        raise HermesStudioError("Hermes Studio 连接失败", status_code=503) from exc
+        raise HermesStudioError("Hermes Studio 连接失败", status_code=503, result={"session_id": session_id}) from exc
+
+    try:
+        payload_result = response.json()
+    except ValueError:
+        payload_result = None
+    partial = _chat_result(payload_result if isinstance(payload_result, dict) else {}, session_id, include_events)
 
     if response.status_code != 200:
         detail = _safe_detail(response)
@@ -194,28 +222,14 @@ async def run_chat(
             message = "Hermes Studio 对话超时"
         else:
             message = f"Hermes Studio 请求失败 ({response.status_code})"
-        raise HermesStudioError(f"{message}{': ' + detail if detail else ''}", status_code=response.status_code)
+        raise HermesStudioError(f"{message}{': ' + detail if detail else ''}", status_code=response.status_code, result=partial)
 
-    try:
-        result = response.json()
-    except ValueError as exc:
-        raise HermesStudioError("Hermes Studio 返回不是有效 JSON", status_code=502) from exc
-    if not isinstance(result, dict) or result.get("ok") is not True:
-        raise HermesStudioError("Hermes Studio 返回失败结果", status_code=502)
-    returned_session_id = str(result.get("session_id") or "").strip()
-    if not returned_session_id:
-        raise HermesStudioError("Hermes Studio 未返回 session_id", status_code=502)
-    output = result.get("output")
-    if isinstance(output, list):
-        output = "".join(
-            str(block.get("text") or block.get("content") or "")
-            if isinstance(block, dict) else str(block)
-            for block in output
-        )
-    return {
-        "session_id": returned_session_id,
-        "run_id": result.get("run_id"),
-        "output": str(output or ""),
-        "reasoning": result.get("reasoning"),
-        "events": result.get("events") if include_events else None,
-    }
+    if payload_result is None:
+        raise HermesStudioError("Hermes Studio 返回不是有效 JSON", status_code=502, result=partial)
+    if not isinstance(payload_result, dict) or payload_result.get("ok") is not True:
+        raise HermesStudioError("Hermes Studio 返回失败结果", status_code=502, result=partial)
+    # A success must acknowledge its session; do not mistake our reserved ID for an acknowledgement.
+    returned_session = payload_result.get("session_id")
+    if not isinstance(returned_session, str) or not returned_session.strip():
+        raise HermesStudioError("Hermes Studio 未返回 session_id", status_code=502, result=partial)
+    return partial

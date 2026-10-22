@@ -50,6 +50,7 @@ from app.indicators.pipeline import (
     ENRICHED_STORAGE_COLS,
     INDICATOR_COLUMNS,
     LIMIT_SIGNAL_OUTPUTS,
+    get_formula_signal_definitions,
     get_signal_dependencies,
 )
 from app.strategy.engine import StrategyDataContext, StrategyDef, StrategyEngine
@@ -123,6 +124,11 @@ def _merge_resolved_feature_plans(
         execution_backend="matrix_native",
         fundamental_columns=_union("fundamental_columns"),
     )
+
+
+def _formula_history_bars(signals: set[str]) -> int:
+    from app.strategy.formula_signals import required_history
+    return required_history(get_formula_signal_definitions(), signals)
 
 
 class StrategyDependencyResolver:
@@ -210,7 +216,8 @@ class StrategyDependencyResolver:
         plan = FeaturePlan(
             required_features=frozenset(required_features),
             required_signals=frozenset(required_signals),
-            warmup_bars=max(60, int(strategy.lookback_days or 1), scoring_warmup_bars(scoring)),
+            warmup_bars=max(60, int(strategy.lookback_days or 1), scoring_warmup_bars(scoring),
+                            _formula_history_bars(required_signals)),
         )
         return ResolvedFeaturePlan(
             base_columns=base_columns,

@@ -1,7 +1,12 @@
 """Read-only ETF catalog over the repository's current instrument snapshot."""
+import json
 from typing import Literal
 
 import polars as pl
+
+from app.market_time import cn_now
+from app.services.screener import ScreenerService
+from app.strategy import custom_signals
 
 EtfCategory = Literal["跨境", "债券", "商品", "货币", "宽基", "策略风格", "行业主题", "其他"]
 
@@ -17,7 +22,34 @@ _CATEGORY_RULES = (
 )
 
 
-def list_etfs(repo, *, q: str = "", category: str = "", exchange: str = "", page: int = 1, page_size: int = 20) -> dict:
+def _filter_signals(repo, df: pl.DataFrame, signal_ids: list[str], match: str) -> tuple[pl.DataFrame, str | None, list[str]]:
+    from app.indicators.pipeline import SIGNAL_DEPENDENCIES
+
+    if len(signal_ids) > 32:
+        raise ValueError("单次最多选择 32 个信号")
+    selected = list(dict.fromkeys(signal_ids))
+    definitions = custom_signals.load_all(repo.store.data_dir)
+    allowed = set(SIGNAL_DEPENDENCIES) | {
+        custom_signals.column_name(s["id"]) for s in definitions
+        if s.get("enabled") is not False and s.get("timeframe", "daily") == "daily"
+    }
+    invalid = [s for s in selected if s not in allowed]
+    if invalid:
+        raise ValueError(f"未知、未启用或不适用于 ETF 日线的信号: {', '.join(invalid)}")
+    frame, latest = ScreenerService(repo, "etf").load_latest_signal_frame(
+        selected, json.dumps(definitions, sort_keys=True),
+    )
+    if latest is None:
+        return df.head(0), None, ["暂无 ETF 日线数据, 请先同步日线数据"]
+    conditions = [pl.col(s).fill_null(False) for s in selected]
+    mask = pl.all_horizontal(conditions) if match == "all" else pl.any_horizontal(conditions)
+    matches = frame.filter(mask).select("symbol").unique()
+    now = cn_now()
+    warnings = ["盘中信号, 可能变化"] if latest == now.date() and now.hour < 15 else []
+    return df.join(matches, on="symbol", how="semi"), latest.isoformat(), warnings
+
+
+def list_etfs(repo, *, q: str = "", category: str = "", exchange: str = "", page: int = 1, page_size: int = 20, sort_change_pct: Literal["asc", "desc"] | None = None, signal_ids: list[str] | None = None, signal_match: Literal["all", "any"] = "all") -> dict:
     source = repo.get_etf_instruments()
     df = pl.DataFrame(schema={"symbol": pl.String, "name": pl.String})
     if not source.is_empty() and "symbol" in source.columns:
@@ -47,7 +79,12 @@ def list_etfs(repo, *, q: str = "", category: str = "", exchange: str = "", page
         df = df.filter(pl.col("category") == category)
     if exchange:
         df = df.filter(pl.col("exchange") == exchange)
-    page_df = df.sort("symbol").slice(min((page - 1) * page_size, df.height), page_size)
+    signal_date, signal_warnings = None, []
+    if signal_ids:
+        df, signal_date, signal_warnings = _filter_signals(repo, df, signal_ids, signal_match)
+    offset = min((page - 1) * page_size, df.height)
+    # 涨跌幅排序需先取得全部筛选标的的快照再分页, 默认路径仍只查当前页。
+    page_df = df if sort_change_pct else df.sort("symbol").slice(offset, page_size)
     if not page_df.is_empty():
         quotes = repo.get_etf_quote_snapshot(page_df["symbol"].to_list())
         if not quotes.is_empty():
@@ -55,8 +92,13 @@ def list_etfs(repo, *, q: str = "", category: str = "", exchange: str = "", page
     for column, dtype in (("last_price", pl.Float64), ("change_pct", pl.Float64), ("quote_date", pl.String)):
         if column not in page_df.columns:
             page_df = page_df.with_columns(pl.lit(None, dtype=dtype).alias(column))
+    if sort_change_pct:
+        page_df = page_df.sort(
+            ["change_pct", "symbol"], descending=[sort_change_pct == "desc", False], nulls_last=True,
+        ).slice(offset, page_size)
     return {
         "rows": page_df.to_dicts(),
         "total": df.height, "catalog_total": catalog_total, "categories": categories,
         "page": page, "page_size": page_size,
+        "signal_date": signal_date, "signal_warnings": signal_warnings,
     }

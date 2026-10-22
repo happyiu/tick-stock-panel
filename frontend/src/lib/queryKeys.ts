@@ -52,6 +52,7 @@ export const QK = {
   minuteBatch:          (symbols: string) => ['minute-batch', symbols] as const,
   instrumentSearch:     (q: string, assetTypes?: string) => ['instrument-search', q, assetTypes ?? 'stock'] as const,
   etfPool:              (params: EtfPoolParams) => ['etf-pool', params] as const,
+  etfPools:             ['etf-pool'] as const,
 
   // Screener
   screener:             ['screener'] as const,
@@ -197,4 +198,10 @@ export const SSE_INVALIDATE_PREFIXES = [
   // 概念/行业分析的全市场快照 (#419): 后端读最新日内缓存, 行情更新后需重取,
   // 否则停留页面时板块聚合数值一直停留旧值。仅两页打开时才实际发请求。
   'market-snapshot',
+] as const
+
+// 信号定义变更会同时改变图表标记、筛选结果和策略引用。
+export const SIGNAL_INVALIDATE_PREFIXES = [
+  'custom-signals', 'etf-pool', 'signal-chart-markers', 'strategy-signals',
+  'screener', 'screener-cached', 'screener-strategies', 'strategy-detail',
 ] as const

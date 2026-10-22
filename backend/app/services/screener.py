@@ -33,14 +33,14 @@ _THIRTY_MINUTE_BARS_PER_SESSION = 8
 _THIRTY_MINUTE_MIN_WARMUP_BARS = 120
 
 
-def _compute_strategy_indicators(frame: pl.DataFrame) -> pl.DataFrame:
+def _compute_strategy_indicators(frame: pl.DataFrame, period: str = "1d") -> pl.DataFrame:
     """对一个已经按 symbol/date 排序的周期 OHLCV 帧计算完整策略指标。"""
     if frame.is_empty():
         return frame
     from app.indicators.pipeline import compute_indicators, compute_signals
 
     frame = compute_indicators(frame.sort(["symbol", "date"]), assume_sorted=True)
-    return compute_signals(frame)
+    return compute_signals(frame, period=period)
 
 
 def _aggregate_weekly_strategy_frame(df: pl.DataFrame, as_of: date) -> pl.DataFrame:
@@ -125,7 +125,7 @@ def _aggregate_weekly_strategy_frame(df: pl.DataFrame, as_of: date) -> pl.DataFr
         .drop("_period")
         .sort(["symbol", "date"])
     )
-    return _compute_strategy_indicators(aggregated)
+    return _compute_strategy_indicators(aggregated, "1w")
 
 
 def _prepare_30m_strategy_frame(df: pl.DataFrame) -> pl.DataFrame:
@@ -140,7 +140,7 @@ def _prepare_30m_strategy_frame(df: pl.DataFrame) -> pl.DataFrame:
     # kline_periods 为图表使用的 date 保留了字符串桶标签; 策略需要可比较的
     # Datetime, 以便指标排序、历史过滤和按交易日汇总命中。
     aggregated = aggregated.with_columns(pl.col("period_end").alias("date"))
-    return _compute_strategy_indicators(aggregated)
+    return _compute_strategy_indicators(aggregated, "30m")
 
 
 def enriched_history_days(data_dir, asset_type: str = "stock", as_of: date | None = None) -> int:
@@ -162,7 +162,7 @@ def enriched_history_days(data_dir, asset_type: str = "stock", as_of: date | Non
 
 
 # ── 进程级历史数据缓存 (避免 run_all 每次重新扫描 parquet + 计算指标) ──
-_history_cache: dict[tuple[str, date, int], tuple[float, pl.DataFrame]] = {}
+_history_cache: dict[tuple, tuple[float, pl.DataFrame]] = {}
 _HISTORY_CACHE_TTL = 120.0  # 秒
 
 # load_prior_consecutive 最多回看多少个已存在的日分区 (缺列时继续往前找的上限)
@@ -327,7 +327,7 @@ class ScreenerService:
         # turnover_rate 是 enriched 存储列, 必须随行透传: 否则即时计算后该列
         # 丢失, 自定义 SQL 用它做条件会 Binder Error 被吞成空结果 (#187)
         read_cols = ["symbol", "date", "open", "high", "low", "close", "volume",
-                     "amount", "raw_close", "raw_high", "raw_low", "turnover_rate"]
+                     "amount", "raw_close", "raw_high", "raw_low", "turnover_rate", "quote_change_pct"]
 
         try:
             lf = (
@@ -371,7 +371,30 @@ class ScreenerService:
 
         return df_result
 
-    def _load_enriched_history(self, target_date: date, lookback_days: int) -> pl.DataFrame:
+    def load_latest_signal_frame(self, signal_ids: list[str], definition_version: str) -> tuple[pl.DataFrame, date | None]:
+        """批量读取最新日线信号, 自定义条件在历史序列上计算后再截取最新日。"""
+        from app.market_time import cn_today
+
+        frame, latest = self.repo.get_enriched_latest_asset(self.asset_type)
+        if latest is None or frame.is_empty():
+            return pl.DataFrame(), None
+        if latest > cn_today():
+            raise ValueError("最新日线日期晚于当前日期, 无法进行信号筛选")
+        if any(s.startswith("csg_") or s not in frame.columns for s in signal_ids):
+            from app.indicators.pipeline import get_formula_signal_definitions
+            from app.strategy.formula_signals import required_history
+            version = (str(self.repo.store.data_dir), self.repo.get_matrix_data_generation(self.asset_type), definition_version)
+            # 250 根指标预热 + 自定义信号最多 60 根偏移。
+            frame = self._load_enriched_history(latest, max(310, required_history(get_formula_signal_definitions(), set(signal_ids))), cache_version=version)
+        from app.indicators.pipeline import get_formula_signal_definitions
+        from app.strategy.formula_signals import inject
+        frame = inject(frame, get_formula_signal_definitions(), set(signal_ids), period="1d")
+        missing = [s for s in signal_ids if s not in frame.columns]
+        if missing or "date" not in frame.columns:
+            raise ValueError(f"所选信号无法计算, 缺少日线数据或依赖字段: {', '.join(missing or signal_ids)}")
+        return frame.filter(pl.col("date").cast(pl.Date) == latest).select("symbol", *signal_ids), latest
+
+    def _load_enriched_history(self, target_date: date, lookback_days: int, *, cache_version: tuple | None = None) -> pl.DataFrame:
         """读取目标日期之前的基础行情数据, 供历史窗口策略使用。
 
         优先从 repo 内存缓存获取 (启动时已预计算), 命中时 0ms。
@@ -394,7 +417,15 @@ class ScreenerService:
                 return cached
 
         # 优先级 2: 进程级 history_cache (之前的 TTL 缓存)
+        if cache_version is None:
+            from app.indicators.pipeline import get_formula_signal_definitions
+            formulas = get_formula_signal_definitions()
+            if formulas:
+                import json
+                cache_version = (str(self.repo.store.data_dir), self.repo.get_matrix_data_generation(self.asset_type), json.dumps(formulas, sort_keys=True))
         cache_key = (self.asset_type, target_date, lookback_days)
+        if cache_version is not None:
+            cache_key += cache_version
         now = time.monotonic()
         ttl_cached = _history_cache.get(cache_key)
         if ttl_cached is not None:
@@ -423,7 +454,7 @@ class ScreenerService:
         enriched_dir = self.repo.store.data_dir / self._enriched_dirname
         # 同 _compute_enriched_full: turnover_rate 存储列随行透传 (#187)
         read_cols = ["symbol", "date", "open", "high", "low", "close", "volume",
-                     "amount", "raw_close", "raw_high", "raw_low", "turnover_rate"]
+                     "amount", "raw_close", "raw_high", "raw_low", "turnover_rate", "quote_change_pct"]
 
         try:
             lf = (
@@ -659,6 +690,9 @@ class ScreenerService:
         history = None
         if history_bars > 1:
             history = self._load_enriched_history(as_of, history_bars)
+            from app.indicators.pipeline import get_formula_signal_definitions
+            if get_formula_signal_definitions() and not history.is_empty():
+                current = history.filter(pl.col("date").cast(pl.Date) == as_of)
         return StrategyDataContext(
             asset_type=self.asset_type,
             timeframe=timeframe,

@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, Loader2, Plus, Save, Search, Sparkles, X } from 'lucide-react'
 import { api, type CustomSignal, type CustomSignalCondition, type CustomSignalFieldGroup } from '@/lib/api'
-import { QK } from '@/lib/queryKeys'
+import { QK, SIGNAL_INVALIDATE_PREFIXES } from '@/lib/queryKeys'
 import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 
 interface Props {
@@ -17,9 +17,10 @@ interface Props {
 
 // 字符串运算符的中文标签 (数值运算符直接显示符号)
 const OP_LABELS: Record<string, string> = { contains: '包含' }
+const ATTACK_FORMULA = 'angel := EMA(CLOSE, 2);\ndevil := EMA(CLOSE + 20 * SLOPE(CLOSE, 21), 42);\nattack := CROSS(angel, devil);'
 
 const emptySignal = (kind: CustomSignal['kind'] = 'exit'): CustomSignal => ({
-  id: '', name: '', kind, enabled: true,
+  id: '', name: '', kind, enabled: true, definition_type: 'conditions', min_history_bars: 100,
   conditions: [{ left: 'close', op: '>', right: 'field:ma20', leftDays: 0, rightDays: 0 }],
 })
 
@@ -30,6 +31,11 @@ export function CustomSignalDialog({ open, signal, defaultKind = 'exit', onClose
 
   const [draft, setDraft] = useState<CustomSignal>(() => emptySignal(defaultKind))
   const [error, setError] = useState('')
+  const [formulaValidation, setFormulaValidation] = useState<{ formula: string; variables: string[] } | null>(null)
+  const [validating, setValidating] = useState(false)
+  const validationRequest = useRef(0)
+  const formulaMode = draft.definition_type === 'formula'
+  const formulaValid = formulaValidation !== null && formulaValidation.formula === draft.formula && formulaValidation.variables.includes(draft.output_var ?? '')
 
   // AI 生成条件
   const [aiOpen, setAiOpen] = useState(false)
@@ -49,10 +55,31 @@ export function CustomSignalDialog({ open, signal, defaultKind = 'exit', onClose
 
   useEffect(() => {
     if (!open) return
-    setDraft(signal ? { ...signal, conditions: signal.conditions.map(c => ({ ...c })) } : emptySignal(defaultKind))
+    setDraft(signal ? { ...signal, conditions: (signal.conditions ?? []).map(c => ({ ...c })) } : emptySignal(defaultKind))
     setError('')
+    validationRequest.current += 1
+    setFormulaValidation(null); setValidating(false)
     setAiOpen(false); setAiDesc(''); setAiError(''); setAiLoading(false)
   }, [open, signal, defaultKind])
+
+  const changeFormula = (formula: string) => {
+    validationRequest.current += 1
+    setFormulaValidation(null); setValidating(false); setError('')
+    setDraft(d => ({ ...d, formula }))
+  }
+  const validateFormula = async () => {
+    const sequence = ++validationRequest.current
+    const formula = draft.formula ?? ''
+    setValidating(true); setError(''); setFormulaValidation(null)
+    try {
+      const result = await api.customSignalValidate(formula)
+      if (sequence === validationRequest.current) setFormulaValidation({ formula, variables: result.variables })
+    } catch (err) {
+      if (sequence === validationRequest.current) setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      if (sequence === validationRequest.current) setValidating(false)
+    }
+  }
 
   // 打开时检查一次 AI 是否已配置（复用策略构建器逻辑）
   useEffect(() => {
@@ -88,6 +115,10 @@ export function CustomSignalDialog({ open, signal, defaultKind = 'exit', onClose
       if (!d.id.trim()) throw new Error('请输入信号标识')
       if (!/^[a-z0-9_]{1,40}$/.test(d.id)) throw new Error('标识仅允许小写字母、数字、下划线（1-40字符）')
       if (!d.name.trim()) throw new Error('请输入信号名称')
+      if (formulaMode) {
+        if (!formulaValid) throw new Error('请先校验公式并选择有效输出变量')
+        return api.customSignalSave({ ...d, conditions: [], timeframe: 'daily' })
+      }
       if (d.conditions.length === 0) throw new Error('至少需要一个条件')
       for (const c of d.conditions) {
         if (!c.left || !c.op || c.right === '') throw new Error('条件填写不完整')
@@ -95,7 +126,7 @@ export function CustomSignalDialog({ open, signal, defaultKind = 'exit', onClose
       return api.customSignalSave(d)
     },
     onSuccess: res => {
-      qc.invalidateQueries({ queryKey: QK.customSignals })
+      qc.invalidateQueries({ predicate: query => SIGNAL_INVALIDATE_PREFIXES.some(prefix => query.queryKey[0] === prefix) })
       onSaved?.(res.signal)
       onClose()
     },
@@ -152,10 +183,16 @@ export function CustomSignalDialog({ open, signal, defaultKind = 'exit', onClose
             </div>
 
             <div className="flex-1 overflow-y-auto px-5 py-5 space-y-5">
+              <div role="group" aria-label="信号创建方式" className="flex gap-2">
+                {(['conditions', 'formula'] as const).map(mode => <button key={mode} type="button" aria-pressed={(draft.definition_type ?? 'conditions') === mode} onClick={() => { setDraft(d => ({ ...d, definition_type: mode })); setError(''); setAiOpen(false) }} className={`rounded-btn border px-3 py-1.5 text-xs ${(draft.definition_type ?? 'conditions') === mode ? 'border-accent/40 bg-accent/10 text-accent' : 'border-border text-secondary'}`}>
+                  {mode === 'formula' ? '公式创建' : '条件创建'}
+                </button>)}
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <label className="space-y-1.5">
                   <span className="text-[11px] text-muted">信号标识</span>
                   <input
+                    aria-label="信号标识"
                     value={draft.id}
                     disabled={editing}
                     onChange={e => setDraft(d => ({ ...d, id: e.target.value.replace(/[^a-z0-9_]/g, '') }))}
@@ -177,7 +214,27 @@ export function CustomSignalDialog({ open, signal, defaultKind = 'exit', onClose
                 </label>
               </div>
 
-              <div className="space-y-2">
+              {formulaMode ? <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs text-secondary">通达信公式 · 日线 / 30F</span>
+                  <button type="button" className="text-xs text-accent" onClick={() => {
+                    changeFormula(ATTACK_FORMULA)
+                    setDraft(d => ({ ...d, name: d.name || '天使魔鬼·进攻', kind: 'entry', output_var: 'attack', min_history_bars: 100 }))
+                  }}>填入天使魔鬼·进攻示例</button>
+                </div>
+                <textarea aria-label="信号公式" spellCheck={false} maxLength={32768} rows={8} value={draft.formula ?? ''} onChange={e => changeFormula(e.target.value)} placeholder="signal := CROSS(MA(CLOSE,5), MA(CLOSE,20));" className="w-full resize-y rounded-btn border border-border bg-base p-3 font-mono text-xs leading-6 text-foreground outline-none focus:border-accent/50" />
+                <div className="flex flex-wrap items-end gap-3">
+                  <button type="button" onClick={() => void validateFormula()} disabled={validating || !draft.formula?.trim()} className="h-8 rounded-btn border border-accent/40 px-3 text-xs text-accent disabled:opacity-40">{validating ? '校验中…' : '校验公式'}</button>
+                  <label className="min-w-32 space-y-1 text-xs text-secondary"><span className="block">输出变量</span>
+                    <select aria-label="输出变量" value={formulaValidation?.variables.includes(draft.output_var ?? '') ? draft.output_var : ''} onChange={e => setDraft(d => ({ ...d, output_var: e.target.value }))} disabled={!formulaValidation} className="h-8 w-full rounded-btn border border-border bg-base px-2 text-foreground disabled:opacity-40">
+                      <option value="">校验后选择输出变量</option>{formulaValidation?.variables.map(name => <option key={name} value={name}>{name}</option>)}
+                    </select>
+                  </label>
+                  <label className="space-y-1 text-xs text-secondary"><span className="block">最低历史根数</span><input aria-label="最低历史根数" type="number" min={1} max={20000} value={draft.min_history_bars ?? 100} onChange={e => setDraft(d => ({ ...d, min_history_bars: Number(e.target.value) }))} className="h-8 w-28 rounded-btn border border-border bg-base px-2 text-foreground" /></label>
+                </div>
+                {formulaValidation && <p role="status" className="text-xs text-accent">公式校验通过，请确认输出变量。</p>}
+                <p className="text-[11px] leading-5 text-muted">输出非零表示命中，零表示未命中；历史不足或数值无效时不可计算。支持项目现有的 EMA、MA、SLOPE、CROSS、REF 等函数，绘图语句不会作为信号输出。盘中未收盘 K 线上的信号可能变化。</p>
+              </div> : <div className="space-y-2">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[11px] text-muted">条件（多条件为「且」关系）</span>
                   <div className="flex items-center gap-2 shrink-0">
@@ -267,14 +324,14 @@ export function CustomSignalDialog({ open, signal, defaultKind = 'exit', onClose
                 <p className="text-[10px] text-muted/60 px-1">
                   每个操作数左侧的 <span className="text-foreground/70">最新</span> 按钮可点击切换为「前N日」(取 N 个交易日前的值)。例:收盘价(最新) &gt; 收盘价(前1日) = 上涨。带偏移的条件仅盘后/回测生效, 盘中实时跳过。
                 </p>
-              </div>
+              </div>}
 
               {error && <div className="rounded-btn border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger">{error}</div>}
             </div>
 
             <div className="flex justify-end gap-2 border-t border-border/50 px-5 py-4">
               <button onClick={onClose} className="px-4 py-1.5 rounded-btn bg-elevated text-secondary text-xs">取消</button>
-              <button onClick={() => save.mutate()} disabled={save.isPending} className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-btn bg-amber-500/90 text-white text-xs font-medium disabled:opacity-50">
+              <button aria-label="保存信号" onClick={() => save.mutate()} disabled={save.isPending || (formulaMode && !formulaValid)} className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-btn bg-amber-500/90 text-white text-xs font-medium disabled:opacity-50">
                 <Save className="h-3.5 w-3.5" />保存
               </button>
             </div>

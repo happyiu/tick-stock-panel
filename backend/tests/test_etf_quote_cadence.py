@@ -269,3 +269,45 @@ def test_success_times_are_scoped_and_failed_prices_do_not_advance_them(monkeypa
     assert service._scope_fetch_times["etf_pool_last_fetch_ms"] == 110_000
     assert service._scope_fetch_times["etf_watchlist_last_fetch_ms"] == 120_000
     assert service._symbol_count == 1
+
+
+@pytest.mark.parametrize(('extra', 'expected'), [
+    ({'change_pct': -.02, 'prev_close': 1.5}, -.02),
+    ({'prev_close': 1.5}, -.02),
+    ({'change_pct': float('nan'), 'prev_close': 1.5}, -.02),
+    ({'change_pct': 0.}, 0.),
+    ({'prev_close': 0.}, None),
+    ({}, None),
+])
+def test_etf_daily_return_uses_quote_reference_instead_of_stale_history(tmp_path, monkeypatch, extra, expected):
+    today = cn_today()
+    repo = KlineRepository(DataStore(tmp_path))
+    repo._etf_instruments_cache = pl.DataFrame({'symbol': sorted(ETFS), 'name': ['ETF A', 'ETF B']})
+    repo.append_etf_daily(pl.DataFrame([
+        _daily('159992.SZ', today - timedelta(days=5), 1.),
+        _daily('510300.SH', today - timedelta(days=1), 2.),
+    ]))
+    service = qs.QuoteService()
+    service.set_repo(repo)
+    monkeypatch.setattr(qs, '_persist_last_fetch', lambda *a: None)
+    monkeypatch.setattr(service, '_update_volume_delta', lambda *a: None)
+    monkeypatch.setattr(service, '_broadcast_quote_updated', lambda: None)
+    rows = []
+    for symbol, price in [('159992.SZ', 1.47), ('510300.SH', 1.98)]:
+        record = _daily(symbol, today, price)
+        record['last_price'] = record.pop('close')
+        record.pop('date')
+        if symbol == '159992.SZ':
+            record.update(extra)
+        rows.append(record)
+    service._process_full_market_records(rows, t0=0., now_ts=0.)
+    cache, _ = repo.get_enriched_latest_asset('etf', refresh=False)
+    value = cache.filter(pl.col('symbol') == '159992.SZ')['change_pct'][0]
+    assert value is None if expected is None else value == pytest.approx(expected)
+    for instance in (repo, KlineRepository(DataStore(tmp_path))):
+        quotes = {r['symbol']: r for r in instance.get_etf_quote_snapshot(sorted(ETFS)).to_dicts()}
+        value = quotes['159992.SZ']['change_pct']
+        assert value is None if expected is None else value == pytest.approx(expected)
+        if expected is not None:
+            warmed, _ = instance.get_enriched_latest_asset('etf')
+            assert warmed.filter(pl.col('symbol') == '159992.SZ')['change_pct'][0] == pytest.approx(expected)

@@ -269,8 +269,15 @@ def get_etf_pool(
     exchange: Annotated[Literal["SH", "SZ"] | None, Query()] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
+    sort_change_pct: Annotated[Literal["asc", "desc"] | None, Query()] = None,
+    signal_ids: str = Query("", max_length=4096),
+    signal_match: Literal["all", "any"] = Query("all"),
 ):
-    return list_etfs(request.app.state.repo, q=q, category=category or "", exchange=exchange or "", page=page, page_size=page_size)
+    selected_ids = [s.strip() for s in signal_ids.split(",") if s.strip()]
+    try:
+        return list_etfs(request.app.state.repo, q=q, category=category or "", exchange=exchange or "", page=page, page_size=page_size, sort_change_pct=sort_change_pct, signal_ids=selected_ids, signal_match=signal_match)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/instruments/search")

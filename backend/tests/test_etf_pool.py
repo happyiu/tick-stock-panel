@@ -55,7 +55,7 @@ def test_api_validation_and_repository_failure():
         response = client.get("/api/kline/etf-pool", params={"category": "商品", "page_size": 1})
         assert response.status_code == 200
         assert response.json()["rows"][0]["symbol"] == "518880.SH"
-        for params in ({"page": 0}, {"page_size": 201}, {"exchange": "UNKNOWN"}, {"category": "INVALID"}):
+        for params in ({"page": 0}, {"page_size": 201}, {"exchange": "UNKNOWN"}, {"category": "INVALID"}, {"sort_change_pct": "INVALID"}):
             assert client.get("/api/kline/etf-pool", params=params).status_code == 422
         def fail():
             raise RuntimeError("unavailable")
@@ -97,3 +97,38 @@ def test_quote_batch_is_limited_to_current_page_and_missing_values_stay_null():
         payload = client.get("/api/kline/etf-pool", params={"page_size": 2}).json()
         assert payload["rows"][1]["last_price"] == 1.2345
         assert payload["rows"][1]["change_pct"] == .0123
+
+
+@pytest.mark.parametrize("direction", ["asc", "desc"])
+def test_change_sort_precedes_pagination_with_nulls_last_and_symbol_tiebreak(direction):
+    repo = Repo()
+    calls = []
+    def quotes(symbols):
+        calls.append(symbols)
+        return pl.DataFrame({
+            "symbol": ["159605.SZ", "510300.SH", "511010.SH", "518880.SH", "512480.SH"],
+            "change_pct": [.02, -.03, 0., .02, None],
+        })
+    repo.get_etf_quote_snapshot = quotes
+    expected = (["510300.SH", "511010.SH", "159605.SZ", "518880.SH"] if direction == "asc"
+                else ["159605.SZ", "518880.SH", "511010.SH", "510300.SH"])
+    expected += ["159001.SZ", "159999.SZ", "512480.SH"]
+    app = FastAPI()
+    app.include_router(router)
+    app.state.repo = repo
+    with TestClient(app) as client:
+        rows = []
+        for page in range(1, 5):
+            response = client.get("/api/kline/etf-pool", params={"sort_change_pct": direction, "page_size": 2, "page": page})
+            assert response.status_code == 200
+            rows.extend(response.json()["rows"])
+        assert [row["symbol"] for row in rows] == expected
+        assert all(set(call) == set(expected) for call in calls)
+        filtered = client.get("/api/kline/etf-pool", params={"sort_change_pct": direction, "category": "债券"}).json()
+        assert [row["symbol"] for row in filtered["rows"]] == ["511010.SH"]
+        assert calls[-1] == ["511010.SH"]
+
+
+def test_change_sort_handles_empty_and_missing_quotes():
+    assert list_etfs(Repo(), sort_change_pct="desc", q="不存在")["rows"] == []
+    assert list_etfs(Repo(), sort_change_pct="asc")["rows"] == list_etfs(Repo())["rows"]

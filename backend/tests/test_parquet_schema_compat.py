@@ -71,6 +71,7 @@ def test_partitioned_enriched_scan_tolerates_added_quote_ts(tmp_path):
     common_new["date"] = [date(2026, 7, 9)]
     common_new["volume"] = [1200]
     common_new["quote_ts"] = [1783560600000]
+    common_new["quote_change_pct"] = [-.0123]
     pl.DataFrame(common_new).write_parquet(new_part)
 
     df = scan_enriched_parquet(str(base / "**" / "*.parquet")).sort("date").collect()
@@ -79,3 +80,4 @@ def test_partitioned_enriched_scan_tolerates_added_quote_ts(tmp_path):
     assert df.schema["volume"] == pl.Float64
     assert df.schema["quote_ts"] == pl.Int64
     assert df["quote_ts"].to_list() == [None, 1783560600000]
+    assert df["quote_change_pct"].to_list() == [None, -.0123]

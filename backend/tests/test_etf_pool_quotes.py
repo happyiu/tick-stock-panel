@@ -43,7 +43,7 @@ def test_cache_overrides_only_same_or_newer_dates(repo):
     repo._etf_enriched_cache = pl.DataFrame({
         'symbol': ['510300.SH', '159605.SZ'],
         'date': [date(2026, 9, 22), date(2026, 9, 18)],
-        'raw_close': [8.1234, 999.], 'close': [1.2, 999.], 'change_pct': [.0234, .9],
+        'raw_close': [8.1234, 999.], 'close': [1.2, 999.], 'change_pct': [.0234, .9], 'quote_change_pct': [.0234, .9],
     })
     rows = {r['symbol']: r for r in repo.get_etf_quote_snapshot(['510300.SH', '159605.SZ']).to_dicts()}
     assert rows['510300.SH']['last_price'] == 8.1234
@@ -80,3 +80,21 @@ def test_missing_previous_partition_row_does_not_become_a_multi_day_return(repo)
     row = repo.get_etf_quote_snapshot(['510300.SH']).to_dicts()[0]
     assert row['last_price'] == 12.
     assert row['change_pct'] is None
+
+
+def test_cached_multiday_change_does_not_override_missing_daily_baseline(repo):
+    write_day(repo, '2026-09-18', {'symbol': ['510300.SH'], 'close': [10.], 'raw_close': [10.]})
+    write_day(repo, '2026-09-21', {'symbol': ['159605.SZ'], 'close': [5.], 'raw_close': [5.]})
+    write_day(repo, '2026-09-22', {'symbol': ['510300.SH'], 'close': [12.], 'raw_close': [12.]})
+    repo._etf_enriched_cache_date = date(2026, 9, 22)
+    repo._etf_enriched_cache = pl.DataFrame({
+        'symbol': ['510300.SH'], 'raw_close': [12.], 'close': [12.], 'change_pct': [.2],
+    })
+    assert repo.get_etf_quote_snapshot(['510300.SH']).to_dicts()[0]['change_pct'] is None
+
+
+def test_source_daily_change_survives_restart_without_local_previous_day(repo):
+    write_day(repo, '2026-09-22', {
+        'symbol': ['510300.SH'], 'close': [12.], 'raw_close': [12.], 'quote_change_pct': [-.02],
+    })
+    assert repo.get_etf_quote_snapshot(['510300.SH']).to_dicts()[0]['change_pct'] == -.02

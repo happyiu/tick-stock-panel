@@ -53,6 +53,15 @@ logger = logging.getLogger(__name__)
 # 增量路径每秒级执行, 若不缓存则每轮 glob + 读所有 JSON + 重编译表达式。
 _custom_signal_exprs: dict[str, pl.Expr] | None = None
 _custom_signal_exprs_today: dict[str, pl.Expr] | None = None
+_formula_signal_definitions: list[dict] | None = None
+
+
+def get_formula_signal_definitions() -> list[dict]:
+    global _formula_signal_definitions
+    if _formula_signal_definitions is None:
+        from app.strategy import custom_signals, formula_signals
+        _formula_signal_definitions = formula_signals.active(custom_signals.load_all(settings.data_dir))
+    return _formula_signal_definitions
 
 
 def _get_custom_signal_exprs() -> dict[str, pl.Expr]:
@@ -89,9 +98,10 @@ def _get_custom_signal_exprs_today() -> dict[str, pl.Expr]:
 
 def invalidate_custom_signals() -> None:
     """失效自定义信号缓存（保存/删除信号后调用，下次计算重新加载）。"""
-    global _custom_signal_exprs, _custom_signal_exprs_today
+    global _custom_signal_exprs, _custom_signal_exprs_today, _formula_signal_definitions
     _custom_signal_exprs = None
     _custom_signal_exprs_today = None
+    _formula_signal_definitions = None
 
 
 # enriched parquet 仅存储的列 (14 列)
@@ -104,6 +114,7 @@ ENRICHED_STORAGE_COLS = [
     "consecutive_limit_ups",                   # 递推状态, 需从历史 cum_sum
     "consecutive_limit_downs",
     "quote_ts",                                # 行情时间戳(ms): 盘后校验/量比折算/跨天完整性
+    "quote_change_pct",                        # 实时源当日涨幅, 小数制; 保留到重启后
 ]
 
 
@@ -128,6 +139,7 @@ ENRICHED_COLUMNS: dict[str, dict[str, str]] = {
     "turnover_rate":           "换手率",
     "consecutive_limit_ups":   "连板数",
     "consecutive_limit_downs": "连跌数",
+    "quote_change_pct":        "实时源当日涨幅(小数, 可空)",
     # ── 基础指标 ─────────────────────────────────────────
     "prev_close":              "前收盘价",
     "change_pct":              "日涨跌幅(小数, 如 0.05 = 5%)",
@@ -523,7 +535,10 @@ def compute_indicators(
     if "momentum_60d" in want:
         _p4mom.append((pl.col("close") / pl.col("close").shift(60).over("symbol") - 1).alias("momentum_60d"))
     if "change_pct" in want:
-        _p4mom.append((pl.col("close") / pl.col("close").shift(1).over("symbol") - 1).alias("change_pct"))
+        daily_change = pl.col("close") / pl.col("close").shift(1).over("symbol") - 1
+        if "quote_change_pct" in df.columns:
+            daily_change = pl.coalesce(pl.when(pl.col("quote_change_pct").is_finite()).then(pl.col("quote_change_pct")), daily_change)
+        _p4mom.append(daily_change.alias("change_pct"))
     if _p4mom:
         df = df.with_columns(_p4mom)
     if "change_amount" in want:
@@ -624,14 +639,15 @@ INDICATOR_COLUMNS: frozenset[str] = frozenset(
 
 def get_signal_dependencies() -> dict[str, frozenset[str]]:
     """返回内置与 JSON 自定义信号的唯一依赖映射。"""
-    from app.strategy import custom_signals
+    from app.strategy import custom_signals, formula_signals
 
     return {
         **SIGNAL_DEPENDENCIES,
         **custom_signals.expression_dependencies(_get_custom_signal_exprs()),
+        **formula_signals.dependencies(get_formula_signal_definitions()),
     }
 
-def compute_signals(df: pl.DataFrame, needed: set[str] | None = None) -> pl.DataFrame:
+def compute_signals(df: pl.DataFrame, needed: set[str] | None = None, *, period: str = "1d") -> pl.DataFrame:
     """从已有指标列计算原子信号布尔列。
 
     输入必须包含 compute_indicators() 产出的指标列。
@@ -694,8 +710,8 @@ def compute_signals(df: pl.DataFrame, needed: set[str] | None = None) -> pl.Data
     exprs = _get_custom_signal_exprs()
     df = custom_signals.materialize_factor_columns(df, exprs, needed=needed)
     df = custom_signals.inject(df, exprs, needed=needed)
-
-    return df
+    from app.strategy import formula_signals
+    return formula_signals.inject(df, get_formula_signal_definitions(), needed, period=period)
 
 
 def _attach_no_limit_window(inst_subset: pl.DataFrame) -> pl.DataFrame:

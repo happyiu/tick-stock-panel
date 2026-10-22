@@ -41,6 +41,17 @@ def test_compute_indicators_assume_sorted_matches_default_values():
     assert fast.equals(default)
 
 
+def test_daily_change_prefers_source_quote_and_invalid_quotes_fall_back():
+    bars = _bars(3).filter(pl.col("symbol") == "600000").with_columns(
+        pl.Series("quote_change_pct", [None, -.0123, float("nan")]),
+    )
+    full = compute_indicators(bars)
+    selected = compute_indicators(bars, needed={"change_pct"})
+    assert selected["change_pct"].equals(full["change_pct"])
+    assert selected["change_pct"][1] == -.0123
+    assert abs(selected["change_pct"][2] - (bars["close"][2] / bars["close"][1] - 1)) < 1e-12
+
+
 def test_compute_indicators_high20_uses_close_window_and_needed_pruning():
     bars = _bars(22).filter(pl.col("symbol") == "600000").with_columns(
         pl.int_range(1, 23).cast(pl.Float64).alias("close"),

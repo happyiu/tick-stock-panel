@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Lock, Plus, Settings2, Trash2, Zap } from 'lucide-react'
 import { api, type CustomSignal } from '@/lib/api'
-import { QK } from '@/lib/queryKeys'
+import { QK, SIGNAL_INVALIDATE_PREFIXES } from '@/lib/queryKeys'
 import { BUILTIN_SIGNAL_DEFINITIONS, type SignalKind } from '@/lib/signals'
 import { CustomSignalDialog } from '@/components/signals/CustomSignalDialog'
 import { Skeleton } from '@/components/data/Skeleton'
@@ -26,7 +26,7 @@ export function Signals() {
 
   return (
     <div className="flex flex-col h-full">
-      <PageHeader title="信号库" subtitle="内置预计算信号与自定义条件信号, 供策略 / 回测 / 监控统一使用" />
+      <PageHeader title="信号库" subtitle="内置预计算信号与自定义条件、公式信号, 供策略与回测使用" />
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
         <div className="mx-auto max-w-6xl">
           <SignalsBody highlight={highlight} />
@@ -82,12 +82,14 @@ function SignalsBody({ highlight }: { highlight: string }) {
     mutationFn: api.customSignalDelete,
     onSuccess: () => {
       clearDeleteConfirm()
-      qc.invalidateQueries({ queryKey: QK.customSignals })
+      qc.invalidateQueries({ predicate: query => SIGNAL_INVALIDATE_PREFIXES.some(prefix => query.queryKey[0] === prefix) })
     },
   })
 
   const toggleEnabled = (sig: CustomSignal) => {
-    api.customSignalSave({ ...sig, enabled: !sig.enabled }).then(() => qc.invalidateQueries({ queryKey: QK.customSignals }))
+    api.customSignalSave({ ...sig, enabled: !sig.enabled }).then(() => {
+      qc.invalidateQueries({ predicate: query => SIGNAL_INVALIDATE_PREFIXES.some(prefix => query.queryKey[0] === prefix) })
+    })
   }
 
   const handleDeleteClick = (sig: CustomSignal) => {
@@ -153,6 +155,7 @@ function SignalsBody({ highlight }: { highlight: string }) {
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <h3 className="truncate text-sm font-medium text-foreground">{sig.name}</h3>
+                      {sig.definition_type === 'formula' && <span className="shrink-0 rounded bg-accent/10 px-1.5 py-0.5 text-[10px] text-accent">公式</span>}
                       <span className={`rounded px-1.5 py-0.5 text-[10px] ${KIND_CLASS[sig.kind]}`}>
                         {KIND_LABEL[sig.kind]}
                       </span>
@@ -189,7 +192,10 @@ function SignalsBody({ highlight }: { highlight: string }) {
                   </div>
                 </div>
                 <div className="mt-3 space-y-1">
-                  {sig.conditions.map((c, i) => (
+                  {sig.definition_type === 'formula' ? <>
+                    <p className="text-[11px] text-secondary">输出：{sig.output_var} · 日线 / 30F · 最低 {sig.min_history_bars ?? 100} 根</p>
+                    <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-words rounded bg-surface p-2 font-mono text-[11px] text-secondary">{sig.formula}</pre>
+                  </> : (sig.conditions ?? []).map((c, i) => (
                     <div key={i} className="flex items-center gap-1.5 text-[11px] text-secondary">
                       <span className="w-6 text-right text-muted/50">{i === 0 ? '当' : '且'}</span>
                       <span className="font-mono text-foreground/80">{fieldWithDays(c.left, c.leftDays, fields)}</span>
@@ -214,7 +220,7 @@ function SignalsBody({ highlight }: { highlight: string }) {
               ))}
             {!list.isLoading && signals.length === 0 && (
               <div className="rounded-card border border-dashed border-border px-5 py-10 text-center text-sm text-muted md:col-span-2">
-                暂无自定义信号。可用「字段 + 运算符 + 值」组合条件创建，或从检验页因子行一键生成；也可让 AI 按描述生成。
+                暂无自定义信号。可用条件或通达信公式创建，或从检验页因子行一键生成；也可让 AI 按描述生成条件。
               </div>
             )}
           </div>

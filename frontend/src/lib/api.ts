@@ -13,6 +13,9 @@ export interface EtfPoolParams {
   category: string
   page: number
   pageSize: number
+  sortChangePct?: 'asc' | 'desc'
+  signalIds?: string[]
+  signalMatch?: 'all' | 'any'
 }
 
 export interface EtfPoolRow {
@@ -34,6 +37,8 @@ export interface EtfPoolResponse {
   categories: { name: string; count: number }[]
   page: number
   page_size: number
+  signal_date?: string | null
+  signal_warnings?: string[]
 }
 
 type RequestOptions = RequestInit & {
@@ -1292,6 +1297,10 @@ export interface CustomSignal {
   enabled: boolean
   timeframe?: 'daily' | 'intraday'
   min_bars?: number
+  definition_type?: 'conditions' | 'formula'
+  formula?: string
+  output_var?: string
+  min_history_bars?: number
 }
 
 export interface CustomSignalFieldGroup {
@@ -3505,6 +3514,11 @@ export const api = {
     const query = new URLSearchParams({ page: String(params.page), page_size: String(params.pageSize) })
     if (params.q) query.set('q', params.q)
     if (params.category) query.set('category', params.category)
+    if (params.sortChangePct) query.set('sort_change_pct', params.sortChangePct)
+    if (params.signalIds?.length) {
+      query.set('signal_ids', params.signalIds.join(','))
+      query.set('signal_match', params.signalMatch ?? 'all')
+    }
     return request<EtfPoolResponse>(`/api/kline/etf-pool?${query}`)
   },
   instrumentSearch: (q: string, limit = 20, assetTypes?: string) =>
@@ -4840,6 +4854,11 @@ export const api = {
     request<{ ok: boolean; signal: CustomSignal }>('/api/custom-signals', {
       method: 'POST',
       body: JSON.stringify(signal),
+    }),
+
+  customSignalValidate: (formula: string, outputVar?: string) =>
+    request<{ ok: boolean; variables: string[] }>('/api/custom-signals/validate', {
+      method: 'POST', body: JSON.stringify({ formula, ...(outputVar ? { output_var: outputVar } : {}) }),
     }),
 
   customSignalDelete: (id: string) =>

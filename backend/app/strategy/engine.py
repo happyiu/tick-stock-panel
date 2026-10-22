@@ -724,6 +724,15 @@ class StrategyEngine:
             overrides = overrides_map.get(strategy_id) or {}
             scoring = effective_scoring(strategy.meta.get("scoring"), overrides)
             required = max(required, scoring_warmup_bars(scoring))
+            from app.indicators.pipeline import get_formula_signal_definitions
+            from app.strategy.formula_signals import required_history
+            signals = {
+                s if s.startswith(("signal_", "csg_")) else f"signal_{s}"
+                for s in [*self._effective_signals(overrides, "entry_signals", strategy.entry_signals),
+                          *self._effective_signals(overrides, "exit_signals", strategy.exit_signals),
+                          *strategy.required_features]
+            }
+            required = max(required, required_history(get_formula_signal_definitions(), signals))
             if strategy.execution_backend == "matrix_native":
                 params = self.resolve_params(
                     strategy,
@@ -900,6 +909,14 @@ class StrategyEngine:
         params = self.resolve_params(s, params, overrides)
         entry_signals = self._effective_signals(overrides, "entry_signals", s.entry_signals)
         exit_signals = self._effective_signals(overrides, "exit_signals", s.exit_signals)
+        from app.indicators.pipeline import get_formula_signal_definitions
+        from app.strategy import formula_signals
+        definitions = get_formula_signal_definitions()
+        selected = {name if name.startswith(("signal_", "csg_")) else f"signal_{name}"
+                    for name in [*entry_signals, *exit_signals, *s.required_features]}
+        selected_formulas = selected & {f"csg_{definition['id']}" for definition in definitions}
+        if selected_formulas and context.timeframe not in formula_signals.PERIODS:
+            raise ValueError("公式信号仅支持日线和30F周期")
 
         if s.execution_backend == "matrix_native":
             return self._run_matrix_strategy(
@@ -924,11 +941,26 @@ class StrategyEngine:
                 started_at=t0,
             )
 
+        current, history = context.current, context.history
+        if selected_formulas:
+            source = history if history is not None and not history.is_empty() else current
+            if source is not None and not source.is_empty():
+                calculated = formula_signals.inject(source, definitions, selected_formulas, period=context.timeframe)
+                if history is not None and not history.is_empty():
+                    history = calculated
+                    if current is not None and not current.is_empty():
+                        keys = [key for key in ("symbol", "date", "datetime") if key in current.columns and key in history.columns]
+                        current = current.drop([name for name in selected_formulas if name in current.columns]).join(
+                            history.select(*keys, *sorted(selected_formulas)), on=keys, how="left",
+                        )
+                else:
+                    current = calculated
+
         scoring = effective_scoring(s.meta.get("scoring"), overrides)
         scoring_directions = effective_scoring_directions(overrides)
         current, history = self._materialize_scoring_frames(
-            context.current,
-            context.history,
+            current,
+            history,
             scoring,
         )
 

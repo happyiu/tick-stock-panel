@@ -388,6 +388,7 @@ class KlineRepository:
         self._etf_symbol_set_cache: set[str] | None = None
         self._index_enriched_cache: pl.DataFrame | None = None
         self._index_enriched_cache_date: date | None = None
+        self._formula_history_cache: dict[str, tuple[tuple, pl.DataFrame]] = {}
 
         # ---- enriched 后台预热 ----
         # 启动时 compute_indicators (107万行, 低配机 50s+) 移出 lifespan 关键路径,
@@ -540,6 +541,7 @@ class KlineRepository:
         导致内存里的旧缓存残留 (clear 数据后看板仍显示旧数据的根因)。
         本方法无条件清空, 供清除数据/重置场景调用。
         """
+        self._formula_history_cache.clear()
         self._enriched_cache = None
         self._enriched_cache_date = None
         self._enriched_history_cache = None
@@ -1062,7 +1064,7 @@ class KlineRepository:
             from app.indicators.pipeline import compute_indicators, compute_signals
             start_full = latest - timedelta(days=300)
             read_cols = [c for c in ["symbol", "date", "open", "high", "low", "close",
-                                     "volume", "amount", "raw_close", "raw_high", "raw_low"]
+                                     "volume", "amount", "raw_close", "raw_high", "raw_low", "quote_change_pct"]
                          if c in df_latest.columns]
             df_hist = guarded_collect(
                 scan_enriched_parquet(self._etf_enriched_glob,
@@ -1626,9 +1628,36 @@ class KlineRepository:
             df = df.select(existing)
         return df
 
+    def get_formula_history(self, asset_type: str, before: date, bars: int) -> pl.DataFrame:
+        """公式实时计算的历史 OHLCV; 当日行情更新不重复扫描历史分区。"""
+        from datetime import timedelta
+
+        root = self.store.data_dir / enriched_dirname(asset_type)
+        start = before - timedelta(days=bars * 2 + 30)
+        paths = []
+        for path in root.glob("date=*/part.parquet"):
+            try:
+                day = date.fromisoformat(path.parent.name[5:])
+            except ValueError:
+                continue
+            if start <= day < before:
+                paths.append(path)
+        signature = (before, bars, tuple(sorted((str(p), p.stat().st_mtime_ns, p.stat().st_size) for p in paths)))
+        cached = self._formula_history_cache.get(asset_type)
+        if cached is not None and cached[0] == signature:
+            return cached[1]
+        frame = pl.DataFrame()
+        if paths:
+            frame = guarded_collect(scan_enriched_parquet([str(p) for p in paths])
+                                    .select("symbol", "date", "open", "high", "low", "close", "volume", "amount")
+                                    .sort(["symbol", "date"]))
+            frame = frame.group_by("symbol", maintain_order=True).tail(bars)
+        self._formula_history_cache[asset_type] = (signature, frame)
+        return frame
+
     def get_etf_quote_snapshot(self, symbols: list[str]) -> pl.DataFrame:
         """当前页 ETF 价格快照: 原始成交价、小数涨幅、逐标的日期, 不重算指标。"""
-        schema = {"symbol": pl.String, "date": pl.Date, "last_price": pl.Float64, "change_pct": pl.Float64}
+        schema = {"symbol": pl.String, "date": pl.Date, "raw_close": pl.Float64, "close": pl.Float64, "quote_change_pct": pl.Float64}
         if not symbols:
             return pl.DataFrame(schema={"symbol": pl.String, "quote_date": pl.String, "last_price": pl.Float64, "change_pct": pl.Float64})
         today = cn_today()
@@ -1647,32 +1676,36 @@ class KlineRepository:
         if paths:
             history = guarded_collect(
                 scan_enriched_parquet(paths).filter(pl.col("symbol").is_in(symbols))
-                .select("symbol", "date", "raw_close", "close")
+                .select("symbol", "date", "raw_close", "close", "quote_change_pct")
                 .unique(subset=["symbol", "date"], keep="last").sort(["symbol", "date"]),
             )
-            previous = pl.col("close").shift(1).over("symbol")
-            previous_dates = {day: recent[i - 1][0] for i, (day, _) in enumerate(recent) if i}
-            has_previous_day = pl.col("date").shift(1).over("symbol") == pl.col("date").replace_strict(previous_dates, default=None, return_dtype=pl.Date)
-            parts.append(history.select(
-                "symbol", "date", pl.col("raw_close").alias("last_price"),
-                pl.when(has_previous_day & pl.col("close").is_finite() & (pl.col("close") > 0)
-                        & previous.is_finite() & (previous > 0))
-                .then(pl.col("close") / previous - 1).otherwise(None).alias("change_pct"),
-            ))
+            parts.append(history)
         cached, cache_date = self.get_enriched_latest_asset("etf", refresh=False)
         if not cached.is_empty() and "symbol" in cached.columns and "raw_close" in cached.columns:
             parts.append(cached.filter(pl.col("symbol").is_in(symbols)
                                        & pl.col("raw_close").is_finite() & (pl.col("raw_close") > 0)).select(
                 pl.col("symbol").cast(pl.String),
                 (pl.col("date") if "date" in cached.columns else pl.lit(cache_date)).cast(pl.Date).alias("date"),
-                pl.col("raw_close").cast(pl.Float64).alias("last_price"),
-                (pl.col("change_pct") if "change_pct" in cached.columns else pl.lit(None)).cast(pl.Float64).alias("change_pct"),
+                pl.col("raw_close").cast(pl.Float64),
+                (pl.col("close") if "close" in cached.columns else pl.lit(None)).cast(pl.Float64).alias("close"),
+                (pl.col("quote_change_pct") if "quote_change_pct" in cached.columns else pl.lit(None)).cast(pl.Float64).alias("quote_change_pct"),
             ))
         result = pl.concat(parts, how="vertical_relaxed") if parts else pl.DataFrame(schema=schema)
         result = result.filter(pl.col("date").is_not_null() & (pl.col("date") <= today))
-        return result.sort(["symbol", "date"], maintain_order=True).unique(subset="symbol", keep="last").select(
+        result = result.sort(["symbol", "date"], maintain_order=True).unique(subset=["symbol", "date"], keep="last", maintain_order=True)
+        days = sorted({day for day, _ in recent} | set(result["date"].to_list()))
+        previous_dates = {day: days[i - 1] for i, day in enumerate(days) if i}
+        previous = pl.col("close").shift(1).over("symbol")
+        has_previous_day = pl.col("date").shift(1).over("symbol") == pl.col("date").replace_strict(previous_dates, default=None, return_dtype=pl.Date)
+        result = result.with_columns(pl.coalesce(
+            pl.when(pl.col("quote_change_pct").is_finite()).then(pl.col("quote_change_pct")),
+            pl.when(has_previous_day & pl.col("close").is_finite() & (pl.col("close") > 0)
+                    & previous.is_finite() & (previous > 0))
+            .then(pl.col("close") / previous - 1),
+        ).alias("change_pct"))
+        return result.unique(subset="symbol", keep="last").select(
             "symbol", pl.col("date").cast(pl.String).alias("quote_date"),
-            pl.when(pl.col("last_price").is_finite() & (pl.col("last_price") > 0)).then(pl.col("last_price")).otherwise(None).alias("last_price"),
+            pl.when(pl.col("raw_close").is_finite() & (pl.col("raw_close") > 0)).then(pl.col("raw_close")).otherwise(None).alias("last_price"),
             pl.when(pl.col("change_pct").is_finite()).then(pl.col("change_pct")).otherwise(None).alias("change_pct"),
         )
 

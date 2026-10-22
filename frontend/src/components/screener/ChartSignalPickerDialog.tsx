@@ -19,6 +19,7 @@ const DAILY_ONLY_SIGNAL_IDS = new Set([
   'signal_n_day_low',
 ])
 const MAX_SELECTED_SIGNALS = 32
+const ETF_UNSUPPORTED_SIGNALS = new Set(['signal_limit_up', 'signal_limit_down', 'signal_limit_down_recovery', 'signal_broken_limit_up'])
 
 const PERIOD_LABEL: Record<KlinePeriod, string> = {
   '30m': '30F',
@@ -44,13 +45,17 @@ interface Props {
   period: KlinePeriod
   selected: ChartSignalSelection[]
   onClose: () => void
-  onApply: (signals: ChartSignalSelection[]) => void
+  onApply: (signals: ChartSignalSelection[], match?: 'all' | 'any') => void
+  mode?: 'chart' | 'etf-filter'
+  signalMatch?: 'all' | 'any'
 }
 
-export function ChartSignalPickerDialog({ open, period, selected, onClose, onApply }: Props) {
+export function ChartSignalPickerDialog({ open, period, selected, onClose, onApply, mode = 'chart', signalMatch = 'all' }: Props) {
   const [search, setSearch] = useState('')
   const [scope, setScope] = useState<'selected' | 'all'>('all')
   const [draft, setDraft] = useState<ChartSignalSelection[]>(() => selected.map(item => ({ ...item })))
+  const [draftMatch, setDraftMatch] = useState(signalMatch)
+  const isFilter = mode === 'etf-filter'
   const customSignalsQuery = useQuery({
     queryKey: QK.customSignals,
     queryFn: () => api.customSignalsList(),
@@ -66,15 +71,16 @@ export function ChartSignalPickerDialog({ open, period, selected, onClose, onApp
   const customOptions = useMemo<SignalOption[]>(() => {
     return (customSignalsQuery.data?.signals ?? [])
       .filter(signal => signal.enabled && (signal.timeframe ?? 'daily') === 'daily')
+      .filter(signal => signal.definition_type !== 'formula' || period === '1d' || period === '30m')
       .map(signal => ({
         id: `csg_${signal.id}`,
         name: signal.name,
         kind: signal.kind,
         category: '自定义',
-        description: '来自信号库的自定义条件信号，按当前 K 线周期计算。',
+        description: signal.definition_type === 'formula' ? '来自信号库的公式信号，支持日线和 30F。' : '来自信号库的自定义条件信号，按当前 K 线周期计算。',
         custom: true,
       }))
-  }, [customSignalsQuery.data?.signals])
+  }, [customSignalsQuery.data?.signals, period])
 
   const selectedIds = useMemo(() => new Set(draft.map(signal => signal.id)), [draft])
   const groups = useMemo(() => {
@@ -118,8 +124,8 @@ export function ChartSignalPickerDialog({ open, period, selected, onClose, onApp
             <Activity className="h-4 w-4" />
           </span>
           <div className="min-w-0">
-            <h2 id="chart-signal-picker-title" className="text-sm font-medium text-foreground">添加信号</h2>
-            <p className="mt-0.5 truncate text-[10px] text-muted">选择信号库中的信号叠加到当前 K 线，可多选</p>
+            <h2 id="chart-signal-picker-title" className="text-sm font-medium text-foreground">{isFilter ? '信号筛选' : '添加信号'}</h2>
+            <p className="mt-0.5 text-[10px] text-muted">{isFilter ? '按最新可用日线筛选 ETF，可多选；盘中信号可能变化' : '选择信号库中的信号叠加到当前 K 线，可多选'}</p>
           </div>
         </div>
         <button
@@ -140,6 +146,9 @@ export function ChartSignalPickerDialog({ open, period, selected, onClose, onApp
         <span className="text-[10px] text-muted">
           {period === '1d' ? '显示全部内置信号和已启用的自定义信号' : '显示当前周期可计算的通用技术信号和自定义信号'}
         </span>
+        {isFilter && <select aria-label="信号组合规则" value={draftMatch} onChange={e => setDraftMatch(e.target.value as 'all' | 'any')} className="h-7 rounded-btn border border-border bg-base px-2 text-xs text-foreground">
+          <option value="all">全部满足</option><option value="any">任一满足</option>
+        </select>}
         <div className="flex shrink-0 items-center gap-0.5 rounded border border-border bg-base p-0.5" role="group" aria-label="信号筛选">
           {(['selected', 'all'] as const).map(value => (
             <button
@@ -184,14 +193,18 @@ export function ChartSignalPickerDialog({ open, period, selected, onClose, onApp
                   {options.map(option => {
                     const isSelected = selectedIds.has(option.id)
                     const kind = KIND_META[option.kind]
+                    const unsupported = isFilter && ETF_UNSUPPORTED_SIGNALS.has(option.id)
+                    const atLimit = !isSelected && draft.length >= MAX_SELECTED_SIGNALS
                     return (
                       <button
                         key={option.id}
                         type="button"
                         role="checkbox"
                         aria-checked={isSelected}
+                        disabled={unsupported || atLimit}
+                        title={unsupported ? '股票专属信号，不适用于 ETF' : atLimit ? '最多选择 32 个信号' : undefined}
                         onClick={() => toggle(option)}
-                        className={`group rounded-btn border p-2.5 text-left transition-colors ${
+                        className={`group rounded-btn border p-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
                           isSelected
                             ? 'border-cyan-400/45 bg-cyan-400/[0.07]'
                             : 'border-border bg-base hover:border-cyan-400/35 hover:bg-cyan-400/[0.03]'
@@ -208,6 +221,7 @@ export function ChartSignalPickerDialog({ open, period, selected, onClose, onApp
                               <span className={`shrink-0 rounded border px-1 py-0.5 text-[9px] ${kind.className}`}>{kind.label}</span>
                             </span>
                             <span className="mt-1 block line-clamp-2 text-[10px] leading-relaxed text-muted">{option.description}</span>
+                            {unsupported && <span className="mt-1 block text-[10px] text-warning">股票专属信号，不适用于 ETF</span>}
                             <span className="mt-1 block truncate font-mono text-[9px] text-muted/50">{option.id}</span>
                           </span>
                         </div>
@@ -232,7 +246,7 @@ export function ChartSignalPickerDialog({ open, period, selected, onClose, onApp
 
       <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border px-4 py-2.5">
         <span className="truncate text-[10px] text-muted">
-          已选 {draft.length}/{MAX_SELECTED_SIGNALS} 个信号；策略和信号会同时叠加显示
+          已选 {draft.length}/{MAX_SELECTED_SIGNALS} 个信号{isFilter ? '；应用后筛选整个 ETF 池' : '；策略和信号会同时叠加显示'}
         </span>
         <div className="flex shrink-0 items-center gap-2">
           <button
@@ -244,7 +258,7 @@ export function ChartSignalPickerDialog({ open, period, selected, onClose, onApp
           </button>
           <button
             type="button"
-            onClick={() => onApply(draft)}
+            onClick={() => isFilter ? onApply(draft, draftMatch) : onApply(draft)}
             className="rounded-btn border border-cyan-400/35 bg-cyan-400/10 px-3 py-1 text-xs font-medium text-cyan-300 transition-colors hover:border-cyan-400/60 hover:bg-cyan-400/15"
           >
             应用{draft.length > 0 ? ` (${draft.length})` : ''}

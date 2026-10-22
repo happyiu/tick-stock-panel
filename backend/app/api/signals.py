@@ -7,7 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.strategy import custom_signals
 from app.strategy.intraday_features import INTRADAY_FEATURES
@@ -35,6 +35,8 @@ def _invalidate(request: Request) -> None:
     repo = request.app.state.repo
     if hasattr(repo, "clear_cache"):
         repo.clear_cache()
+    from app.services.screener import ScreenerService
+    ScreenerService.clear_history_cache()
 
 
 class ConditionModel(BaseModel):
@@ -49,7 +51,11 @@ class SignalModel(BaseModel):
     id: str
     name: str
     kind: str        # entry | exit | both
-    conditions: list[ConditionModel]
+    conditions: list[ConditionModel] = Field(default_factory=list)
+    definition_type: str = "conditions"
+    formula: str = ""
+    output_var: str = ""
+    min_history_bars: int = 100
     enabled: bool = True
     timeframe: str = "daily"   # daily | intraday(分钟K特征, 输出当日条件上升沿)
     min_bars: int = 0          # 仅 intraday: 当日最少已完成 bar 数, 不足不触发
@@ -66,6 +72,20 @@ class IntradayReplayRequest(BaseModel):
 
 class AIGenerateRequest(BaseModel):
     description: str
+
+
+class FormulaValidationRequest(BaseModel):
+    formula: str = Field(max_length=32768)
+    output_var: str | None = None
+
+
+@router.post("/validate")
+def validate_formula_signal(req: FormulaValidationRequest):
+    from app.strategy.formula_signals import validate_formula
+    try:
+        return {"ok": True, "variables": validate_formula(req.formula, req.output_var)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ── 字段选项 / 运算符 ───────────────────────────────────

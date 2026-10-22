@@ -74,3 +74,13 @@ def test_timeline_execution_restart_reuses_and_clears_record(tmp_path) -> None:
     assert rows[0]["session_id"] is None
     assert rows[0]["result"] is None
     assert rows[0]["error"] is None
+
+
+def test_running_execution_can_save_session_before_completion(tmp_path):
+    store = TimelineExecutionStore(tmp_path)
+    run_id = store.start(task_name="AI tracking", method="seekhub_daily_start")
+    store.set_session(run_id, "reserved-session")
+    record = TimelineExecutionStore(tmp_path).get(run_id)
+    assert record["status"] == "running" and record["session_id"] == "reserved-session"
+    store.finish(run_id, status="failed", error="timeout")
+    assert store.get(run_id)["session_id"] == "reserved-session"

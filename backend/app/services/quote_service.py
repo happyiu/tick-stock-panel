@@ -1923,13 +1923,15 @@ class QuoteService:
             # ---- 全量回退路径 ----
             if not use_incremental:
                 from datetime import timedelta
-                from app.indicators.pipeline import compute_enriched
+                from app.indicators.pipeline import compute_enriched, get_formula_signal_definitions
+                from app.strategy.formula_signals import required_history
                 from app.tickflow.repository import _live_agg_window_start
 
                 logger.info("enriched 全量计算 (live_agg=%s, 上次日期=%s)",
                             "ok" if not live_agg.is_empty() else "空", prev_date)
 
-                cutoff = today - timedelta(days=90)
+                formula_bars = required_history(get_formula_signal_definitions())
+                cutoff = today - timedelta(days=max(90, formula_bars * 2 + 30))
                 table = {"etf": "kline_etf_daily", "index": "kline_index_daily"}.get(asset_type, "kline_daily")
                 daily_glob = str(self._repo.store.data_dir / table / "**" / "*.parquet")
                 ohlcv_cols = ["symbol", "date", "open", "high", "low", "close", "volume", "amount", "quote_ts"]
@@ -1954,6 +1956,8 @@ class QuoteService:
                 daily_ohlcv = daily_df.select([c for c in ohlcv_cols if c in daily_df.columns])
                 full_df = pl.concat([hist_df, daily_ohlcv], how="diagonal_relaxed")
                 full_df = full_df.sort(["symbol", "date"])
+                if formula_bars > 1:
+                    full_df = full_df.group_by("symbol", maintain_order=True).tail(20000)
 
                 factor_dir = {"stock": "adj_factor", "etf": "adj_factor_etf"}.get(asset_type)
                 factor_path = self._repo.store.data_dir / factor_dir / "all.parquet" if factor_dir else None
@@ -1979,10 +1983,57 @@ class QuoteService:
                 enriched_full = enriched_full.sort(["symbol", "date"]).with_columns(
                     (pl.col("close") / pl.col("close").shift(3).over("symbol") - 1).alias("momentum_3d")
                 )
+                if asset_type == "etf":
+                    # 全量路径同样采用实时源当日涨幅, 不能把缺失日线后的多日收益当日涨幅。
+                    extra = quote_extra if quote_extra is not None else pl.DataFrame(schema={"symbol": pl.String})
+                    extra = extra.select(
+                        "symbol",
+                        (pl.col("change_pct") if "change_pct" in extra.columns else pl.lit(None, dtype=pl.Float64)).alias("_quote_pct"),
+                        (pl.col("prev_close") if "prev_close" in extra.columns else pl.lit(None, dtype=pl.Float64)).alias("_quote_prev"),
+                    )
+                    enriched_full = enriched_full.join(extra, on="symbol", how="left")
+                    previous_days = []
+                    for path in (self._repo.store.data_dir / table).glob("date=*/part.parquet"):
+                        try:
+                            day = date.fromisoformat(path.parent.name[5:])
+                        except ValueError:
+                            continue
+                        if day < today:
+                            previous_days.append(day)
+                    previous_day = max(previous_days, default=None)
+                    has_previous_day = pl.col("date").shift(1).over("symbol") == pl.lit(previous_day, dtype=pl.Date)
+                    source_pct = pl.coalesce(
+                        pl.when(pl.col("_quote_pct").is_finite()).then(pl.col("_quote_pct")),
+                        pl.when(pl.col("_quote_prev").is_finite() & (pl.col("_quote_prev") > 0))
+                        .then(pl.col("raw_close") / pl.col("_quote_prev") - 1),
+                    )
+                    enriched_full = enriched_full.with_columns(
+                        pl.when(pl.col("date") == today).then(source_pct).alias("quote_change_pct"),
+                    ).with_columns(
+                        pl.when(pl.col("date") == today)
+                        .then(pl.coalesce("quote_change_pct", pl.when(has_previous_day).then(pl.col("change_pct"))))
+                        .otherwise(pl.col("change_pct")).alias("change_pct"),
+                    ).drop("_quote_pct", "_quote_prev")
+                    from app.indicators.pipeline import compute_signals
+                    enriched_full = compute_signals(enriched_full)
                 enriched_today = enriched_full.filter(pl.col("date") == today)
 
             if enriched_today.is_empty():
                 return
+
+            if use_incremental:
+                from app.indicators.pipeline import get_formula_signal_definitions
+                from app.strategy import formula_signals
+                definitions = get_formula_signal_definitions()
+                if definitions:
+                    history = self._repo.get_formula_history(asset_type, today, min(19999, formula_signals.required_history(definitions)))
+                    columns = [c for c in ("symbol", "date", "open", "high", "low", "close", "volume", "amount") if c in enriched_today.columns]
+                    current = enriched_today.select(columns)
+                    combined = pl.concat([history, current], how="diagonal_relaxed") if not history.is_empty() else current
+                    calculated = formula_signals.inject(combined, definitions)
+                    signal_cols = [f"csg_{s['id']}" for s in definitions if f"csg_{s['id']}" in calculated.columns]
+                    latest = calculated.filter(pl.col("date") == today).select("symbol", *signal_cols)
+                    enriched_today = enriched_today.drop([c for c in signal_cols if c in enriched_today.columns]).join(latest, on="symbol", how="left")
 
             # 异动偏离列: 盘中路径不经过 _refresh_enriched 冷刷新,
             # 需在此附着 (基准 = 历史帧 + 指数实时外推), 否则盘中异动列表为空

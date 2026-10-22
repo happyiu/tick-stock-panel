@@ -31,7 +31,21 @@
 - 快速验证一个简单的筛选思路(如 `RSI < 30 AND 量比 > 2`)
 - 不熟悉 Python 但想自定义筛选条件
 
-底层实现在 `backend/app/strategy/custom_signals.py`。
+信号库的「新建信号」也支持「公式创建」: 填写标识、名称和类型, 输入通达信公式, 点击「校验公式」后选择输出变量并保存。可以用「填入天使魔鬼·进攻示例」快速填写以下入场规则 (输出变量 `attack`, 最低历史根数默认 100):
+
+```text
+angel := EMA(CLOSE, 2);
+devil := EMA(CLOSE + 20 * SLOPE(CLOSE, 21), 42);
+attack := CROSS(angel, devil);
+```
+
+公式复用图表的函数白名单和计算限制, 可以包含绘图语句, 不执行 Python / JavaScript。只有指定变量的有限非零值表示命中; 零表示未命中, 历史不足或非有限值保留为空。最低历史根数范围为 1~20000; 每个标的独立按时间顺序计算, 日线与 30F 分开计算。
+
+公式信号沿用 `csg_<标识>` 列名, 可用于股票/ETF 的日线和 30F 图表、策略筛选, ETF 池的最新日线筛选, 以及日线回测。周线、月线和原始分钟信号不支持公式信号。实时日线计算会读取历史窗口; 本功能不新增指标通知配置或 30F 回测。
+
+`POST /api/custom-signals/validate` 接收 `formula` 和可选 `output_var`, 返回可选变量或带行列位置的解析/计算错误; 保存接口再次校验。旧定义缺少 `definition_type` 时仍按条件信号处理。公式定义使用 `definition_type: "formula"`, `formula`, `output_var`, `min_history_bars`, 无需填写条件列表。
+
+底层实现在 `backend/app/strategy/custom_signals.py` 和 `backend/app/strategy/formula_signals.py`。
 
 ### 🤖 方式二:AI 生成
 
