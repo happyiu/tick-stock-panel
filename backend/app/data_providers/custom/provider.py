@@ -114,12 +114,16 @@ class GenericHTTPProvider:
                 missing = sorted(required - mapped)
                 if missing:
                     errors.append(f"{dataset}: missing mapped fields: {', '.join(missing)}")
+            targets = list(cfg.field_map.values())
+            duplicates = sorted({target for target in targets if targets.count(target) > 1})
+            if duplicates:
+                errors.append(f"{dataset}: duplicate mapped target fields: {', '.join(duplicates)}")
             if cfg.pct_unit is not None:
                 if dataset != "realtime":
                     errors.append(f"{dataset}: pct_unit 仅用于 realtime 数据集")
                 elif cfg.pct_unit not in ("percent", "decimal"):
                     errors.append(f"{dataset}: pct_unit 必须是 percent 或 decimal")
-            if dataset != "realtime":
+            if dataset not in {"realtime", "financial"}:
                 request_params = [cfg.symbols_param, cfg.start_param, cfg.end_param]
                 if dataset in {"minute", "full_minute"}:
                     request_params.extend(
@@ -401,6 +405,13 @@ class GenericHTTPProvider:
         start_time = end_time - timedelta(days=7)
         if dataset == "realtime":
             rows = self._request_rows(cfg)
+        elif dataset == "financial":
+            rows = self._request_rows(
+                cfg,
+                symbols=test_symbols,
+                override_params={**cfg.params, "table": "metrics"},
+                override_body={**cfg.body, "table": "metrics"},
+            )
         elif dataset in {"minute", "full_minute"}:
             override: dict[str, Any] = {}
             if cfg.asset_type_param:
