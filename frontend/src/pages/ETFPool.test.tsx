@@ -191,7 +191,7 @@ it('formats ETF quotes, decimal changes, dates and missing values', async () => 
   expect(rows[3][2].textContent).toBe('—')
   expect(rows[3][3].textContent).toBe('—')
 })
-it('refreshes the current ETF page on a quote push only when realtime is enabled', async () => {
+it('does not refresh the current ETF page on a quote push', async () => {
   let stream!: EventTarget
   class FakeEventSource extends EventTarget {
     constructor() { super(); stream = this }
@@ -200,18 +200,13 @@ it('refreshes the current ETF page on a quote push only when realtime is enabled
   vi.stubGlobal('EventSource', FakeEventSource)
   try {
     await render(<LivePool enabled={false} />)
-    const updated = response()
-    updated.rows[0] = { ...updated.rows[0], last_price: 4.5, change_pct: .02 }
-    fixtures.request.mockResolvedValue(updated)
     await act(async () => { stream.dispatchEvent(new Event('quotes_updated')) })
     await settle()
     expect(fixtures.request).toHaveBeenCalledTimes(1)
     await render(<LivePool enabled />)
     await act(async () => { stream.dispatchEvent(new Event('quotes_updated')) })
     await settle()
-    expect(fixtures.request).toHaveBeenCalledTimes(2)
-    expect(host.querySelector('tbody')?.textContent).toContain('4.500')
-    expect(host.querySelector('tbody')?.textContent).toContain('+2.00%')
+    expect(fixtures.request).toHaveBeenCalledTimes(1)
   } finally {
     vi.unstubAllGlobals()
   }

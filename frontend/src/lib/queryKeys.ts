@@ -190,7 +190,6 @@ export const SSE_INVALIDATE_PREFIXES = [
   // 旧设置里的 'watchlist' 单开关由 useQuoteStream 兼容读取。
   'watchlist-quotes',
   'watchlist-enriched',
-  'etf-pool',
   'quote-status',
   'index-quotes',
   'overview-market',
@@ -202,6 +201,6 @@ export const SSE_INVALIDATE_PREFIXES = [
 
 // 信号定义变更会同时改变图表标记、筛选结果和策略引用。
 export const SIGNAL_INVALIDATE_PREFIXES = [
-  'custom-signals', 'etf-pool', 'signal-chart-markers', 'strategy-signals',
+  'custom-signals', 'signal-chart-markers', 'strategy-signals',
   'screener', 'screener-cached', 'screener-strategies', 'strategy-detail',
 ] as const

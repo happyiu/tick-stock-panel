@@ -26,8 +26,11 @@ export function ETFPool() {
   const query = useQuery({
     queryKey: QK.etfPool(params),
     queryFn: () => api.etfPool(params),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchInterval: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
     placeholderData: keepPreviousData,
   })
   const data = query.data
@@ -87,7 +90,7 @@ export function ETFPool() {
           {!query.isPlaceholderData && data?.signal_date && <span className="text-muted">筛选日期：{data.signal_date}</span>}
           {!query.isPlaceholderData && data?.signal_warnings?.map(warning => <span key={warning} className="text-warning">{warning}</span>)}
         </div>}
-        {query.isFetching && !query.isPending && <div role="status" className="shrink-0 text-xs text-muted">正在更新筛选结果…</div>}
+        {query.isFetching && !query.isPending && <div role="status" className="sr-only">正在更新筛选结果…</div>}
         {query.isError && <div role="alert" className="shrink-0 rounded-lg border border-down/30 bg-down/5 p-4 text-sm">
           ETF 列表加载失败：{query.error.message}
           <button className="ml-3 text-accent" onClick={() => void query.refetch()}>重试</button>
