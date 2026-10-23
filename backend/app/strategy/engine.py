@@ -277,6 +277,29 @@ class StrategyEngine:
                         })
                         continue
                     if strategy_id in candidates:
+                        previous = candidates[strategy_id]
+                        if previous.source != s.source and "builtin" in (
+                            previous.source,
+                            s.source,
+                        ):
+                            builtin_path = (
+                                candidate_paths[strategy_id]
+                                if previous.source == "builtin"
+                                else f
+                            )
+                            ignored_path = (
+                                f if previous.source == "builtin" else candidate_paths[strategy_id]
+                            )
+                            logger.warning(
+                                "ignore non-builtin strategy %s: id %r is owned by builtin %s",
+                                ignored_path,
+                                strategy_id,
+                                builtin_path,
+                            )
+                            if s.source == "builtin":
+                                candidates[strategy_id] = s
+                                candidate_paths[strategy_id] = f
+                            continue
                         previous_path = candidate_paths.pop(strategy_id)
                         candidates.pop(strategy_id)
                         duplicate_ids.add(strategy_id)
