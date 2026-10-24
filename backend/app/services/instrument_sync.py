@@ -82,14 +82,22 @@ def sync_instruments(data_dir: Path) -> int:
         # 未命中非 tickflow provider → 走 tickflow 直连
         tf = get_client()
         all_rows = []
+        incomplete = False
         for ex in _EXCHANGES:
             try:
                 items = tf.exchanges.get_instruments(ex, instrument_type="stock")
                 if items:
                     all_rows.extend(_flatten_instruments(items))
                     logger.info("instruments %s: %d stocks", ex, len(items))
+                else:
+                    incomplete = True
             except Exception as e:
+                incomplete = True
                 logger.warning("get_instruments(%s) failed: %s", ex, e)
+        # 全市场快照不能用单个交易所的成功响应覆盖。
+        if incomplete:
+            logger.warning("instruments 同步不完整, 保留原维表")
+            return 0
 
     if not all_rows:
         return 0
