@@ -20,8 +20,15 @@ const signalIcon = (packet: Pick<ChartIndicatorResult, 'pane' | 'drawings'>, dra
 const SIGNAL_ARROW_OFFSET = 8
 
 export function serverFormulaFigures(packet: ChartIndicatorResult): IndicatorFigure<Row>[] {
-  const lines: IndicatorFigure<Row>[] = packet.figures.filter(f => !f.hidden).map(f => ({ key: f.key, title: `${f.key}: `, type: 'line',
-    styles: () => ({ color: formulaColor(f.color, f.light_color), size: f.width, style: f.dash ? 'dashed' : 'solid', dashedValue: [f.dash_size ?? 4, f.dash_size ?? 3] }) }))
+  const lines: IndicatorFigure<Row>[] = packet.figures.filter(f => !f.hidden).map(f => f.point_dot ? {
+    key: f.key, title: `${f.key}: `, type: 'circle',
+    attrs: ({ coordinate }) => {
+      const { x, [f.key]: y } = coordinate.current
+      return y != null && Number.isFinite(y) ? { x, y, r: f.width / 2 } : null
+    },
+    styles: () => ({ color: formulaColor(f.color, f.light_color), style: 'fill' }),
+  } : { key: f.key, title: `${f.key}: `, type: 'line',
+    styles: () => ({ color: formulaColor(f.color, f.light_color), size: f.width, style: f.dash ? 'dashed' : 'solid', dashedValue: [f.dash_size ?? 4, f.dash_size ?? 3] }) })
   for (const drawing of packet.drawings.filter(d => d.kind === 'DRAWICON' || d.kind === 'DRAWTEXT')) {
     lines.push({ key: drawing.key, type: drawing.kind === 'DRAWICON' ? 'polygon' : 'text',
       attrs: ({ coordinate, data }) => {

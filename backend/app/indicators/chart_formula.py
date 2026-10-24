@@ -164,6 +164,8 @@ class Parser:
                     style['light_color'] = '#' + flag[10:]
                 elif re.fullmatch('LINETHICK[1-5]', flag):
                     style['width'] = int(flag[-1])
+                elif flag == 'POINTDOT':
+                    style['point_dot'] = True
                 elif flag in ('DOTLINE', 'DOTLINE2'):
                     style['dash'] = True
                     if flag == 'DOTLINE2':

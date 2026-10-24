@@ -26,6 +26,10 @@ class Definition(BaseModel):
     min_history_bars: int = Field(default=100, ge=1, le=20000)
 
 
+class FormulaValidation(Definition):
+    name: str = Field(default='', max_length=80)
+
+
 def _dir(request):
     return request.app.state.repo.store.data_dir
 
@@ -53,7 +57,7 @@ def language():
             '行情字段：OPEN/HIGH/LOW/CLOSE、VOL、AMOUNT。PERIOD为30/1440/10080/43200；COMPARE_DAYS为量能对比周期。\n'
             'MA/HHV/LLV/SUM/COUNT/STD需要完整窗口；STD使用N-1。EMA从首个有效值初始化，缺值重置；SMA(X,N,M)权重为M/N，第4参数为1时跳过缺值。\n'
             'REF可使用动态非负历史偏移；BARSLAST在首次命中前为空。FILTER在命中后冷却N根。\n'
-            '样式：COLORRED/COLORRRGGBB、LIGHTCOLORRRGGBB、LINETHICK1～5、DOTLINE/DOTLINE2、NODRAW。\n'
+            '样式：COLORRED/COLORRRGGBB、LIGHTCOLORRRGGBB、LINETHICK1～5、DOTLINE/DOTLINE2、POINTDOT（曲线逐根画点，粗细决定点径）、NODRAW。\n'
             'STICKLINE(条件,起点,终点,宽度,空心)；DRAWTEXT(条件,位置,\'文字\'[,右对齐1])；DRAWICON(条件,位置,1或2[,箭头尺寸])。\n'
             'DRAWSEGMENT(条件,起点索引,数值序列)在确认时连至当前值；DRAWLINE(起点条件,起点值,终点条件,终点值,0)。\n'
             'HLINE(数值[,\'标签\'])为参考线；TOOLTIP(数值,\'名称\'[,小数位,\'后缀\'])为辅助提示。\n'
@@ -77,8 +81,11 @@ def evaluate_loaded(body: Evaluation, request: Request):
 
 
 @router.post('/validate')
-def validate(body: Definition):
-    program = _call(chart_catalog.validate_definition, body.model_dump())
+def validate(body: FormulaValidation):
+    payload = body.model_dump()
+    # Formula checks can run before the user names the indicator; saving still requires a name.
+    payload['name'] = body.name.strip() or '公式校验'
+    program = _call(chart_catalog.validate_definition, payload)
     return {'valid': True, 'variables': chart_catalog.formula_variables(program)}
 
 

@@ -4,6 +4,23 @@ import { formulaContext, serverFormulaTemplate, serverFormulaDraw, serverFormula
 import type { ChartIndicatorResult } from './api'
 import type { Indicator, KLineData } from 'klinecharts'
 const packet: ChartIndicatorResult = { name: '测试', pane: 'sub', revision: 1, dates: ['2026-10-16'], rows: [{ line: 10, cond: 1, from: 3, to: 20, width: 8, hollow: 0 }], figures: [{ key: 'line', color: '#FF0000', width: 2, dash: false, hidden: false }], drawings: [{ key: '__draw', kind: 'STICKLINE', color: '#FF0000', width: 1, dash: false, hidden: false, fields: [[0,'cond'],[1,'from'],[2,'to'],[3,'width'],[4,'hollow']], text: [] }] }
+it('POINTDOT逐根绘制实心圆点，缺值不画，不连接相邻点且保留普通线', () => {
+  const figures = serverFormulaFigures({ ...packet, figures: [
+    { ...packet.figures[0], key: 'dots', point_dot: true, width: 3 },
+    { ...packet.figures[0], key: 'hidden', point_dot: true, hidden: true },
+    packet.figures[0],
+  ] })
+  expect(figures.map(f => f.type)).toEqual(['circle', 'line'])
+  const attrs = (value: number | null) => (figures[0].attrs as Function)({
+    coordinate: { current: { x: 30, dots: value } },
+  })
+  expect(attrs(20)).toEqual({ x: 30, y: 20, r: 1.5 })
+  expect(attrs(0)).toEqual({ x: 30, y: 0, r: 1.5 })
+  expect(attrs(null)).toBeNull()
+  expect(attrs(NaN)).toBeNull()
+  expect((figures[0].styles as Function)()).toMatchObject({ color: '#FF0000', style: 'fill' })
+})
+
 it('日期对齐上下文经过图表库的JSON式克隆后仍能读取，且不重算金融公式', async () => {
   const context = JSON.parse(JSON.stringify(formulaContext('test', packet, true, 1)))
   const template = serverFormulaTemplate('TEST')

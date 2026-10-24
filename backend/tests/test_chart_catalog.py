@@ -82,6 +82,25 @@ def test_management_api(tmp_path):
     assert client.delete('/api/indicators/'+item['id']+'?revision=2').status_code == 200
 
 
+@pytest.mark.parametrize('name', [None, '', '   '])
+def test_formula_validation_does_not_require_indicator_name(name, tmp_path):
+    app = FastAPI()
+    app.include_router(router)
+    app.state.repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))
+    client = TestClient(app)
+    payload = dict(pane='main', formula='MA13:MA(C,13),COLORWHITE,LINETHICK2;')
+    if name is not None:
+        payload['name'] = name
+    response = client.post('/api/indicators/validate', json=payload)
+    assert response.status_code == 200
+    assert response.json() == {'valid': True, 'variables': ['MA13']}
+    assert client.post('/api/indicators', json=payload).status_code == 422
+    invalid = client.post('/api/indicators/validate', json={**payload, 'formula': 'X:REF(C,-1);'})
+    assert invalid.status_code == 422
+    assert 'detail' in invalid.json()
+    assert client.post('/api/indicators/validate', json={**payload, 'formula': ''}).status_code == 422
+
+
 def test_chart_snapshots_versions_and_failed_write(tmp_path, monkeypatch):
     rows = [dict(date=f'2026-10-{i+1:02}', open=1., high=3., low=1., close=float(i+1), volume=10.) for i in range(20)]
     item = catalog.save_indicator(tmp_path, dict(name='线', pane='main', formula='线:MA(CLOSE,2);'))

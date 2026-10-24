@@ -16,6 +16,21 @@ def test_formula_values_styles_and_causal_signals():
     assert evaluate(compile_formula(source), rows[:4])['rows'] == result['rows'][:4]
 
 
+def test_pointdot_keeps_values_colors_width_and_hidden_outputs():
+    source = ('上轴:1,COLORGRAY,POINTDOT; 点:MA(C,2),POINTDOT,COLORWHITE,LINETHICK3;'
+              '隐藏:C,POINTDOT,NODRAW; 普通:C,COLORRED;')
+    result = evaluate(compile_formula(source), [{'close': v} for v in [1, 3, 5]])
+    assert [row['点'] for row in result['rows']] == [None, 2, 4]
+    assert result['figures'][0] == {
+        'key': '上轴', 'color': '#808080', 'width': 1, 'dash': False,
+        'hidden': False, 'point_dot': True,
+    }
+    assert result['figures'][1]['width'] == 3
+    assert result['figures'][1]['color'] == '#FFFFFF'
+    assert result['figures'][2]['hidden'] is True
+    assert 'point_dot' not in result['figures'][3]
+
+
 @pytest.mark.parametrize('source', [
     'X:REF(CLOSE,-1);', 'X:BACKSET(CLOSE,2);', 'X:__import__(1);',
     'X:UNKNOWN;', 'X:MA(CLOSE,0);', 'X:CLOSE.foo;', 'X:MA(CLOSE);',

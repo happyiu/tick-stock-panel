@@ -624,7 +624,7 @@ export interface IndicatorMonitorSnapshot {
   rows: KlineRow[]; symbol: string; asset_type: 'stock' | 'etf'; period: '30m' | '1d'
   indicator_results: Record<string, ChartIndicatorResult>; definition: ChartIndicatorDefinition
 }
-export interface ChartIndicatorStyle { key: string; color: string; width: number; dash: boolean; hidden: boolean; light_color?: string; dash_size?: number }
+export interface ChartIndicatorStyle { key: string; color: string; width: number; dash: boolean; hidden: boolean; light_color?: string; dash_size?: number; point_dot?: boolean }
 export interface ChartIndicatorDrawing extends ChartIndicatorStyle { kind: string; fields: [number, string][]; text: [number, string][]; constants?: [number, number | null][] }
 export interface ChartIndicatorResult {
   revision: number; name: string; pane: 'main' | 'sub'
