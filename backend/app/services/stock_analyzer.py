@@ -23,7 +23,7 @@ from pathlib import Path
 import polars as pl
 
 from app.indicators.levels import compute_levels, summarize_levels
-from app.market_time import cn_today
+from app.market_time import cn_now, cn_today
 from app.services.financial_sync import get_financial_df
 
 logger = logging.getLogger(__name__)
@@ -339,7 +339,7 @@ async def analyze_stock_stream(
         return
 
     # 2. 价位计算(基于 K 线)
-    levels = compute_levels(df)
+    levels = compute_levels(df, as_of=cn_now())
     close = float(df.tail(1)["close"][0]) if "close" in df.columns else None
 
     # 3. 财务(辅助)。ETF/指数无公司报表, 跳过扫描, 由提示词走对应常态文案。

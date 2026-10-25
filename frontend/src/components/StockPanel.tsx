@@ -906,9 +906,10 @@ export function StockPanel({
                 ranges={ranges}
                 priceLines={chartPriceLines}
                 priceCurves={priceLevelState.priceCurves}
+                priceZones={priceLevelState.priceZones}
                 highlightedKey={priceLevelState.hoveredKey}
                 onHighlightChange={priceLevelState.setHoveredKey}
-                priceLabelWidth={priceLevelState.priceLines.length || priceLevelState.priceCurves.length ? 110 : 0}
+                priceLabelWidth={priceLevelState.priceLines.length || priceLevelState.priceCurves.length || priceLevelState.priceZones.length ? 110 : 0}
                 showLimitMarkers={showLimitMarkers}
                 showMarkerToggle={showMarkerToggle}
                 linkedPrice={linkedPrice}

@@ -63,9 +63,32 @@ export const serverFormulaDraw: IndicatorDrawCallback<Row, number, FormulaContex
   ctx.save(); ctx.beginPath(); ctx.rect(0, 0, bounding.width, bounding.height); ctx.clip()
   const labels: { x: number; y: number; value: string; color: string; align: CanvasTextAlign }[] = []
   const occupied: { left: number; right: number; top: number; bottom: number }[] = []
-  const segment = (x1: number, y1: number, x2: number, y2: number, color: string, dashed: boolean, dashSize?: number) => {
-    ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.setLineDash(dashed ? [dashSize ?? 4, dashSize ?? 3] : [])
+  const segment = (x1: number, y1: number, x2: number, y2: number, color: string, dashed: boolean, dashSize?: number, width = 1) => {
+    ctx.strokeStyle = color; ctx.lineWidth = width; ctx.setLineDash(dashed ? [dashSize ?? 4, dashSize ?? 3] : [])
     ctx.beginPath(); ctx.moveTo(x1, yAxis.convertToPixel(y1)); ctx.lineTo(x2, yAxis.convertToPixel(y2)); ctx.stroke()
+  }
+  const pivots = packet.drawings.filter(d => d.kind === 'DRAWPIVOT' && !d.hidden)
+  if (pivots.length) {
+    const bars = chart.getDataList(), first = Math.max(0, range.from), last = Math.min(bars.length, range.to)-1
+    for (const drawing of pivots) {
+      const color = formulaColor(drawing.color, drawing.light_color)
+      for (const level of drawing.levels ?? []) {
+        if (first > last) continue
+        let low = 0, high = bars.length
+        while (low < high) {
+          const mid = (low+high) >>> 1
+          if (String(bars[mid].date ?? '') < level.confirmed_date) low = mid+1
+          else high = mid
+        }
+        const y = yAxis.convertToPixel(level.value)
+        if (low > last || !Number.isFinite(y) || y < 0 || y > bounding.height) continue
+        const from = low < first ? 0 : Math.max(0, xAxis.convertToPixel(low))
+        const to = Math.min(bounding.width, xAxis.convertToPixel(last))
+        if (from > to) continue
+        segment(from, level.value, to, level.value, color, drawing.dash, drawing.dash_size, drawing.width)
+        labels.push({ x: to-4, y: y-8, value: level.value.toFixed(packet.precision ?? 2), color, align: 'right' })
+      }
+    }
   }
   for (const drawing of packet.drawings.filter(d => d.kind === 'HLINE')) {
     const color = formulaColor(drawing.color, drawing.light_color), value = num(drawing, 0, indicator.result[Math.max(0, range.from)])
@@ -74,7 +97,7 @@ export const serverFormulaDraw: IndicatorDrawCallback<Row, number, FormulaContex
     const label = text(drawing, 1)
     if (label) { ctx.font = '9px JetBrains Mono, monospace'; ctx.fillStyle = color; ctx.textAlign = 'right'; ctx.textBaseline = 'bottom'; ctx.fillText(label, bounding.width-4, yAxis.convertToPixel(value)-2) }
   }
-  const drawings = packet.drawings.filter(d => !['HLINE','TOOLTIP','DRAWICON'].includes(d.kind) && !(d.kind === 'DRAWTEXT' && packet.pane === 'main'))
+  const drawings = packet.drawings.filter(d => !['HLINE','TOOLTIP','DRAWICON','DRAWPIVOT'].includes(d.kind) && !(d.kind === 'DRAWTEXT' && packet.pane === 'main'))
   const starts = new Map<string, number>()
   const begin = drawings.some(d => d.kind === 'DRAWLINE') ? 0 : Math.max(0, range.from)
   for (let i = begin; i < Math.min(range.to, indicator.result.length); i++) {

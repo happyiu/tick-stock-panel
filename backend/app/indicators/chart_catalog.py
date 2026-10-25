@@ -108,6 +108,9 @@ def validate_definition(item):
     if not isinstance(formula, str):
         raise CatalogError('公式必须是文本', 422)
     program = compile_formula(formula)
+    if item['pane'] != 'main' and any(node[0] == 'call' and node[1] == 'DRAWPIVOT'
+                                    for _, mode, node, *_ in program.statements if mode == 'draw'):
+        raise CatalogError('DRAWPIVOT仅支持主图叠加指标', 422)
     variables = formula_variables(program)
     signals = item.get('monitor_signals', [])
     if not isinstance(signals, list) or len(signals) > 32:
@@ -192,6 +195,13 @@ def _evaluate_for_chart(formula, rows, period, compare_days):
     columns = {tuple(row[key] for row in values): key for key in sorted(fields)}
     drawings = []
     for drawing in computed['drawings']:
+        if 'levels' in drawing:
+            drawing = {**drawing, 'levels': [
+                {'value': level['value'],
+                 'pivot_date': str(rows[level['pivot_index']]['date']).replace('T', ' ')[:16 if period == '30m' else 10],
+                 'confirmed_date': str(rows[level['confirmed_index']]['date']).replace('T', ' ')[:16 if period == '30m' else 10]}
+                for level in drawing['levels']
+            ]}
         mapped, constants = [], []
         for position, key in drawing['fields']:
             column = tuple(row[key] for row in values)
@@ -223,7 +233,8 @@ def attach_results(payload, data_dir, ids, compare_days=1, history_rows=None):
     # Real-time candle replacement must be identical to the candle returned to the client.
     by_date = {str(r['date']).replace('T', ' '): r for r in history}
     by_date.update({str(r['date']).replace('T', ' '): r for r in rows})
-    history = [by_date[key] for key in sorted(by_date)]
+    cutoff = max((str(r['date']).replace('T', ' ') for r in rows), default='')
+    history = [by_date[key] for key in sorted(by_date) if key <= cutoff]
     catalog = {item['id']: item for item in list_indicators(data_dir)['items']}
     legacy_loaded = {'angel-devil', 'boll2', 'kd-divergence', 'kd-enhanced', 'etf-swing-v2', 'bull-bear-trend-v2', 'vol'}
     result, errors, snapshots = {}, [], {}
@@ -238,7 +249,8 @@ def attach_results(payload, data_dir, ids, compare_days=1, history_rows=None):
             # Enriched scores and other unrelated columns are not formula inputs.
             if id(input_rows) not in snapshots:
                 snapshots[id(input_rows)] = json.dumps([
-                    {field: row.get(field) for field in ('date', 'open', 'high', 'low', 'close', 'volume', 'amount')}
+                    {field: row.get(field) for field in ('date', 'open', 'high', 'low', 'close', 'volume', 'amount', 'is_closed')
+                     if field != 'is_closed' or field in row}
                     for row in input_rows
                 ], default=str, allow_nan=True, separators=(',', ':'))
             snapshot = snapshots[id(input_rows)]

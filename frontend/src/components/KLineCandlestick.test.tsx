@@ -207,6 +207,20 @@ it('日期轴始终排在主图下方，切周期、增删重排副图和关闭�
   expect(paneOrder()).toEqual(['candle_pane', 'x_axis_pane', 'tsp_vol'])
 })
 
+it('远端拐点不压缩K线，其余价位沿用自动缩放', async () => {
+  await render({ priceLines: [{ value: 100, key: 'reversal', affectScale: false }, { value: 20, key: 'sr' }] })
+  const createRange = chart.overrideYAxis.mock.calls.at(-1)![0].createRange
+  expect(createRange({ defaultRange: { from: 9, to: 12 } })).toMatchObject({ from: 9, to: 20 })
+})
+it('供需区域作为独立覆盖物绘制，关闭后移除且不撑大价格轴', async () => {
+  await render({ priceZones: [{ key: 'supply', label: '供给区', lower: 50, upper: 60, start: '2026-10-02', color: '#EF4444' }] })
+  expect(state.overlays).toContainEqual(expect.objectContaining({ extendData: expect.objectContaining({ zone: true }) }))
+  const createRange = chart.overrideYAxis.mock.calls.at(-1)![0].createRange
+  expect(createRange({ defaultRange: { from: 9, to: 12 } })).toMatchObject({ from: 9, to: 12 })
+  await render({ priceZones: [] })
+  expect(state.overlays).not.toContainEqual(expect.objectContaining({ extendData: expect.objectContaining({ zone: true }) }))
+})
+
 it('日期点击与主图双击使用当前回调，副图区不触发价格预警', async () => {
   const onDateClick = vi.fn(), onPriceDoubleClick = vi.fn()
   await render({ onDateClick, onPriceDoubleClick })

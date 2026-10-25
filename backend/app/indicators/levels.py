@@ -1,7 +1,7 @@
 """关键价位计算 —— 独立模块,纯函数,无 IO / 无存储。
 
 输入: 已经包含 OHLCV 的 polars 日 K DataFrame(内存中,通常来自 KlineRepository 缓存)。
-输出: 4 类结构化价位点,供:
+输出: 结构化价位点,供:
   - 图表 markLine 渲染(压力位 / 支撑位 / 成交密集区 / 枢轴点 / 前高前低)
   - AI 个股分析提示词(价位上下文)
 
@@ -12,10 +12,15 @@
 """
 from __future__ import annotations
 
+import heapq
 import logging
+from datetime import date, datetime
 from typing import Any
 
 import polars as pl
+
+from app.indicators.chart_formula import FormulaError, compile_formula, evaluate
+from app.market_time import CN_TZ
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +48,8 @@ class PriceLevel:
 LEVEL_TYPES = {
     "sr": "压力支撑",        # 成交密集区(价量:Volume Profile POC + 高成交密集区)
     "pivot": "枢轴点",        # 经典 Pivot P/R/S
+    "reversal_pivot": "反转拐点",  # 左3右2确认、突破失效的局部高低点
+    "supply_demand": "供需区域",
     "extreme": "前高前低",    # 60/250 日极值 + 近期 swing 高低点
     "boll": "布林带",         # MA20 ± 2σ,标准差波动带(参考性,非真实支撑压力)
     "keltner_s": "Keltner短期",  # MA20 ± 2×ATR
@@ -563,10 +570,93 @@ def _round_numbers(df: pl.DataFrame, pct: float = 0.10, max_count: int = 8) -> l
                     "type": "round", "side": _side(v, close), "strength": "weak"})
     return out
 
-def compute_levels(df: pl.DataFrame) -> dict[str, list[dict]]:
-    """计算 11 类价位点,返回 {分组key: [点位...]}。
+def _closed_daily_rows(df: pl.DataFrame, columns: tuple[str, ...], as_of: datetime | None) -> list[dict]:
+    rows = df.select([key for key in (*columns, 'is_closed') if key in df.columns]).sort('date').to_dicts()
+    if as_of is not None:
+        now = as_of.astimezone(CN_TZ) if as_of.tzinfo else as_of.replace(tzinfo=CN_TZ)
+        for row in rows:
+            if row.get('is_closed') is None:
+                day = date.fromisoformat(str(row['date'])[:10])
+                row['is_closed'] = day < now.date() or (day == now.date() and now.hour >= 15)
+    return rows
 
-    分组 key 与 LEVEL_TYPES 一致(sr / pivot / extreme / boll /
+
+def _reversal_pivots(df: pl.DataFrame, as_of: datetime | None) -> list[dict]:
+    """Use the chart formula engine so confirmation, deduplication and invalidation agree."""
+    if not {'date', 'high', 'low'} <= set(df.columns):
+        return []
+    try:
+        rows = _closed_daily_rows(df, ('date', 'high', 'low'), as_of)
+        computed = evaluate(compile_formula('DRAWPIVOT(HIGH,3,2,1); DRAWPIVOT(LOW,3,2,-1);'), rows)
+        return [dict(value=point['value'], label='拐点压力' if side == 'resistance' else '拐点支撑',
+                     type='reversal_pivot', side=side, strength='strong',
+                     pivot_date=str(rows[point['pivot_index']]['date'])[:10],
+                     confirmed_date=str(rows[point['confirmed_index']]['date'])[:10])
+                for drawing, side in zip(computed['drawings'], ('resistance', 'support'), strict=True)
+                for point in drawing['levels'] if _ok(point['value'])]
+    except (FormulaError, ValueError, TypeError) as exc:
+        logger.warning('reversal pivots unavailable: %s', exc)
+        return []
+
+
+def _supply_demand_zones(df: pl.DataFrame, as_of: datetime | None) -> list[dict]:
+    """Two closed opposite candles form a zone; only an outer-boundary break removes it."""
+    columns = ('date', 'open', 'high', 'low', 'close')
+    if not set(columns) <= set(df.columns):
+        return []
+    try:
+        rows = _closed_daily_rows(df, columns, as_of)
+    except (ValueError, TypeError) as exc:
+        logger.warning('supply/demand dates unavailable: %s', exc)
+        return []
+    active, supply, demand = {}, [], []
+    for i, row in enumerate(rows):
+        if not _ok(row['high']) or not _ok(row['low']):
+            active.clear()
+            supply.clear()
+            demand.clear()
+            continue
+        while supply and row['high'] > supply[0][0]:
+            _, key = heapq.heappop(supply)
+            active.pop(key, None)
+        while demand and row['low'] < -demand[0][0]:
+            _, key = heapq.heappop(demand)
+            active.pop(key, None)
+        if i == 0 or row.get('is_closed', i < len(rows)-1) is not True:
+            continue
+        previous = rows[i-1]
+        if previous.get('is_closed', True) is not True:
+            continue
+        if any(not all(_ok(candle[key]) for key in ('open', 'high', 'low', 'close'))
+               or candle['high'] < max(candle['open'], candle['close'], candle['low'])
+               or candle['low'] > min(candle['open'], candle['close']) for candle in (previous, row)):
+            continue
+        prior_body = previous['close']-previous['open']
+        body = row['close']-row['open']
+        if prior_body == 0 or abs(body) < 1.8*abs(prior_body):
+            continue
+        if prior_body > 0 > body and row['open'] >= previous['open'] and row['close'] <= previous['close']:
+            lower, upper, side = previous['open'], max(previous['high'], row['high']), 'resistance'
+        elif prior_body < 0 < body and row['open'] <= previous['open'] and row['close'] >= previous['close']:
+            lower, upper, side = min(previous['low'], row['low']), previous['open'], 'support'
+        else:
+            continue
+        key = (side, lower, upper)
+        if lower >= upper or key in active:
+            continue
+        active[key] = dict(value=(lower+upper)/2, lower=lower, upper=upper, type='supply_demand',
+                           label='供给区' if side == 'resistance' else '需求区', side=side, strength='strong',
+                           formed_date=str(previous['date'])[:10], confirmed_date=str(row['date'])[:10])
+        heapq.heappush(supply if side == 'resistance' else demand, (upper if side == 'resistance' else -lower, key))
+        if len(active) > 500:
+            active.pop(next(iter(active)))
+    return list(active.values())
+
+
+def compute_levels(df: pl.DataFrame, *, as_of: datetime | None = None) -> dict[str, list[dict]]:
+    """计算 13 类价位点,返回 {分组key: [点位...]}。
+
+    分组 key 与 LEVEL_TYPES 一致(sr / pivot / reversal_pivot / supply_demand / extreme / boll /
     keltner_s / keltner_m / keltner_l / atr_stop / gap / fib / round),
     前端按 key 渲染开关按钮,逐组显隐。
     """
@@ -577,6 +667,8 @@ def compute_levels(df: pl.DataFrame) -> dict[str, list[dict]]:
         return {
             "sr": _support_resistance(df),
             "pivot": _pivot_points(df),
+            "reversal_pivot": _reversal_pivots(df, as_of),
+            "supply_demand": _supply_demand_zones(df, as_of),
             "extreme": _extreme_levels(df),
             "boll": _boll_channel(df),
             "keltner_s": _keltner_short(df),
@@ -607,7 +699,8 @@ def summarize_levels(levels: dict[str, list[dict]], close: float | None) -> str:
         # 按距当前价排序,取前 2
         ranked = sorted(pts, key=lambda p: abs(p["value"] - close))[:2]
         desc = "、".join(
-            f"{p['label']}={p['value']}" for p in ranked
+            f"{p['label']}={p['lower']}~{p['upper']}" if 'lower' in p and 'upper' in p
+            else f"{p['label']}={p['value']}" for p in ranked
         )
         parts.append(f"{label}: {desc}")
     return " · ".join(parts)

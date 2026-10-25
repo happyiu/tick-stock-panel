@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { chartTheme, getTheme } from '@/lib/theme'
 import type { KlineRow, LevelSeries, LevelType, PriceLevel } from '@/lib/api'
 import { fmtAssetPrice } from '@/lib/format'
+import type { ChartPriceLine, ChartPriceZone } from '@/lib/kline-chart'
 export type { LevelType, PriceLevel } from '@/lib/api'
 
 /** 当前主题的图表调色板。 */
@@ -11,6 +12,8 @@ const CT = () => chartTheme(getTheme())
 export const LEVEL_GROUPS: { key: LevelType; label: string; color: string }[] = [
   { key: 'sr',       label: '压力支撑',  color: '#F97316' },   // 橙(成交密集区,价量驱动)
   { key: 'pivot',    label: '枢轴点',    color: '#8B5CF6' },   // 紫
+  { key: 'reversal_pivot', label: '反转拐点', color: '#14B8A6' },
+  { key: 'supply_demand', label: '供需区域', color: '#F43F5E' },
   { key: 'extreme',  label: '前高前低',  color: '#EAB308' },   // 黄
   { key: 'boll',     label: '布林带',    color: '#F97316' },   // 橙(MA20±2σ 曲线)
   { key: 'keltner_s',label: 'Keltner短期',  color: '#06B6D4' },   // 青(MA20±2ATR 曲线)
@@ -104,6 +107,13 @@ export function usePriceLevels({ rows, levels, series, seriesDates, defaultLevel
   const priceLines = useMemo(() => collectPriceLines(levels, activeTypes, pivotRank).map(line => ({
     ...line, key: levelKey(line.type, line.value, assetType),
   })), [levels, activeTypes, pivotRank, assetType])
+  const priceZones = useMemo<ChartPriceZone[]>(() => activeTypes.has('supply_demand')
+    ? (levels?.supply_demand ?? []).filter(point => point.lower != null && point.upper != null
+      && Number.isFinite(point.lower) && Number.isFinite(point.upper)
+      && point.lower > 0 && point.upper > point.lower && point.confirmed_date).map(point => ({
+      key: zoneKey(point), label: point.label, lower: point.lower!, upper: point.upper!,
+      start: point.confirmed_date!, color: levelColor(point),
+    })) : [], [levels, activeTypes])
   const priceCurves = useMemo(() => CURVE_DEFS.filter(def => activeTypes.has(def.group) && alignedSeries[def.alignedKey]).map(def => ({
     key: def.group, label: def.endLabel, color: def.color, dashed: def.dashed,
     data: dates.map((date, i) => ({ date, value: alignedSeries[def.alignedKey]?.[i] ?? null })),
@@ -119,7 +129,7 @@ export function usePriceLevels({ rows, levels, series, seriesDates, defaultLevel
     })
   }
 
-  return { data, priceLines, priceCurves, activeTypes, pivotRank, setPivotRank, hoveredKey, setHoveredKey, toggleType }
+  return { data, priceLines, priceCurves, priceZones, activeTypes, pivotRank, setPivotRank, hoveredKey, setHoveredKey, toggleType }
 }
 
 export function PriceLevelControls({ levels, activeTypes, pivotRank, setPivotRank, toggleType }: {
@@ -225,8 +235,10 @@ export function LevelOverview({
   }
 
   const renderRow = (p: PriceLevel, key: string) => {
-    const color = LEVEL_GROUPS.find(g => g.key === p.type)?.color ?? CT().text
-    const k = levelKey(p.type, p.value, assetType)
+    const color = levelColor(p)
+    const k = p.type === 'supply_demand' ? zoneKey(p) : levelKey(p.type, p.value, assetType)
+    const isZone = p.lower != null && p.upper != null
+    const nearest = isZone ? Math.max(p.lower!, Math.min(cur, p.upper!)) : p.value
     const hit = hoveredKey === k
     const dim = hoveredKey != null && !hit
     return (
@@ -241,8 +253,8 @@ export function LevelOverview({
       >
         <span className="h-1.5 w-1.5 rounded-full shrink-0 transition-transform" style={{ backgroundColor: color, transform: hit ? 'scale(1.5)' : 'scale(1)' }} />
         <span className={`text-[11px] min-w-0 flex-1 truncate ${hit ? 'text-foreground font-medium' : 'text-secondary'}`} title={p.label}>{p.label}</span>
-        <span className={`text-[11px] font-mono ${hit ? 'text-foreground font-bold' : 'text-foreground'}`}>{fmtAssetPrice(p.value, assetType)}</span>
-        <span className="text-[9px] font-mono text-muted">{fmtPct(p.value)}</span>
+        <span className={`text-[11px] font-mono ${hit ? 'text-foreground font-bold' : 'text-foreground'}`}>{isZone ? `${fmtAssetPrice(p.lower!, assetType)}–${fmtAssetPrice(p.upper!, assetType)}` : fmtAssetPrice(p.value, assetType)}</span>
+        <span className="text-[9px] font-mono text-muted">{fmtPct(nearest)}</span>
       </div>
     )
   }
@@ -286,9 +298,9 @@ function collectPriceLines(
   levels: Record<LevelType, PriceLevel[]> | undefined,
   active: Set<LevelType>,
   pivotRank: 1 | 2 | 3,
-): { value: number; label: string; color: string; type: string }[] {
+): (ChartPriceLine & { type: string })[] {
   if (!levels) return []
-  const out: { value: number; label: string; color: string; type: string }[] = []
+  const out: (ChartPriceLine & { type: string })[] = []
   for (const g of LEVEL_GROUPS) {
     if (!active.has(g.key)) continue
     for (const p of levels[g.key] ?? []) {
@@ -296,12 +308,23 @@ function collectPriceLines(
       if (p.type === 'pivot' && p.rank !== undefined && p.rank > pivotRank) continue
       // 波动通道类(boll / keltner三档 / atr_stop)整组走曲线渲染,不画水平线;
       // sr 组现为成交密集区水平点,直接画线即可,无需特判。
-      if (p.type === 'boll' || p.type === 'keltner_s' || p.type === 'keltner_m'
+      if (p.type === 'supply_demand' || p.type === 'boll' || p.type === 'keltner_s' || p.type === 'keltner_m'
           || p.type === 'keltner_l' || p.type === 'atr_stop') continue
-      out.push({ value: p.value, label: p.label, color: strengthColor(p.strength, g.color), type: p.type })
+      out.push({ value: p.value, label: p.label, color: strengthColor(p.strength, levelColor(p)), type: p.type,
+        ...(p.confirmed_date ? { start: p.confirmed_date } : {}),
+        ...(p.type === 'reversal_pivot' ? { affectScale: false } : {}) })
     }
   }
   return out
+}
+
+function levelColor(point: PriceLevel): string {
+  if (point.type === 'reversal_pivot' || point.type === 'supply_demand') return point.side === 'resistance' ? '#EF4444' : '#22C55E'
+  return LEVEL_GROUPS.find(group => group.key === point.type)?.color ?? CT().text
+}
+
+function zoneKey(point: PriceLevel): string {
+  return `${point.type}-${point.side}-${point.lower}-${point.upper}-${point.confirmed_date}`
 }
 
 function strengthColor(strength: string | undefined, base: string): string {

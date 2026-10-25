@@ -1,0 +1,13 @@
+{
+  "id": "reversal-pivots",
+  "name": "反转拐点",
+  "pane": "main",
+  "source": "custom",
+  "formula": "{ 跟随当前K线周期；左3根、右2根，右侧K线收盘后确认 }\n左侧:=3; 右侧:=2;\nDRAWPIVOT(HIGH,左侧,右侧,1),COLORRED;\nDRAWPIVOT(LOW,左侧,右侧,-1),COLORGREEN;\n",
+  "description": "多条有效支撑/压力线。默认左3右2，收盘确认后向右延续，最高价突破压力或最低价跌破支撑时整条移除；触碰不移除。最多显示最近确认的500条有效线，仅供当前图表参考。",
+  "height": 100,
+  "revision": 1,
+  "precision": 3,
+  "min_history_bars": 6,
+  "monitor_signals": []
+}

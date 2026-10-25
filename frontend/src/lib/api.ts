@@ -235,7 +235,7 @@ export interface AiFinancialReport {
 }
 
 // ===== 个股分析 =====
-export type LevelType = 'sr' | 'pivot' | 'extreme' | 'boll' | 'keltner_s' | 'keltner_m' | 'keltner_l' | 'atr_stop' | 'gap' | 'fib' | 'round'
+export type LevelType = 'sr' | 'pivot' | 'reversal_pivot' | 'supply_demand' | 'extreme' | 'boll' | 'keltner_s' | 'keltner_m' | 'keltner_l' | 'atr_stop' | 'gap' | 'fib' | 'round'
 
 export interface PriceLevel {
   value: number
@@ -245,6 +245,11 @@ export interface PriceLevel {
   strength?: 'strong' | 'medium' | 'weak'
   /** 档位(仅 pivot 有):0=P, 1=R1/S1, 2=R2/S2, 3=R3/S3。前端按"显示到第几档"过滤。 */
   rank?: number
+  pivot_date?: string
+  confirmed_date?: string
+  lower?: number
+  upper?: number
+  formed_date?: string
 }
 
 /** 带状曲线指标(布林带/Keltner/ATR)的每日时间序列,与 dates 对齐。 */
@@ -625,7 +630,12 @@ export interface IndicatorMonitorSnapshot {
   indicator_results: Record<string, ChartIndicatorResult>; definition: ChartIndicatorDefinition
 }
 export interface ChartIndicatorStyle { key: string; color: string; width: number; dash: boolean; hidden: boolean; light_color?: string; dash_size?: number; point_dot?: boolean }
-export interface ChartIndicatorDrawing extends ChartIndicatorStyle { kind: string; fields: [number, string][]; text: [number, string][]; constants?: [number, number | null][] }
+export interface ChartPivotLevel { value: number; pivot_date: string; confirmed_date: string }
+export interface ChartIndicatorDrawing extends ChartIndicatorStyle {
+  kind: string; fields: [number, string][]; text: [number, string][]
+  constants?: [number, number | null][]
+  levels?: ChartPivotLevel[]
+}
 export interface ChartIndicatorResult {
   revision: number; name: string; pane: 'main' | 'sub'
   min_value?: number | null; max_value?: number | null; precision?: number | null

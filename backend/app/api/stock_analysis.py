@@ -3,7 +3,7 @@
 路由前缀: /api/stock-analysis
 
 端点:
-  GET  /levels?symbol=         11 类关键价位(图表 markLine 数据源)
+  GET  /levels?symbol=         13 类关键价位(图表 markLine 数据源)
   POST /analyze                AI 流式四维分析(NDJSON)
   POST /chat/stream            Hermes-only 详情页多轮对话(NDJSON)
   GET  /reports                历史报告列表
@@ -22,8 +22,8 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.indicators.levels import compute_levels, summarize_levels
-from app.market_time import cn_today
+from app.indicators.levels import LEVEL_TYPES, compute_levels, summarize_levels
+from app.market_time import cn_now, cn_today
 from app.services import stock_reports
 from app.services.ndjson_heartbeat import with_heartbeat
 from app.services.stock_analyzer import analyze_stock_stream
@@ -117,11 +117,11 @@ def get_levels(
     days: int = Query(120, ge=30, le=500, description="计算样本天数"),
     end_date: Annotated[date | None, Query(description="历史观察截止日期,缺省为北京今天")] = None,
 ):
-    """计算 11 类关键价位(成交密集区压力支撑 / 枢轴点 / 前高前低 /
+    """计算 13 类关键价位(成交密集区压力支撑 / 枢轴点 / 反转拐点 / 供需区域 / 前高前低 /
     布林带 / Keltner短中长 / ATR止损 / 缺口 / 斐波那契 / 整数关口)。
 
     返回 {levels: {sr, pivot, extreme, boll, keltner_s, keltner_m, keltner_l,
-    atr_stop, gap, fib, round}, close, summary, dates, series}。
+    atr_stop, gap, fib, round, reversal_pivot, supply_demand}, close, summary, dates, series}。
     前端按 levels 的 key 渲染开关按钮,逐组显隐 markLine / 曲线。
     """
     if not symbol:
@@ -136,14 +136,12 @@ def get_levels(
     if not df.is_empty():
         df = df.filter(pl.col("date").cast(pl.Date) <= end)
     if df.is_empty():
-        return {"levels": {"sr": [], "pivot": [], "extreme": [],
-                           "boll": [], "keltner_s": [], "keltner_m": [], "keltner_l": [],
-                           "atr_stop": [], "gap": [], "fib": [], "round": []},
+        return {"levels": {key: [] for key in LEVEL_TYPES},
                 "close": None, "summary": "无数据", "symbol": symbol,
                 "asset_type": asset_type,
                 "dates": [], "series": {}}
 
-    levels = compute_levels(df)
+    levels = compute_levels(df, as_of=cn_now())
     close = float(df.tail(1)["close"][0]) if "close" in df.columns else None
     # 日期 + 带状曲线序列(供前端画 Keltner/ATR/布林带曲线)
     dates = df["date"].to_list()

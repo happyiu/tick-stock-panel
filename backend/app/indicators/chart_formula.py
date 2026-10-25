@@ -2,6 +2,7 @@
 """Bounded, causal chart-only formula interpreter. No executable user code."""
 from __future__ import annotations
 
+import heapq
 import math
 import operator
 import re
@@ -22,7 +23,9 @@ FUNCTIONS = {'MA': (2, 2), 'EMA': (2, 3), 'SMA': (3, 4), 'REF': (2, 2),
              'FILTER': (2, 2), 'SLOPE': (2, 2), 'VALUEWHEN': (2, 2),
              'BARSCOUNT': (1, 1), 'ISVALID': (1, 1), 'NZ': (1, 2), 'SIGN': (1, 1)}
 DRAWINGS = {'STICKLINE': (5, 5), 'DRAWTEXT': (3, 4), 'DRAWICON': (3, 4),
-            'DRAWSEGMENT': (3, 3), 'DRAWLINE': (5, 5), 'HLINE': (1, 2), 'TOOLTIP': (2, 4)}
+            'DRAWSEGMENT': (3, 3), 'DRAWLINE': (5, 5), 'HLINE': (1, 2), 'TOOLTIP': (2, 4),
+            'DRAWPIVOT': (4, 4)}
+MAX_PIVOT_LEVELS = 500
 INPUTS = {'OPEN', 'HIGH', 'LOW', 'CLOSE', 'O', 'H', 'L', 'C', 'VOL', 'VOLUME',
           'V', 'AMOUNT', 'PERIOD', 'COMPARE_DAYS', 'DRAWNULL', 'TRUE', 'FALSE'}
 TOKEN = re.compile(r"\s+|\{[^}]*\}|//[^\n]*|(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?|'(?:[^'\\]|\\.)*'|[\w\u4e00-\u9fff]+|:=|>=|<=|<>|!=|==|&&|\|\||[+*/^=<>():;,!\-]", re.DOTALL)
@@ -201,6 +204,7 @@ def truth(value):
 class Interpreter:
     def __init__(self, rows, period, compare_days):
         self.n = len(rows)
+        self.closed = [r.get('is_closed', i < self.n-1) is True for i, r in enumerate(rows)]
         if self.n > 20000:
             raise FormulaError('单次最多计算20000根K线')
         self.deadline = time.monotonic() + 3
@@ -270,6 +274,50 @@ class Interpreter:
         if not math.isfinite(value) or int(value) != value or not minimum <= value <= 20000 or any(v != value for v in values):
             raise FormulaError(f'周期参数必须是{minimum}～20000的固定整数')
         return int(value)
+
+    def pivot_levels(self, args):
+        source, left_values, right_values, directions = args
+        if isinstance(source, str):
+            raise FormulaError('DRAWPIVOT价格序列必须为数值')
+        left, right = self.integer(left_values), self.integer(right_values)
+        direction = directions[0] if directions else 1
+        if direction not in (-1, 1) or any(v != direction for v in directions):
+            raise FormulaError('DRAWPIVOT方向必须为固定的1或-1')
+        window = left + right + 1
+        if window > 20000:
+            raise FormulaError('DRAWPIVOT左右窗口合计最多20000根K线')
+        # Nulls and unfinished candles cannot confirm a pivot; choose the last equal extremum.
+        values = pl.Series([v if closed and math.isfinite(v) else None
+                            for v, closed in zip(source, self.closed, strict=True)], dtype=pl.Float64)
+        rolling = values.rolling_max if direction == 1 else values.rolling_min
+        extremes = rolling(window).to_list()
+        right_extremes = rolling(right).to_list()
+        breaks = self.env['HIGH' if direction == 1 else 'LOW']
+        active, heap = {}, []
+        for i, current in enumerate(breaks):
+            if i % 256 == 0:
+                self.check()
+            if not math.isfinite(current):
+                # An unknown high/low could have broken every existing level.
+                active.clear()
+                heap.clear()
+                continue
+            while heap and direction * current > heap[0][0]:
+                _, value = heapq.heappop(heap)
+                active.pop(value, None)
+            if extremes[i] is None or right_extremes[i] is None:
+                continue
+            pivot = i-right
+            value = source[pivot]
+            if (direction * value < direction * extremes[i]
+                    or direction * value <= direction * right_extremes[i]
+                    or direction * current > direction * value or value in active):
+                continue
+            active[value] = {'value': value, 'pivot_index': pivot, 'confirmed_index': i}
+            heapq.heappush(heap, (direction * value, value))
+            if len(active) > MAX_PIVOT_LEVELS:
+                active.pop(next(iter(active)))
+        return list(active.values())
 
     def function(self, name, args):
         a = args[0]
@@ -367,6 +415,10 @@ def evaluate(program: Program, rows: list[dict], period='1d', compare_days=1) ->
         for _statement_index, (key, mode, node, style) in enumerate(program.statements):
             if mode == 'draw':
                 _, kind, children = node
+                if kind == 'DRAWPIVOT':
+                    levels = interpreter.pivot_levels([interpreter.run(child) for child in children])
+                    drawings.append({**style, 'kind': kind, 'fields': [], 'text': [], 'levels': levels})
+                    continue
                 fields, text = [], []
                 for i, child in enumerate(children):
                     value = interpreter.run(child)
@@ -407,5 +459,15 @@ def evaluate(program: Program, rows: list[dict], period='1d', compare_days=1) ->
         line, column = program.locations[_statement_index]
         message = str(exc) if isinstance(exc, FormulaError) else '参数类型错误或计算超限'
         raise FormulaError(f'第{line}行，第{column}列：{message}') from exc
+    pivot_levels = sorted((level['confirmed_index'], drawing_index, level_index)
+                          for drawing_index, drawing in enumerate(drawings)
+                          for level_index, level in enumerate(drawing.get('levels', [])))
+    if len(pivot_levels) > MAX_PIVOT_LEVELS:
+        retained = {(drawing_index, level_index) for _, drawing_index, level_index
+                    in pivot_levels[-MAX_PIVOT_LEVELS:]}
+        for drawing_index, drawing in enumerate(drawings):
+            if 'levels' in drawing:
+                drawing['levels'] = [level for level_index, level in enumerate(drawing['levels'])
+                                     if (drawing_index, level_index) in retained]
     result = [{key: float(values[i]) if math.isfinite(values[i]) else None for key, values in columns.items()} for i in range(len(rows))]
     return {'rows': result, 'figures': figures, 'drawings': drawings}

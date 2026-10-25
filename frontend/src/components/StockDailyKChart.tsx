@@ -52,6 +52,7 @@ interface Props {
   ranges?: ChartRange[]
   priceLines?: ChartPriceLine[]
   priceCurves?: CandlestickProps['priceCurves']
+  priceZones?: CandlestickProps['priceZones']
   highlightedKey?: CandlestickProps['highlightedKey']
   onHighlightChange?: CandlestickProps['onHighlightChange']
   priceLabelWidth?: number
@@ -199,6 +200,7 @@ function StockDailyKChartView({
   ranges,
   priceLines,
   priceCurves,
+  priceZones,
   highlightedKey,
   onHighlightChange,
   priceLabelWidth,
@@ -569,6 +571,7 @@ function StockDailyKChartView({
           ranges={ranges}
           priceLines={priceLines}
           priceCurves={priceCurves}
+          priceZones={priceZones}
           highlightedKey={highlightedKey}
           onHighlightChange={onHighlightChange}
           priceLabelWidth={priceLabelWidth}

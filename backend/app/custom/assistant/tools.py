@@ -28,7 +28,7 @@ from typing import Any
 
 import polars as pl
 
-from app.market_time import cn_today
+from app.market_time import cn_now, cn_today
 from app.services import tool_catalog
 
 # ----------------------------------------------------------------
@@ -453,7 +453,7 @@ def _get_stock_analysis(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
         return {"symbol": symbol, "note": "本地没有该标的的日线数据, 无法分析。"}
     recent = df.tail(120)
     close = float(recent["close"][-1]) if recent.height else None
-    levels = compute_levels(recent)
+    levels = compute_levels(recent, as_of=cn_now())
     keep = [
         c for c in (
             "date", "close", "change_pct", "amount", "turnover_rate", "amplitude",

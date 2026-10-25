@@ -36,6 +36,12 @@ const levels: StockLevels = {
   levels: { sr: [{ type: 'sr', value: 0.49, label: '支撑', side: 'support' }],
     pivot: [{ type: 'pivot', value: 0.5, label: 'P', side: 'neutral', rank: 0 }, { type: 'pivot', value: 0.52, label: 'R2', side: 'resistance', rank: 2 }],
     boll: [{ type: 'boll', value: 0.51, label: '布林上轨', side: 'resistance' }],
+    reversal_pivot: [{ type: 'reversal_pivot', value: 0.503, label: '拐点压力', side: 'resistance',
+      pivot_date: '2026-10-10', confirmed_date: '2026-10-14' }],
+    supply_demand: [
+      { type: 'supply_demand', value: 0.51, lower: 0.50, upper: 0.52, side: 'resistance', label: '供给区', confirmed_date: '2026-10-14' },
+      { type: 'supply_demand', value: 0.51, lower: 0.49, upper: 0.53, side: 'support', label: '需求区', confirmed_date: '2026-10-15' },
+    ],
   } as StockLevels['levels'],
   dates: ['2026-10-14', '2026-10-15'], series: { boll: { upper: [0.51, 0.52], lower: [0.47, 0.48] } },
 }
@@ -93,6 +99,30 @@ it('历史截面隔离查询，切股加载中清除旧价位，非日K提示口
   await render({ period: '1w' })
   expect(state.chart.priceLines).toEqual([])
   expect(host.textContent).toContain('关键价位按日K计算')
+})
+it('反转拐点在关键价位中独立开关，保留确认日期和ETF精度', async () => {
+  await render(); await click('关键价位', 'tab')
+  expect(state.chart.priceLines).toEqual([])
+  await click('反转拐点')
+  expect(state.chart.priceLines).toMatchObject([{ value: 0.503, label: '拐点压力', start: '2026-10-14', type: 'reversal_pivot', affectScale: false }])
+  expect(host.textContent).toContain('0.503')
+  await click('反转拐点')
+  expect(state.chart.priceLines).toEqual([])
+})
+it('供需区域绘制价格带和上下沿明细，同中点区域不共用高亮键，非日K清除区域', async () => {
+  await render(); await click('关键价位', 'tab'); await click('供需区域')
+  expect(state.chart.priceLines).toEqual([])
+  expect(state.chart.priceZones).toMatchObject([
+    { lower: 0.50, upper: 0.52, label: '供给区', start: '2026-10-14' },
+    { lower: 0.49, upper: 0.53, label: '需求区', start: '2026-10-15' },
+  ])
+  expect(new Set(state.chart.priceZones?.map(zone => zone.key)).size).toBe(2)
+  expect(host.textContent).toContain('0.500–0.520')
+  expect(host.textContent).toContain('0.490–0.530')
+  await click('供需区域')
+  expect(state.chart.priceZones).toEqual([])
+  await click('供需区域'); await render({ period: '1w' })
+  expect(state.chart.priceZones).toEqual([])
 })
 it('错误可重试，无价位时提示，空组不可点击', async () => {
   state.levels.mockRejectedValue(new Error('failed'))

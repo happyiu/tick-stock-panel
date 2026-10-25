@@ -58,6 +58,7 @@ export interface ChartPriceLine {
   start?: string
   end?: string
   key?: string
+  affectScale?: boolean
 }
 
 export interface ChartPriceCurve {
@@ -66,6 +67,15 @@ export interface ChartPriceCurve {
   color: string
   dashed?: boolean
   data: { date: string; value: number | null }[]
+}
+
+export interface ChartPriceZone {
+  key: string
+  label: string
+  lower: number
+  upper: number
+  start: string
+  color: string
 }
 
 export interface CandlestickProps {
@@ -78,6 +88,7 @@ export interface CandlestickProps {
   ranges?: ChartRange[]
   priceLines?: ChartPriceLine[]
   priceCurves?: ChartPriceCurve[]
+  priceZones?: ChartPriceZone[]
   priceLabelWidth?: number
   highlightedKey?: string | null
   onHighlightChange?: (key: string | null) => void

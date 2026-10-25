@@ -38,7 +38,7 @@ export function KLineCandlestick({
   onDateClick, onPriceDoubleClick, visibleBars = 60, activeIndicators = EMPTY,
   volumeCompare = DEFAULT_COMPARE, volumeCompareControls, addedDate, assetType, period = '1d', selectedDate,
   chanlunAnalysis, chanlunOverlay, hideCurrentDate = false,
-  priceCurves = EMPTY, priceLabelWidth = 0, highlightedKey, onHighlightChange, showRangeSelector = false,
+  priceCurves = EMPTY, priceZones = EMPTY, priceLabelWidth = 0, highlightedKey, onHighlightChange, showRangeSelector = false,
 }: CandlestickProps) {
   const managed = indicatorDefinitions != null
   const definitions = indicatorDefinitions ?? legacyDefinitions
@@ -428,7 +428,8 @@ export function KLineCandlestick({
     chart.overrideYAxis({
       paneId: 'candle_pane', gap: { top: 32, bottom: 32 },
       createRange: ({ defaultRange }) => {
-        const values = priceLines.map(line => line.value).filter(value => Number.isFinite(value) && value > 0)
+        const values = priceLines.filter(line => line.affectScale !== false)
+          .map(line => line.value).filter(value => Number.isFinite(value) && value > 0)
         const visible = chart.getVisibleRange()
         const dates = new Set(bars.slice(Math.max(0, visible.from), visible.to).map(bar => bar.date))
         for (const curve of priceCurves) for (const row of curve.data) {
@@ -457,7 +458,7 @@ export function KLineCandlestick({
   useEffect(() => {
     const chart = chartRef.current
     if (!chart) return
-    const overlays = buildLevelOverlays(bars, priceLines, priceCurves, priceLabelWidth, highlightedKey, onHighlightChange, assetType)
+    const overlays = buildLevelOverlays(bars, priceLines, priceCurves, priceLabelWidth, highlightedKey, onHighlightChange, assetType, priceZones)
     const existing = chart.getOverlays({ groupId: LEVEL_GROUP })
     const ids = new Set(overlays.map(overlay => overlay.id))
     for (const overlay of existing) if (!ids.has(overlay.id)) chart.removeOverlay({ id: overlay.id })
@@ -466,7 +467,7 @@ export function KLineCandlestick({
       if (previous.has(overlay.id!)) chart.overrideOverlay(overlay)
       else chart.createOverlay(overlay)
     }
-  }, [bars, priceLines, priceCurves, priceLabelWidth, highlightedKey, onHighlightChange, assetType, theme])
+  }, [bars, priceLines, priceCurves, priceZones, priceLabelWidth, highlightedKey, onHighlightChange, assetType, theme])
 
   useEffect(() => { chartRef.current?.resize() }, [chartHeight])
 

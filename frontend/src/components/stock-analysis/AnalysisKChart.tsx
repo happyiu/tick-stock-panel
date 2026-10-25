@@ -69,7 +69,7 @@ export function AnalysisKChart({
         data={state.data} symbol={symbol} height={height} assetType={assetType}
         showMA={false} showInfoBar={false} visibleBars={120} activeIndicators={['vol']}
         volumeCompare={{ enabled: false, days: 1 }} markers={chartMarkers} ranges={ranges}
-        priceLines={state.priceLines} priceCurves={state.priceCurves} priceLabelWidth={144}
+        priceLines={state.priceLines} priceCurves={state.priceCurves} priceZones={state.priceZones} priceLabelWidth={144}
         highlightedKey={state.hoveredKey} onHighlightChange={state.setHoveredKey}
         onDateClick={onDateClick} showRangeSelector
       />

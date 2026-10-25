@@ -72,7 +72,7 @@ def test_management_api(tmp_path):
     app.state.repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))
     client = TestClient(app)
     payload = dict(name='测试', pane='sub', formula='结果:MA(CLOSE,5);')
-    assert len(client.get('/api/indicators').json()['items']) == 12
+    assert len(client.get('/api/indicators').json()['items']) == 13
     assert client.post('/api/indicators/validate', json={**payload, 'formula': '结果:REF(CLOSE,-1);'}).status_code == 422
     item = client.post('/api/indicators', json=payload).json()
     assert client.get('/api/indicators/'+item['id']).json()['revision'] == 1

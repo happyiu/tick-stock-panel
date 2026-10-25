@@ -4,6 +4,39 @@ import { formulaContext, serverFormulaTemplate, serverFormulaDraw, serverFormula
 import type { ChartIndicatorResult } from './api'
 import type { Indicator, KLineData } from 'klinecharts'
 const packet: ChartIndicatorResult = { name: '测试', pane: 'sub', revision: 1, dates: ['2026-10-16'], rows: [{ line: 10, cond: 1, from: 3, to: 20, width: 8, hollow: 0 }], figures: [{ key: 'line', color: '#FF0000', width: 2, dash: false, hidden: false }], drawings: [{ key: '__draw', kind: 'STICKLINE', color: '#FF0000', width: 1, dash: false, hidden: false, fields: [[0,'cond'],[1,'from'],[2,'to'],[3,'width'],[4,'hollow']], text: [] }] }
+
+it('多价位从确认K线起画，裁剪前的价位延续到当前K线并沿用样式', () => {
+  const pivots: ChartIndicatorResult = { ...packet, pane: 'main', precision: 3, figures: [], drawings: [{
+    ...packet.drawings[0], kind: 'DRAWPIVOT', fields: [], text: [], width: 3, dash: true,
+    levels: [
+      { value: 12, pivot_date: '2026-10-12', confirmed_date: '2026-10-14' },
+      { value: 8, pivot_date: '2026-10-14', confirmed_date: '2026-10-16' },
+      { value: 9, pivot_date: '2026-10-16', confirmed_date: '2026-10-18' },
+    ],
+  }] }
+  const lines: unknown[] = []
+  const ctx = { save: vi.fn(), restore: vi.fn(), beginPath: vi.fn(), rect: vi.fn(), clip: vi.fn(),
+    moveTo: vi.fn(), lineTo: vi.fn(), setLineDash: vi.fn(), stroke: vi.fn(() => lines.push(ctx.lineWidth)),
+    fillText: vi.fn(), measureText: () => ({ width: 36 }), lineWidth: 1,
+  }
+  const draw = (value: ChartIndicatorResult) => serverFormulaDraw({
+    ctx, chart: { getVisibleRange: () => ({ from: 0, to: 2 }), getDataList: () => [
+      { date: '2026-10-15' }, { date: '2026-10-16' },
+    ] }, bounding: { width: 200, height: 120 },
+    xAxis: { convertToPixel: (i: number) => 30+i*100 }, yAxis: { convertToPixel: (v: number) => 120-v*5 },
+    indicator: { result: [{}, {}], extendData: JSON.parse(JSON.stringify(formulaContext('reversal-pivots', value, false, 1))) },
+  } as unknown as Parameters<typeof serverFormulaDraw>[0])
+  draw(pivots)
+  expect(ctx.moveTo.mock.calls).toEqual([[30, 60], [130, 80]])
+  expect(ctx.lineTo.mock.calls).toEqual([[130, 60], [130, 80]])
+  expect(lines).toEqual([3, 3])
+  expect(ctx.setLineDash).toHaveBeenCalledWith([4, 3])
+  expect(ctx.fillText).toHaveBeenCalledWith('12.000', 126, 52)
+  expect(serverFormulaFigures(pivots)).toEqual([])
+  ctx.moveTo.mockClear()
+  draw({ ...pivots, drawings: [{ ...pivots.drawings[0], levels: [] }] })
+  expect(ctx.moveTo).not.toHaveBeenCalled()
+})
 it('POINTDOT逐根绘制实心圆点，缺值不画，不连接相邻点且保留普通线', () => {
   const figures = serverFormulaFigures({ ...packet, figures: [
     { ...packet.figures[0], key: 'dots', point_dot: true, width: 3 },
