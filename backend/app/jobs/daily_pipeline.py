@@ -25,8 +25,8 @@ from app.indicators.pipeline import filter_halt_days, run_pipeline
 from app.market_time import cn_now, cn_today
 from app.services import index_sync, instrument_sync, kline_sync
 from app.services import preferences as _prefs
+from app.services.hermes_studio import HermesStudioError, studio_configured
 from app.services.hermes_studio import run_chat as hermes_studio_run_chat
-from app.services.hermes_studio import studio_configured
 from app.services.timeline_execution import timeline_execution_store
 from app.tickflow.capabilities import Cap, CapabilitySet
 from app.tickflow.pools import DEMO_SYMBOLS, get_pool
@@ -1158,6 +1158,7 @@ async def _run_seekhub_daily_method(
 ) -> dict[str, str]:
     """执行任一 seekhub_daily 方法,同日复用会话并在跨日后新建会话。"""
     analysis_date = cn_today().isoformat()
+    is_monitor = method == "seekhub_daily_decision"
     session_id = _prefs.get_seekhub_daily_session_id(analysis_date)
     timeline_run_id = timeline_run_id or _timeline_start(
         task_name or method,
@@ -1177,7 +1178,7 @@ async def _run_seekhub_daily_method(
         )
         return {"status": "skipped", "date": analysis_date}
 
-    # Scheduler and manual retry tasks share one event loop; reserve without an await.
+    # Startup and monitoring share this guard, including automatic startup below.
     if analysis_date in _RUNNING_SEEKHUB_DAILY_DATES:
         _timeline_finish(
             timeline_run_id, status="skipped", session_id=session_id,
@@ -1185,10 +1186,22 @@ async def _run_seekhub_daily_method(
             error="同日AI追踪分析仍在执行, 本次跳过以避免重叠分析",
         )
         return {"status": "skipped", "date": analysis_date}
+
+    if is_monitor and not session_id:
+        startup = await seekhub_daily_start(scheduled_time=scheduled_time or cn_now().strftime("%H:%M"))
+        session_id = _prefs.get_seekhub_daily_session_id(analysis_date)
+        if startup["status"] != "completed" or not session_id:
+            _timeline_finish(
+                timeline_run_id, status="failed", session_id=session_id,
+                result={"status": "failed", "date": analysis_date},
+                error="自动启动分析未成功, 本轮监控停止, 请查看 AI 追踪分析启动执行记录",
+            )
+            return {"status": "failed", "date": analysis_date}
     _RUNNING_SEEKHUB_DAILY_DATES.add(analysis_date)
 
     try:
-        session_id = _prefs.ensure_seekhub_daily_session_id(analysis_date)
+        if not is_monitor:
+            session_id = _prefs.ensure_seekhub_daily_session_id(analysis_date)
         if timeline_run_id:
             timeline_execution_store.set_session(timeline_run_id, session_id)
         prompt = prompt_template.replace("YYYY-MM-DD", analysis_date)
@@ -1199,8 +1212,11 @@ async def _run_seekhub_daily_method(
         returned_session = str(result.get("session_id") or "").strip()
         if not returned_session:
             raise RuntimeError("Hermes Studio 未返回 session_id")
-        session_id = returned_session
-        _prefs.set_seekhub_daily_session_id(analysis_date, session_id)
+        if is_monitor and returned_session != session_id:
+            raise HermesStudioError("Hermes Studio 会话 ID 不一致, 监控未沿用启动会话", result=result)
+        if not is_monitor:
+            session_id = returned_session
+            _prefs.set_seekhub_daily_session_id(analysis_date, session_id)
         timeline_result = {
             "status": "completed",
             "date": analysis_date,
@@ -1221,7 +1237,12 @@ async def _run_seekhub_daily_method(
         partial = partial if isinstance(partial, dict) else {}
         returned_session = partial.get("session_id")
         persistence_error = ""
-        if isinstance(returned_session, str) and returned_session.strip():
+        if (
+            is_monitor and isinstance(returned_session, str)
+            and returned_session.strip() and returned_session.strip() != session_id
+        ):
+            persistence_error = "; Hermes Studio 会话 ID 不一致, 已保留启动会话, 未切换到返回会话"
+        elif not is_monitor and isinstance(returned_session, str) and returned_session.strip():
             session_id = returned_session.strip()
             try:
                 _prefs.set_seekhub_daily_session_id(analysis_date, session_id)
@@ -1235,6 +1256,7 @@ async def _run_seekhub_daily_method(
                 "status": "failed", "date": analysis_date,
                 "run_id": partial.get("run_id"), "output": partial.get("output", ""),
                 "reasoning": partial.get("reasoning"), "upstream_status": getattr(exc, "status_code", None),
+                "upstream_session_id": returned_session,
             },
             error=f"{exc}{persistence_error}",
             session_id=session_id,

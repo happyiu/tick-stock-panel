@@ -52,6 +52,8 @@ async def test_seekhub_daily_methods_share_session(monkeypatch: pytest.MonkeyPat
 
     async def fake_run_chat(input_text: str, *, session_id: str | None = None):
         calls.append((input_text, session_id))
+        if input_text == "开始盘中分析吧":
+            return {"session_id": session_id, "run_id": "run-2", "output": "监控结果"}
         return {"session_id": "session-new", "run_id": "run-1", "output": "分析结果"}
 
     monkeypatch.setattr(daily_pipeline, "hermes_studio_run_chat", fake_run_chat)
@@ -140,7 +142,80 @@ async def test_daily_failure_keeps_upstream_session_and_partial_result(durable_d
 
 
 @pytest.mark.asyncio
-async def test_daily_methods_do_not_send_overlapping_turns(durable_daily_session, monkeypatch):
+@pytest.mark.parametrize("saved_date", [None, "2026-10-21"])
+async def test_monitor_starts_analysis_when_today_session_is_missing(durable_daily_session, monkeypatch, saved_date):
+    if saved_date:
+        daily_pipeline._prefs.set_seekhub_daily_session_id(saved_date, "yesterday-session")
+    calls = []
+    async def run(prompt, *, session_id=None):
+        calls.append((prompt, session_id))
+        return {"session_id": "started-session", "output": "done"}
+    monkeypatch.setattr(daily_pipeline, "hermes_studio_run_chat", run)
+    monkeypatch.setattr(daily_pipeline._prefs, "get_seekhub_daily_prompt", lambda method: method)
+
+    assert (await daily_pipeline.seekhub_daily_decision(scheduled_time="10:00"))["status"] == "completed"
+    assert [prompt for prompt, _ in calls] == ["seekhub_daily_start", "seekhub_daily_decision"]
+    assert calls[0][1] and calls[0][1] != "yesterday-session"
+    assert calls[1][1] == "started-session"
+    assert daily_pipeline._prefs.get_seekhub_daily_session_id("2026-10-22") == "started-session"
+    records = durable_daily_session.list()
+    assert len(records) == 2
+    assert {record["method"] for record in records} == {"seekhub_daily_start", "seekhub_daily_decision"}
+    assert all(record["status"] == "succeeded" and record["session_id"] == "started-session" for record in records)
+    assert all(record["scheduled_time"] == "10:00" for record in records)
+
+
+@pytest.mark.asyncio
+async def test_monitor_stops_if_automatic_start_fails(durable_daily_session, monkeypatch):
+    calls = []
+    async def fail(prompt, *, session_id=None):
+        calls.append(prompt)
+        raise TimeoutError("start timed out")
+    monkeypatch.setattr(daily_pipeline, "hermes_studio_run_chat", fail)
+    monkeypatch.setattr(daily_pipeline._prefs, "get_seekhub_daily_prompt", lambda method: method)
+
+    assert (await daily_pipeline.seekhub_daily_decision())["status"] == "failed"
+    assert calls == ["seekhub_daily_start"]
+    records = durable_daily_session.list()
+    assert len(records) == 2
+    assert all(record["status"] == "failed" for record in records)
+    monitor = next(record for record in records if record["method"] == "seekhub_daily_decision")
+    assert "自动启动分析未成功" in monitor["error"]
+    assert monitor["session_id"] == daily_pipeline._prefs.get_seekhub_daily_session_id("2026-10-22")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("upstream_failure", [False, True])
+async def test_monitor_rejects_session_switch_and_preserves_start_session(
+    durable_daily_session, monkeypatch, upstream_failure,
+):
+    from app.services.hermes_studio import HermesStudioError
+
+    daily_pipeline._prefs.set_seekhub_daily_session_id("2026-10-22", "start-session")
+    calls = []
+
+    async def run(_prompt, *, session_id=None):
+        calls.append(session_id)
+        result = {"session_id": "different-session", "run_id": "other-run", "output": "partial"}
+        if upstream_failure:
+            raise HermesStudioError("upstream timed out", status_code=504, result=result)
+        return result
+
+    monkeypatch.setattr(daily_pipeline, "hermes_studio_run_chat", run)
+    for _ in range(2):
+        assert (await daily_pipeline.seekhub_daily_decision())["status"] == "failed"
+        assert daily_pipeline._prefs.get_seekhub_daily_session_id("2026-10-22") == "start-session"
+    assert calls == ["start-session", "start-session"]
+    for record in durable_daily_session.list():
+        assert record["session_id"] == "start-session"
+        assert record["result"]["upstream_session_id"] == "different-session"
+        assert record["result"]["run_id"] == "other-run"
+        assert "会话 ID 不一致" in record["error"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first_method", ["seekhub_daily_start", "seekhub_daily_decision"])
+async def test_daily_methods_do_not_send_overlapping_turns(durable_daily_session, monkeypatch, first_method):
     import asyncio
 
     entered, release = asyncio.Event(), asyncio.Event()
@@ -151,7 +226,7 @@ async def test_daily_methods_do_not_send_overlapping_turns(durable_daily_session
         await release.wait()
         return {"session_id": session_id, "output": "done"}
     monkeypatch.setattr(daily_pipeline, "hermes_studio_run_chat", run)
-    first = asyncio.create_task(daily_pipeline.seekhub_daily_start())
+    first = asyncio.create_task(getattr(daily_pipeline, first_method)())
     try:
         await asyncio.wait_for(entered.wait(), 1)
         second = await asyncio.wait_for(daily_pipeline.seekhub_daily_decision(scheduled_time="09:30"), 1)

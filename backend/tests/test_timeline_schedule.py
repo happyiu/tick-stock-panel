@@ -148,6 +148,7 @@ async def test_scheduled_execution_keeps_failure_and_skip_records(tmp_path, monk
     monkeypatch.setattr(daily_pipeline, 'timeline_execution_store', store)
     monkeypatch.setattr(daily_pipeline, 'studio_configured', lambda: configured)
     monkeypatch.setattr(daily_pipeline._prefs, 'get_seekhub_daily_session_id', lambda day: None)
+    monkeypatch.setattr(daily_pipeline._prefs, 'ensure_seekhub_daily_session_id', lambda day: 'reserved-session')
     monkeypatch.setattr(daily_pipeline._prefs, 'get_seekhub_daily_prompt', lambda method: '检查')
     monkeypatch.setattr(schedule, 'get_settings', lambda: schedule.TimelineSettings(
         stepMinutes=30, timerMethods=['seekhub_daily_decision']).model_dump())
@@ -158,7 +159,7 @@ async def test_scheduled_execution_keeps_failure_and_skip_records(tmp_path, monk
         raise RuntimeError('studio unavailable')
     monkeypatch.setattr(daily_pipeline, 'hermes_studio_run_chat', fail)
     await schedule.run_due()
-    rows = store.list()
+    rows = store.list(method='seekhub_daily_decision')
     assert len(rows) == 1
     assert rows[0]['scheduled_time'] == '10:00'
     assert rows[0]['status'] == status
