@@ -4,10 +4,10 @@ import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { Screener } from './Screener'
-import { api } from '@/lib/api'
+import { api, type MonitorRule } from '@/lib/api'
 import { storage } from '@/lib/storage'
 
-const fixture = vi.hoisted(() => ({ latest: '2026-10-16' }))
+const fixture = vi.hoisted(() => ({ latest: '2026-10-16', rules: [] as MonitorRule[] }))
 vi.mock('@/lib/api', async original => ({ ...await original<typeof import('@/lib/api')>(), api: {
   screenerStrategies: vi.fn(async () => ({ presets: [{ id: 'test', name: '测试策略', description: '', source: 'custom', asset_types: ['stock', 'etf'], timeframes: ['1d', '30m', '1m'] }], load_errors: [] })),
   screenerCachedSummary: vi.fn(async () => ({ results: {} })),
@@ -15,7 +15,15 @@ vi.mock('@/lib/api', async original => ({ ...await original<typeof import('@/lib
   screenerRunAll: vi.fn(async date => ({ as_of: date, results: { test: { as_of: date, rows: [], total: 0 } } })),
   screenerResultColumns: vi.fn(async () => ({ columns: [] })),
   watchlistList: vi.fn(async () => ({ symbols: [] })),
-  monitorRulesList: vi.fn(async () => ({ rules: [] })),
+  monitorRulesList: vi.fn(async () => ({ rules: fixture.rules })),
+  monitorRuleSave: vi.fn(async (rule: MonitorRule) => {
+    fixture.rules = [...fixture.rules, rule]
+    return { ok: true, rule }
+  }),
+  monitorRuleDelete: vi.fn(async (id: string) => {
+    fixture.rules = fixture.rules.filter(rule => rule.id !== id)
+    return { ok: true }
+  }),
   minuteRefreshStatus: vi.fn(async () => ({ running: false })),
 } }))
 vi.mock('@/lib/useSharedQueries', () => ({
@@ -50,6 +58,7 @@ const chooseDate = async (date: string) => {
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   localStorage.clear(); vi.clearAllMocks(); fixture.latest = '2026-10-16'
+  fixture.rules = []
   storage.strategyPool.set(['test'])
   client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
@@ -60,6 +69,36 @@ const render = async (asset: 'stock' | 'etf') => {
   await act(async () => root.render(<QueryClientProvider client={client}><Screener /></QueryClientProvider>))
   await settle(); await settle()
 }
+
+it.each(['stock', 'etf'] as const)('%s 添加策略监控时携带当前资产类型', async asset => {
+  await render(asset)
+  await click('开启策略监控')
+  expect(api.monitorRuleSave).toHaveBeenCalledWith(expect.objectContaining({
+    type: 'strategy', strategy_id: 'test', asset_type: asset,
+  }))
+  expect(host.querySelector('button[title="取消策略监控"]')).not.toBeNull()
+})
+
+it('同一策略的股票和 ETF 监控状态及取消操作互不影响, 旧规则默认属于股票', async () => {
+  fixture.rules = [{
+    id: 'legacy-stock', name: '旧股票规则', enabled: true, type: 'strategy',
+    strategy_id: 'test', scope: 'all', symbols: [], direction: 'entry',
+    conditions: [], logic: 'or', cooldown_seconds: 3600, severity: 'info', message: '',
+  }]
+  await render('etf')
+  await click('开启策略监控')
+  expect(api.monitorRuleDelete).not.toHaveBeenCalled()
+  const etfRule = vi.mocked(api.monitorRuleSave).mock.calls[0][0]
+  expect(etfRule.asset_type).toBe('etf')
+  await click('股票')
+  await click('取消策略监控')
+  expect(api.monitorRuleDelete).toHaveBeenLastCalledWith('legacy-stock')
+  expect(host.querySelector('button[title="开启策略监控"]')).not.toBeNull()
+  await click('ETF')
+  await click('取消策略监控')
+  expect(api.monitorRuleDelete).toHaveBeenLastCalledWith(etfRule.id)
+  expect(host.querySelector('button[title="开启策略监控"]')).not.toBeNull()
+})
 
 it('ETF 30F 切换日期后自动重跑已选策略，并忽略旧日期的迟到结果', async () => {
   await render('etf'); await click('30F')

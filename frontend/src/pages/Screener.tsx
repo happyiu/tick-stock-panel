@@ -766,17 +766,17 @@ export function Screener() {
     },
   })
 
-  // 策略监控: 查询规则, 建立 strategyId → ruleId 映射 (只看 type=strategy 且 enabled)
+  // 策略监控: 仅映射当前资产类型的启用规则, 旧规则默认属于股票。
   const monitorRules = useQuery({ queryKey: QK.monitorRules, queryFn: api.monitorRulesList })
   const strategyMonitorMap = useMemo(() => {
     const m = new Map<string, string>()
     for (const r of monitorRules.data?.rules ?? []) {
-      if (r.type === 'strategy' && r.enabled && r.strategy_id) {
+      if (r.type === 'strategy' && r.enabled && r.strategy_id && (r.asset_type ?? 'stock') === assetType) {
         m.set(r.strategy_id, r.id)
       }
     }
     return m
-  }, [monitorRules.data])
+  }, [monitorRules.data, assetType])
 
   const toggleStrategyMonitor = (strategyId: string, strategyName: string) => {
     const existingRuleId = strategyMonitorMap.get(strategyId)
@@ -792,6 +792,7 @@ export function Screener() {
         name: `策略监控 · ${strategyName}`,
         enabled: true,
         type: 'strategy',
+        asset_type: assetType,
         scope: 'all',
         symbols: [],
         sector: null,
