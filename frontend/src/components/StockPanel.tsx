@@ -29,7 +29,6 @@ import {
 } from '@/components/StockDailyKChart'
 import { StockIntradayChart } from '@/components/StockIntradayChart'
 import { StockTechnicalPanel } from '@/components/StockTechnicalPanel'
-import { StockChanlunPanel } from '@/components/StockChanlunPanel'
 import { LevelOverview, PriceLevelControls, usePriceLevels } from './stock-analysis/PriceLevels'
 import { QK } from '@/lib/queryKeys'
 import { StockAiChatPanel } from '@/components/StockAiChatPanel'
@@ -42,6 +41,8 @@ import {
 } from '@/lib/stock-info-fields'
 import { emptyChanlunAnalysis, type ChanlunStructureSource } from '@/lib/chanlun'
 import { chanlunQueryOptions } from '@/lib/chanlunQuery'
+import { CHANLUN_OVERVIEW_PERIODS } from '@/lib/chanlunPresentation'
+import { StockChanlunPanel } from './StockChanlunPanel'
 import { storage, type StockPreviewAnalysisSectionsV2, type StockPreviewAnalysisSectionsV3 } from '@/lib/storage'
 import { buildStockChatSnapshot } from '@/lib/stockChatContext'
 
@@ -49,7 +50,6 @@ const DEFAULT_SPLIT_RATIO = 1.4 / 2.4
 const MIN_SPLIT_RATIO = 0.25
 const MAX_SPLIT_RATIO = 0.75
 const SPLIT_GAP_PX = 12
-const CHANLUN_PERIODS: KlinePeriod[] = ['30m', '1d', '1w', '1mo']
 
 function ChartScrollbar({ scrollRef, controlsId, active }: {
   scrollRef: { current: HTMLDivElement | null }
@@ -213,7 +213,7 @@ type StockAnalysisTab = 'indicator' | 'structure' | 'levels' | 'ai'
 
 const STOCK_ANALYSIS_TABS: Array<{ id: StockAnalysisTab; label: string }> = [
   { id: 'indicator', label: '指标分析' },
-  { id: 'structure', label: '结构分析' },
+  { id: 'structure', label: '缠论结构' },
   { id: 'levels', label: '关键价位' },
   { id: 'ai', label: 'AI分析' },
 ]
@@ -356,8 +356,7 @@ export function StockPanel({
   const [followsLatest, setFollowsLatest] = useState(true)
   const followsLatestRef = useRef(true)
   const [rightPaneDismissed, setRightPaneDismissed] = useState(false)
-  const [chanlunSource, setChanlunSource] = useState<ChanlunStructureSource>('stroke')
-  const [multiPeriodExpanded, setMultiPeriodExpanded] = useState(false)
+  const chanlunSource: ChanlunStructureSource = 'stroke'
   const [splitRatio, setSplitRatio] = useState(() => clampSplitRatioValue(
     storage.stockPreviewSplitRatio.get(DEFAULT_SPLIT_RATIO),
   ))
@@ -543,6 +542,24 @@ export function StockPanel({
     () => chanlunQuery.data ?? emptyChanlunAnalysis(period, chanlunSource),
     [chanlunQuery.data, period, chanlunSource],
   )
+  const overviewQueries = useQueries({
+    queries: CHANLUN_OVERVIEW_PERIODS.map(candidatePeriod => {
+      const end = new Date(`${(chanlunCutoff ?? chartDateRange.end).slice(0, 10)}T12:00:00`)
+      const range = candidatePeriod === period ? chartDateRange : defaultKlineRange(candidatePeriod, end, periodDays, analysisAssetType)
+      return {
+        ...chanlunQueryOptions(symbol, analysisAssetType ?? 'stock', candidatePeriod, range, periodDays,
+          chanlunSource, chanlunCutoff, analysisSnapshot?.contextKey === analysisContextKey ? analysisSnapshot.calculatedAt : 0),
+        enabled: !!symbol && resolvedRightPaneMode === 'technical' && analysisTab === 'structure'
+          && candidatePeriod !== period && !!displayAnalysisResponse && !(candidatePeriod === '30m' && analysisAssetType === 'index'),
+      }
+    }),
+  })
+  const overviewItems = CHANLUN_OVERVIEW_PERIODS.map((candidatePeriod, index) => {
+    const query = candidatePeriod === period ? chanlunQuery : overviewQueries[index]
+    return { period: candidatePeriod, analysis: query.data, isLoading: query.isFetching && !query.data,
+      error: query.error, unavailable: candidatePeriod === '30m' && analysisAssetType === 'index' ? '指数暂不支持30分钟结构分析' : undefined,
+      onRetry: () => { void query.refetch() } }
+  })
   const stockChatSnapshot = useMemo(
     () => buildStockChatSnapshot({
       symbol,
@@ -615,31 +632,6 @@ export function StockPanel({
   const infoRows = visibleThrough && period !== '1d' ? visiblePeriodRawRows : visibleRawRows
   const stockInfo = kline.data?.stock_info
   const name = kline.data?.name
-
-  const multiObservationEnd = effectiveSelectedBarKey?.slice(0, 10) ?? chartDateRange.end
-  const multiPeriodQueries = useQueries({
-    queries: CHANLUN_PERIODS.map(candidatePeriod => {
-      const endDate = new Date(`${multiObservationEnd}T12:00:00`)
-      const range = candidatePeriod === period
-        ? chartDateRange
-        : defaultKlineRange(candidatePeriod, Number.isNaN(endDate.getTime()) ? new Date() : endDate)
-      return {
-        ...chanlunQueryOptions(symbol, analysisAssetType ?? 'stock', candidatePeriod, range, periodDays,
-          chanlunSource, chanlunCutoff, analysisSnapshot?.contextKey === analysisContextKey ? analysisSnapshot.calculatedAt : 0),
-        enabled: multiPeriodExpanded && !!symbol && (candidatePeriod === '1d' || assetType !== 'index'),
-        staleTime: 30_000,
-      }
-    }),
-  })
-  const multiPeriodAnalysis = CHANLUN_PERIODS.map((candidatePeriod, index) => {
-    const query = multiPeriodQueries[index]
-    return {
-      period: candidatePeriod,
-      analysis: query.data,
-      isLoading: query.isLoading || query.isFetching && !query.data,
-      error: query.error,
-    }
-  })
 
   useEffect(() => {
     if (assetType) onAssetTypeChange?.(assetType)
@@ -1065,23 +1057,7 @@ export function StockPanel({
                   onToggleCollapsed={() => toggleAnalysisSection('technicalCollapsed')}
                 />
                 </>}
-                {analysisTab === 'structure' && <>
-                <StockChanlunPanel
-                  analysis={chanlunAnalysis}
-                  period={period}
-                  assetType={analysisAssetType}
-                  collapsed={analysisSections.chanlunCollapsed}
-                  onToggleCollapsed={() => toggleAnalysisSection('chanlunCollapsed')}
-                  isLoading={analysisLoading || chanlunQuery.isFetching}
-                  error={analysisError ?? chanlunQuery.error}
-                  onRetry={() => { void chanlunQuery.refetch() }}
-                  source={chanlunSource}
-                  onSourceChange={setChanlunSource}
-                  multiPeriodExpanded={multiPeriodExpanded}
-                  onToggleMultiPeriod={() => setMultiPeriodExpanded(value => !value)}
-                  multiPeriod={multiPeriodAnalysis}
-                />
-                </>}
+                {analysisTab === 'structure' && <StockChanlunPanel key={symbol} items={overviewItems} period={period} asOf={chanlunCutoff} hideDates={hideCurrentDate} assetType={analysisAssetType} />}
                 {analysisTab === 'levels' && (
                   <div className="py-3 pr-1 text-xs">
                     {!priceLevelsEnabled ? (

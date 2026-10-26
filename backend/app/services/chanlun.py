@@ -1,9 +1,9 @@
-"""确定性缠论计算：只消费标准化 K 线，不取数、不执行交易。
+"""Official CZSC Rust adapter. Consumes existing candles; never fetches or trades.
 
-逐根更新记录结构首次可知时间；不能用最终形态的端点时间代替信号时间。
+Replay records first-observed events rather than backdating final shapes.
 """
 
-# ruff: noqa: RUF001, RUF002, RUF003
+# ruff: noqa: RUF001
 from __future__ import annotations
 
 import copy
@@ -12,39 +12,37 @@ import logging
 import math
 from datetime import date, datetime
 from functools import lru_cache
+from hashlib import sha256
+from importlib.metadata import version
 
-from app.vendor.chanpy.ChanConfig import CChanConfig
-from app.vendor.chanpy.Common.CEnum import DATA_FIELD, FX_TYPE, KL_TYPE
-from app.vendor.chanpy.Common.CTime import CTime
-from app.vendor.chanpy.KLine.KLine_List import CKLine_List
-from app.vendor.chanpy.KLine.KLine_Unit import CKLine_Unit
+from app.services.chanlun_interpretation import build_interpretation
 
 logger = logging.getLogger(__name__)
-ENGINE_COMMIT = "429d6ed3043e27c93a003ba2b10e70a05575e1f5"
-PERIODS = {"30m": KL_TYPE.K_30M, "1d": KL_TYPE.K_DAY, "1w": KL_TYPE.K_WEEK, "1mo": KL_TYPE.K_MON}
-# 显式固定业务口径。上游默认 divergence_rate=inf 会无条件放行背驰比较。
-ENGINE_CONFIG = {
-    "trigger_step": True,
-    "bi_algo": "normal",
-    "bi_strict": True,
-    "bi_fx_check": "strict",
-    "gap_as_kl": False,
-    "bi_end_is_peak": True,
-    "bi_allow_sub_peak": True,
-    "seg_algo": "chan",
-    "left_seg_method": "peak",
-    "zs_algo": "normal",
-    "zs_combine": True,
-    "zs_combine_mode": "zs",
-    "one_bi_zs": False,
-    "divergence_rate": 0.9,
-    "min_zs_cnt": 1,
-    "macd_algo": "area",
-    "max_bs2_rate": 0.9999,
-    "bs_type": "1,1p,2,2s,3a,3b",
-    "strict_bsp3": True,
-    "print_warning": False,
-    "print_err_time": False,
+ENGINE_VERSION = "1.0.2"
+ENGINE_COMMIT = "5d350a943d6b1935561765fed5467c234973d121"
+PERIODS = {"30m": "F30", "1d": "D", "1w": "W", "1mo": "M"}
+SIGNAL_RULES = [
+    {"function": "cxt_first_buy_V221126", "params": {"di": 1}},
+    {"function": "cxt_first_sell_V221126", "params": {"di": 1}},
+    {"function": "cxt_second_bs_V240524", "params": {"di": 1, "w": 9, "t": 2}},
+    {"function": "cxt_third_bs_V230318", "params": {"di": 1, "ma_type": "SMA", "timeperiod": 34}},
+]
+ENGINE_CONFIG = {"min_bi_len": 6, "max_bi_num": "max(50, closed_bars)", "signalRules": SIGNAL_RULES}
+CAPABILITIES = {
+    "supportedSources": ["stroke"],
+    "segments": False,
+    "divergences": False,
+    "recursiveConfirmation": False,
+    "signalRules": SIGNAL_RULES,
+}
+LOSS = "CZSC官方辅助信号；单周期条件不等于次级别确认；趋势为本项目中枢位置近似"
+KINDS = {
+    "一买": "first_buy",
+    "一卖": "first_sell",
+    "二买": "second_buy",
+    "二卖": "second_sell",
+    "三买": "third_buy",
+    "三卖": "third_sell",
 }
 
 
@@ -52,20 +50,37 @@ class _CalculationError(RuntimeError):
     pass
 
 
-def _text(value) -> str:
+def _load_engine():
+    # Keep native dependency failures isolated from ordinary market-data requests.
+    import czsc
+    from czsc._native.signals import call_signal
+
+    if version("czsc") != ENGINE_VERSION:
+        raise ImportError(f"expected czsc=={ENGINE_VERSION}")
+    return czsc, call_signal
+
+
+def _text(value):
     return (value.isoformat() if isinstance(value, (date, datetime)) else str(value or "")).replace(
         "T", " "
     )
 
 
-def _empty(period, source, rows, issues, status="insufficient") -> dict:
+def _empty(period, source, rows, issues, status="insufficient"):
     return {
-        "ruleVersion": 3,
+        "ruleVersion": 4,
         "period": period,
         "source": source,
         "definitionMode": "engine_rules",
-        "engine": {"name": "chan.py", "commit": ENGINE_COMMIT, "config": dict(ENGINE_CONFIG)},
-        "approximationLoss": "按固定引擎规则计算；单周期结构不等于次级别递归确认，买卖点仅为候选",
+        "engine": {
+            "name": "czsc",
+            "version": ENGINE_VERSION,
+            "commit": ENGINE_COMMIT,
+            "runtime": "Rust/PyO3",
+            "config": copy.deepcopy(ENGINE_CONFIG),
+        },
+        "capabilities": copy.deepcopy(CAPABILITIES),
+        "approximationLoss": LOSS,
         "status": status,
         "issues": issues,
         "window": {
@@ -82,10 +97,10 @@ def _empty(period, source, rows, issues, status="insufficient") -> dict:
         "centers": [],
         "strokeCenters": [],
         "segmentCenters": [],
-        "trendType": "unclear",
         "divergences": [],
         "candidateSignals": [],
         "thirdSignals": [],
+        "trendType": "unclear",
         "latestFractal": None,
         "latestConfirmedStroke": None,
         "formingStroke": None,
@@ -93,17 +108,11 @@ def _empty(period, source, rows, issues, status="insufficient") -> dict:
         "latestSignal": None,
         "currentPrice": rows[-1]["close"] if rows else None,
         "pricePosition": None,
+        "interpretation": None,
     }
 
 
-def analyze_chanlun(
-    rows: list[dict], *, period="1d", source="stroke", as_of: str | None = None
-) -> dict:
-    """输入为现有 K 线接口的前复权 OHLC，时间为北京墙钟。
-
-    缓存按完整输入内容隔离，历史修订、复权、周期、闭合状态变化均自然失效。
-    每次返回独立对象，调用者不能修改缓存；不缓存可变引擎实例。
-    """
+def analyze_chanlun(rows: list[dict], *, period="1d", source="stroke", as_of=None):
     if period not in PERIODS or source not in {"stroke", "segment"}:
         raise ValueError("不支持的缠论周期或结构来源")
     cutoff = _text(as_of) if as_of else None
@@ -112,16 +121,24 @@ def analyze_chanlun(
             raise ValueError("expected Beijing wall-clock cutoff")
         if len(cutoff) == 10:
             cutoff += " 23:59:59"
+    if source == "segment":
+        return _empty(period, source, [], ["CZSC版本暂不提供线段和线段中枢"], "unsupported")
     normalized = []
     for row in rows:
         label = _text(row.get("date"))[: 16 if period == "30m" else 10]
         if cutoff and label > cutoff:
             continue
         try:
-            if datetime.fromisoformat(_text(row.get("date"))).tzinfo is not None:
-                raise ValueError("expected Beijing wall-clock date")
-            parsed = datetime.fromisoformat(label)
-            values = {key: float(row[key]) for key in ("open", "high", "low", "close")}
+            parsed = datetime.fromisoformat(_text(row.get("date")))
+            end = _text(row.get("period_end") or label)
+            end_at = datetime.fromisoformat(end)
+            if len(end) == 10:
+                end_at = end_at.replace(hour=15)
+            if parsed.tzinfo is not None or end_at.tzinfo is not None:
+                raise ValueError("expected Beijing wall-clock time")
+            if cutoff and end_at > datetime.fromisoformat(cutoff):
+                continue
+            values = {k: float(row[k]) for k in ("open", "high", "low", "close")}
             if (
                 not all(math.isfinite(v) and v > 0 for v in values.values())
                 or values["low"] > min(values.values())
@@ -129,352 +146,367 @@ def analyze_chanlun(
                 or (normalized and label <= normalized[-1]["date"])
             ):
                 raise ValueError("invalid OHLC or order")
-            # 日/周/月的 period_end 是实际交易日，不应早于当日收盘参与历史确认。
-            end_label = _text(row.get("period_end") or label)
-            end_at = datetime.fromisoformat(end_label)
-            if len(end_label) == 10:
-                end_at = end_at.replace(hour=15)
-            if cutoff and end_at > datetime.fromisoformat(cutoff):
-                continue
-            closed = row.get("is_closed") is True and (
-                not cutoff or end_at <= datetime.fromisoformat(cutoff)
-            )
-            normalized.append({"date": label, **values, "isClosed": closed, "periodEnd": end_label})
-            if parsed.tzinfo is not None or end_at.tzinfo is not None:
-                raise ValueError("expected Beijing wall-clock time")
-        except (KeyError, TypeError, ValueError, OverflowError):
-            return _empty(
-                period, source, [], ["K 线价格、日期或顺序异常，未计算缠论结构"], "invalid_data"
-            )
-    key = json.dumps(normalized, sort_keys=True, allow_nan=False, default=str)
-    try:
-        return copy.deepcopy(_analyze_cached(key, period, source))
-    except _CalculationError:
-        return _empty(period, source, [], ["缠论计算失败，请重试或检查行情数据"], "invalid_data")
-
-
-@lru_cache(maxsize=16)
-def _analyze_cached(serialized: str, period: str, source: str) -> dict:
-    rows = json.loads(serialized)
-    result = _empty(period, source, rows, [])
-    if not rows:
-        result["issues"] = ["暂无当前周期 K 线"]
-        return result
-    closed = [r for r in rows if r["isClosed"]]
-    conf = CChanConfig(dict(ENGINE_CONFIG))
-    engine = CKLine_List(PERIODS[period], conf)
-    dates = [r["date"] for r in closed]
-    known: dict[tuple, str] = {}
-    signals: dict[str, dict] = {}
-    previous = None
-    try:
-        for i, row in enumerate(closed):
-            dt = datetime.fromisoformat(row["date"])
-            unit = CKLine_Unit(
+            for key in ("volume", "amount"):
+                value = row.get(key)
+                values[key] = float(value) if value is not None else None
+                if values[key] is not None and (not math.isfinite(values[key]) or values[key] < 0):
+                    raise ValueError("invalid volume or amount")
+            normalized.append(
                 {
-                    DATA_FIELD.FIELD_TIME: CTime(
-                        dt.year, dt.month, dt.day, dt.hour, dt.minute, auto=False
-                    ),
-                    **{
-                        getattr(DATA_FIELD, f"FIELD_{key.upper()}"): row[key]
-                        for key in ("open", "high", "low", "close")
-                    },
+                    "date": label,
+                    "sourceIndex": len(normalized),
+                    **values,
+                    "isClosed": row.get("is_closed") is True,
+                    "periodEnd": end[: 16 if period == "30m" else 10],
                 }
             )
-            unit.set_idx(i)
-            unit.kl_type = PERIODS[period]
-            unit.set_pre_klu(previous)
-            previous = unit
-            engine.add_single_klu(unit)
-            available = row["periodEnd"][: 16 if period == "30m" else 10]
-            for klc in engine.lst:
-                if klc.fx != FX_TYPE.UNKNOWN:
-                    peak = klc.get_peak_klu(is_high=klc.fx == FX_TYPE.TOP)
-                    known.setdefault(
-                        ("fractal", klc.idx, peak.idx, klc.fx, klc.high, klc.low), available
-                    )
-            for kind, items in (("stroke", engine.bi_list), ("segment", engine.seg_list)):
-                for item in items:
-                    if item.is_sure:
-                        known.setdefault(
-                            (kind, item.get_begin_klu().idx, item.get_end_klu().idx), available
-                        )
-            for kind, items in (("stroke", engine.zs_list), ("segment", engine.segzs_list)):
-                for item in items:
-                    known.setdefault(
-                        ("center", kind, item.begin.idx, item.low, item.high), available
-                    )
-            _update_signals(engine, source, row, dates, signals)
-            for divergence in _divergences(engine, source, dates):
-                if divergence["status"] == "candidate":
-                    known.setdefault(("divergence", divergence["id"]), available)
-        result["fractals"] = [
-            _fractal(klc, dates, known) for klc in engine.lst if klc.fx != FX_TYPE.UNKNOWN
-        ]
-        result["strokes"] = [_movement(bi, "stroke", dates, known) for bi in engine.bi_list]
-        result["segments"] = [_movement(seg, "segment", dates, known) for seg in engine.seg_list]
-        result["strokeCenters"] = [
-            _center(z, "stroke", dates, known) for z in engine.zs_list if z.high > z.low
-        ]
-        result["segmentCenters"] = [
-            _center(z, "segment", dates, known) for z in engine.segzs_list if z.high > z.low
-        ]
-        result["centers"] = result["strokeCenters" if source == "stroke" else "segmentCenters"]
-        result["candidateSignals"] = sorted(
-            signals.values(), key=lambda s: (s["availableDate"], s["id"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return _empty(period, source, [], ["K线价格、量额、日期或顺序异常"], "invalid_data")
+    if not any(r["isClosed"] for r in normalized):
+        return _empty(period, source, normalized, ["暂无已闭合K线，未确认缠论结构"])
+    try:
+        _load_engine()
+    except Exception:
+        logger.exception("CZSC native engine unavailable")
+        return _empty(
+            period,
+            source,
+            normalized,
+            ["CZSC 1.0.2原生内核不可用，请检查后端依赖"],
+            "engine_unavailable",
         )
-        # 未闭合尾部只可使价格边界失效，不能创建或确认结构。
-        for row in rows:
-            for signal in result["candidateSignals"]:
-                _invalidate_at_boundary(signal, row)
-        result["divergences"] = _divergences(engine, source, dates)
-        for divergence in result["divergences"]:
-            divergence["availableDate"] = known.get(("divergence", divergence["id"]))
-        result["mergedBars"] = [_merged_bar(klc, dates) for klc in engine.lst]
-    except Exception as exc:
-        logger.exception("chan.py calculation failed for period=%s source=%s", period, source)
-        # 不缓存瞬时计算失败，否则同一输入的重试永远返回旧错误。
-        raise _CalculationError from exc
-    result["window"]["mergedBars"] = len(engine.lst)
-    confirmed = [s for s in result["strokes"] if s["confirmed"]]
-    result["latestConfirmedStroke"] = confirmed[-1] if confirmed else None
-    forming = [s for s in result["strokes"] if not s["confirmed"]]
-    result["formingStroke"] = forming[-1] if forming else None
-    result["latestFractal"] = result["fractals"][-1] if result["fractals"] else None
-    centers = result["centers"]
-    result["latestCenter"] = centers[-1] if centers else None
-    if len(centers) >= 2 and centers[-1]["zd"] > centers[-2]["zg"]:
-        result["trendType"] = "uptrend_proxy"
-    elif len(centers) >= 2 and centers[-1]["zg"] < centers[-2]["zd"]:
-        result["trendType"] = "downtrend_proxy"
-    elif centers:
-        result["trendType"] = "consolidation_proxy"
-    if centers:
-        price = result["currentPrice"]
-        result["pricePosition"] = (
-            "above"
-            if price > centers[-1]["zg"]
-            else "below"
-            if price < centers[-1]["zd"]
-            else "inside"
+    key = json.dumps(normalized, sort_keys=True, allow_nan=False)
+    config = json.dumps(ENGINE_CONFIG, sort_keys=True)
+    try:
+        return copy.deepcopy(_analyze_cached(key, period, source, cutoff, ENGINE_VERSION, config))
+    except _CalculationError:
+        return _empty(
+            period, source, normalized, ["CZSC计算失败，请检查行情或重试"], "invalid_data"
         )
-    result["status"] = "ready" if result["strokes"] else "insufficient"
-    if len(closed) != len(rows):
-        result["issues"].append("未闭合或闭合状态未知的 K 线不参与结构确认")
-    if not result["strokes"]:
-        result["issues"].append("尚未形成满足当前引擎规则的有效笔")
-    return result
 
 
-def _fractal(klc, dates, known):
-    top = klc.fx == FX_TYPE.TOP
-    unit = klc.get_peak_klu(is_high=top)
-    # 分型至少需要右侧合并K线；其最早形成时刻在逐根处理时记录。
-    right = klc.next.lst[0] if klc.next is not None else unit
-    confirmed_at = known.get(
-        ("fractal", klc.idx, unit.idx, klc.fx, klc.high, klc.low), dates[right.idx]
-    )
+def _anchor(fx):
+    """The middle merged candle may carry a different time than its raw extreme."""
+    top = str(fx.mark) == "顶分型"
+    raw = fx.elements[1].elements
+    return next(b for b in reversed(raw) if (b.high if top else b.low) == fx.fx)
+
+
+def _fx_key(fx):
+    return (str(fx.mark), _anchor(fx).id, fx.high, fx.low)
+
+
+def _bi_key(bi):
+    return (_anchor(bi.fx_a).id, _anchor(bi.fx_b).id, bi.fx_a.fx, bi.fx_b.fx)
+
+
+def _fractal(fx, rows, known, merged_indices):
+    bar = _anchor(fx)
+    top = str(fx.mark) == "顶分型"
     return {
         "type": "top" if top else "bottom",
-        "mergedIndex": klc.idx,
-        "sourceIndex": unit.idx,
-        "date": dates[unit.idx],
-        "price": klc.high if top else klc.low,
-        "confirmedAt": confirmed_at,
-        "confirmedSourceIndex": dates.index(confirmed_at),
+        "mergedIndex": merged_indices.get(fx.elements[1].id, -1),
+        "sourceIndex": rows[bar.id]["sourceIndex"],
+        "date": rows[bar.id]["date"],
+        "price": fx.fx,
+        "confirmedAt": known[("fx", _fx_key(fx))],
+        "confirmedSourceIndex": known[("fx_index", _fx_key(fx))],
     }
 
 
-def _merged_bar(klc, dates):
-    high, low = klc.get_peak_klu(is_high=True), klc.get_peak_klu(is_high=False)
-    return {
-        "sourceStartIndex": klc.lst[0].idx,
-        "sourceEndIndex": klc.lst[-1].idx,
-        "startDate": dates[klc.lst[0].idx],
-        "endDate": dates[klc.lst[-1].idx],
-        "high": klc.high,
-        "low": klc.low,
-        "highDate": dates[high.idx],
-        "lowDate": dates[low.idx],
-        "highSourceIndex": high.idx,
-        "lowSourceIndex": low.idx,
-        "direction": "up" if klc.dir.name == "UP" else "down",
-        "uncertain": klc.idx == 0,
-        "closed": True,
-        "periodEnd": dates[klc.lst[-1].idx],
-    }
-
-
-def _movement(item, kind, dates, known):
-    begin, end = item.get_begin_klu(), item.get_end_klu()
-    start, finish = dates[begin.idx], dates[end.idx]
-    a, b = item.get_begin_val(), item.get_end_val()
-    row = {
-        "id": f"{kind}-{start}-{finish}",
-        "index": item.idx,
-        "direction": "up" if item.is_up() else "down",
-        "startDate": start,
-        "endDate": finish,
-        "startPrice": a,
-        "endPrice": b,
-        "low": min(a, b),
-        "high": max(a, b),
-        "changePct": b / a - 1,
-        "confirmed": bool(item.is_sure),
-        "confirmedAt": known.get((kind, begin.idx, end.idx)) if item.is_sure else None,
-        "bars": end.idx - begin.idx + 1,
-    }
-    if kind == "stroke":
-        row.update(
-            start=_fractal(item.begin_klc, dates, known),
-            end=_fractal(item.end_klc, dates, known),
-            mergedBars=item.end_klc.idx - item.begin_klc.idx + 1,
-        )
-    else:
-        row.update(
-            startStrokeIndex=item.start_bi.idx,
-            endStrokeIndex=item.end_bi.idx,
-            componentCount=item.end_bi.idx - item.start_bi.idx + 1,
-        )
-    return row
-
-
-def _center(z, source, dates, known):
-    outside = z.bi_out
-    state = "extension" if z.end_bi.idx - z.begin_bi.idx > 2 else "newborn"
-    if outside is not None and outside.is_sure:
-        if outside.get_end_val() > z.high:
-            state = "broken_up"
-        elif outside.get_end_val() < z.low:
-            state = "broken_down"
-    return {
-        "id": f"center-{source}-{dates[z.begin.idx]}-{z.low}-{z.high}",
-        "source": source,
-        "startStrokeIndex": z.begin_bi.idx,
-        "endStrokeIndex": z.end_bi.idx,
-        "startDate": dates[z.begin.idx],
-        "endDate": dates[z.end.idx],
-        "formedAt": known[("center", source, z.begin.idx, z.low, z.high)],
-        "zd": z.low,
-        "zg": z.high,
-        "dd": z.peak_low,
-        "gg": z.peak_high,
-        "componentCount": z.end_bi.idx - z.begin_bi.idx + 1,
-        "state": state,
-        "confirmed": bool(z.is_sure),
-    }
+def _invalidate(signal, when, reason):
+    signal.update(status="invalidated", invalidatedAt=when, invalidationReason=reason)
 
 
 def _invalidate_at_boundary(signal, row):
+    when = row["periodEnd"]
     if (
         signal["invalidatedAt"]
-        or row["date"] < signal["availableDate"]
+        or when < signal["availableDate"]
         or row["date"] == signal["structureDate"]
     ):
         return
-    crossed = (
+    if (
         row["low"] <= signal["boundary"]
         if signal["kind"].endswith("_buy")
         else row["high"] >= signal["boundary"]
-    )
-    if crossed:
-        signal.update(
-            status="invalidated", invalidatedAt=row["date"], invalidationReason="price_boundary"
-        )
+    ):
+        _invalidate(signal, when, "price_boundary")
 
 
-def _update_signals(engine, source, row, dates, signals):
-    points = engine.bs_point_lst if source == "stroke" else engine.seg_bs_point_lst
+def _update_signals(signals, episodes, bis, finished, matches, row, rows, bi_keys=None):
+    """Only a disappearing current condition or withdrawn endpoint replaces a shape.
+
+    A later pen makes the dispatcher inspect a new endpoint; it must not erase history.
+    """
+    bi_keys = bi_keys if bi_keys is not None else [_bi_key(b) for b in bis]
+    keys = set(bi_keys)
+    current = bi_keys[-1] if bi_keys else None
     active = set()
-    for point in points.bsp_iter():
-        for variant in point.type:
-            side = "buy" if point.is_buy else "sell"
-            kind = {"1": "first", "2": "second", "3": "third"}[variant.value[0]] + f"_{side}"
-            key = f"{source}-{kind}-{variant.value}-{dates[point.klu.idx]}"
-            active.add(key)
-            if key not in signals:
-                signals[key] = {
-                    "id": key,
-                    "kind": kind,
-                    "variant": variant.value,
-                    "status": "candidate",
-                    "source": source,
-                    "structureDate": dates[point.klu.idx],
-                    "availableDate": row["date"],
-                    "price": point.bi.get_end_val(),
-                    "boundary": point.klu.low if point.is_buy else point.klu.high,
-                    "boundaryRule": "signal_bar_extreme",
-                    "invalidatedAt": None,
-                    "relatedSignalId": None,
-                    "conditions": [
-                        {
-                            "id": "lower_level",
-                            "label": "次级别确认",
-                            "state": "unavailable",
-                            "evidence": "当前仅计算单周期结构，尚未联立次级别",
-                        }
-                    ],
-                    "nextWatch": "观察次级别确认；触及信号K线极值边界则候选失效",
-                }
-            signals[key]["structureConfirmed"] = bool(point.bi.is_sure)
-            if variant.value in {"1", "1p"}:
-                signals[key]["origin"] = (
-                    "trend_divergence" if variant.value == "1" else "consolidation_divergence"
-                )
-            if point.relate_bsp1 is not None:
-                related_date = dates[point.relate_bsp1.klu.idx]
-                signals[key]["relatedSignalId"] = next(
-                    (
-                        s["id"]
-                        for s in signals.values()
-                        if s["kind"] == f"first_{side}" and s["structureDate"] == related_date
-                    ),
-                    None,
-                )
-    for key, signal in signals.items():
-        if not signal["invalidatedAt"] and key not in active:
-            signal.update(
-                status="invalidated",
-                invalidatedAt=row["date"],
-                invalidationReason="structure_replaced",
+    for rule, raw in matches:
+        kind = KINDS[raw.v1]
+        base = (rule["function"], current)
+        active.add(base)
+        old = episodes.get(base)
+        if old is None or (old["status"] == "invalidated" and not old.get("_ruleActive")):
+            bi = bis[-1]
+            anchor = _anchor(bi.fx_b)
+            identity = [
+                rule,
+                rows[current[0]]["date"],
+                rows[current[1]]["date"],
+                bi.fx_a.fx,
+                bi.fx_b.fx,
+                row["periodEnd"],
+            ]
+            event_id = sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:24]
+            signal = {
+                "id": f"czsc-{event_id}",
+                "kind": kind,
+                "status": "candidate",
+                "source": "stroke",
+                "structureConfirmed": current in finished,
+                "structureDate": rows[anchor.id]["date"],
+                "availableDate": row["periodEnd"],
+                "observedAt": row["periodEnd"],
+                "price": bi.fx_b.fx,
+                "boundary": rows[anchor.id]["low" if kind.endswith("_buy") else "high"],
+                "boundaryRule": "signal_bar_extreme",
+                "boundaryRuleSource": "project",
+                "invalidatedAt": None,
+                "invalidationReason": None,
+                "relatedSignalId": None,
+                "rule": copy.deepcopy(rule),
+                "rawSignal": {"key": raw.key, "value": raw.value},
+                "conditions": [
+                    {
+                        "id": "lower_level",
+                        "label": "次级别确认",
+                        "state": "unavailable",
+                        "evidence": "官方单周期辅助信号，未联立次级别",
+                    }
+                ],
+                "nextWatch": "观察后续结构；触及信号K线极值边界则失效",
+                "_biKey": current,
+            }
+            signal["variant"] = ("B" if kind.endswith("_buy") else "S") + str(
+                {"first": 1, "second": 2, "third": 3}[kind.split("_")[0]]
             )
+            signals.append(signal)
+            episodes[base] = signal
+    for signal in signals:
+        signal["_ruleActive"] = (signal["rule"]["function"], signal["_biKey"]) in active
+        if signal["invalidatedAt"]:
+            continue
+        key = signal["_biKey"]
+        signal["structureConfirmed"] = key in finished
+        if key not in keys or (key == current and (signal["rule"]["function"], key) not in active):
+            _invalidate(signal, row["periodEnd"], "structure_replaced")
         _invalidate_at_boundary(signal, row)
 
 
-def _divergences(engine, source, dates):
-    result = []
-    centers = engine.zs_list if source == "stroke" else engine.segzs_list
-    config = engine.config.bs_point_conf if source == "stroke" else engine.config.seg_bs_point_conf
-    for z in centers:
-        a, c = z.bi_in, z.bi_out
-        if a is None or c is None or a.dir != c.dir:
-            continue
-        point_config = config.b_conf if c.is_down() else config.s_conf
-        found, _ = z.is_divergence(point_config)
+@lru_cache(maxsize=16)
+def _analyze_cached(serialized, period, source, cutoff, engine_version, config):
+    rows = json.loads(serialized)
+    result = _empty(period, source, rows, [])
+    closed = [r for r in rows if r["isClosed"]]
+    czsc, call_signal = _load_engine()
+    engine = None
+    previous_state = None
+    known, episodes, signals = {}, {}, []
+    volume_available = True
+    open_rows = iter(r for r in rows if not r["isClosed"])
+    pending_open = next(open_rows, None)
+    try:
+        for i, row in enumerate(closed):
+            if row["volume"] is None:
+                volume_available = False
+            bar = czsc.RawBar(
+                symbol="ANALYSIS",
+                dt=datetime.fromisoformat(row["date"]),
+                freq=getattr(czsc.Freq, PERIODS[period]),
+                id=i,
+                open=row["open"],
+                close=row["close"],
+                high=row["high"],
+                low=row["low"],
+                # Native objects require numbers. Missingness stays explicit in rows;
+                # volume-dependent dispatch is disabled for the entire affected prefix.
+                vol=row["volume"] if row["volume"] is not None else 0,
+                amount=row["amount"] if row["amount"] is not None else 0,
+            )
+            if engine is None:
+                engine = czsc.CZSC([bar], min_bi_len=6, max_bi_num=max(50, len(closed)))
+            else:
+                engine.update(bar)
+            available = row["periodEnd"]
+            for fx in engine.fx_list:
+                key = _fx_key(fx)
+                known.setdefault(("fx", key), available)
+                known.setdefault(("fx_index", key), row["sourceIndex"])
+            bis = engine.bi_list
+            bi_keys = [_bi_key(b) for b in bis]
+            finished = set(bi_keys[: len(engine.finished_bis)])
+            state = (tuple(bi_keys), len(finished))
+            # Completed history is immutable until the official endpoint sequence changes.
+            if state != previous_state:
+                for bi, key in zip(bis, bi_keys, strict=True):
+                    known.setdefault(("observed", key), available)
+                    if key in finished:
+                        known.setdefault(("finished", key), available)
+                    for fx in (bi.fx_a, bi.fx_b):
+                        k = _fx_key(fx)
+                        known.setdefault(("fx", k), available)
+                        known.setdefault(("fx_index", k), row["sourceIndex"])
+                for z in engine.zs_list:
+                    if len(z.bis) >= 3 and z.is_valid():
+                        key = (_bi_key(z.bis[0]), z.zd, z.zg)
+                        known.setdefault(("center", key), available)
+                previous_state = state
+            matches = []
+            if bis:
+                for rule in SIGNAL_RULES:
+                    if "first_" in rule["function"] and not volume_available:
+                        continue
+                    for raw in call_signal(rule["function"], engine, rule["params"]):
+                        if raw.v1 in KINDS:
+                            matches.append((rule, raw))
+            # Process any unclosed intervening candle at its actual time, not after later events.
+            while pending_open is not None and pending_open["date"] < row["date"]:
+                for signal in signals:
+                    _invalidate_at_boundary(signal, pending_open)
+                pending_open = next(open_rows, None)
+            _update_signals(signals, episodes, bis, finished, matches, row, closed, bi_keys)
+        _project_structures(result, engine, closed, known)
+        for row in rows:
+            if not row["isClosed"] and row["date"] > closed[-1]["date"]:
+                for signal in signals:
+                    _invalidate_at_boundary(signal, row)
+        for signal in signals:
+            signal.pop("_biKey")
+            signal.pop("_ruleActive", None)
+        result["candidateSignals"] = signals
+    except BaseException as exc:
+        # PyO3 PanicException derives directly from BaseException. Never swallow cancellation/exit.
+        if not isinstance(exc, Exception) and type(exc).__name__ != "PanicException":
+            raise
+        logger.exception("CZSC calculation failed for %s", period)
+        raise _CalculationError from exc
+    if not volume_available:
+        result["issues"].append(
+            "成交量缺失，相关历史之后的一类辅助信号停用；基础结构和二三类仍可计算"
+        )
+    if len(closed) != len(rows):
+        result["issues"].append("未闭合或闭合状态未知的K线不参与结构确认")
+    result["status"] = "ready" if result["strokes"] else "insufficient"
+    if not result["strokes"]:
+        result["issues"].append("尚未形成满足CZSC规则的有效笔")
+    result["interpretation"] = build_interpretation(result)
+    return result
 
-        def movement(item, metric_algo=point_config.macd_algo, leaving=c):
-            metric = item.cal_macd_metric(metric_algo, is_reverse=item is leaving)
-            return {
-                "startDate": dates[item.get_begin_klu().idx],
-                "endDate": dates[item.get_end_klu().idx],
-                "changePct": item.get_end_val() / item.get_begin_val() - 1,
-                "bars": item.get_klu_cnt(),
-                "force": metric,
-                "macdArea": metric if source == "stroke" else None,
-            }
 
-        result.append(
+def _project_structures(result, engine, rows, known):
+    merged = {}
+    for bi in engine.bi_list:
+        for b in bi.bars:
+            merged[b.id] = b
+    for b in engine.bars_ubi:
+        merged[b.id] = b
+    merged = sorted(merged.values(), key=lambda b: b.elements[0].id)
+    indices = {b.id: i for i, b in enumerate(merged)}
+    result["mergedBars"] = [
+        {
+            "sourceStartIndex": rows[b.elements[0].id]["sourceIndex"],
+            "sourceEndIndex": rows[b.elements[-1].id]["sourceIndex"],
+            "startDate": rows[b.elements[0].id]["date"],
+            "endDate": rows[b.elements[-1].id]["date"],
+            "high": b.high,
+            "low": b.low,
+            "highDate": rows[next(x.id for x in reversed(b.elements) if x.high == b.high)]["date"],
+            "lowDate": rows[next(x.id for x in reversed(b.elements) if x.low == b.low)]["date"],
+            "highSourceIndex": rows[next(x.id for x in reversed(b.elements) if x.high == b.high)][
+                "sourceIndex"
+            ],
+            "lowSourceIndex": rows[next(x.id for x in reversed(b.elements) if x.low == b.low)][
+                "sourceIndex"
+            ],
+            "direction": "unknown",
+            "uncertain": i == 0,
+            "closed": True,
+            "periodEnd": rows[b.elements[-1].id]["periodEnd"],
+        }
+        for i, b in enumerate(merged)
+    ]
+    result["window"]["mergedBars"] = len(merged)
+    result["fractals"] = [_fractal(fx, rows, known, indices) for fx in engine.fx_list]
+    finished = {_bi_key(b) for b in engine.finished_bis}
+    for i, bi in enumerate(engine.bi_list):
+        key = _bi_key(bi)
+        start, end = (
+            _fractal(bi.fx_a, rows, known, indices),
+            _fractal(bi.fx_b, rows, known, indices),
+        )
+        result["strokes"].append(
             {
-                "id": f"divergence-{source}-{z.begin.idx}-{z.low}-{z.high}-{a.get_begin_klu().idx}-{a.get_end_klu().idx}-{c.get_begin_klu().idx}-{c.get_end_klu().idx}",
-                "kind": "consolidation",
-                "direction": "down" if c.is_down() else "up",
-                "source": source,
-                "status": "candidate" if found else "not_found",
-                "movementAIndex": a.idx,
-                "movementCIndex": c.idx,
-                "a": movement(a),
-                "c": movement(c),
-                "evidence": "同方向进出中枢走势比较：笔使用MACD面积，线段使用斜率；不代表次级别确认",
+                "id": f"stroke-{key}",
+                "index": i,
+                "direction": "up" if bi.fx_b.fx > bi.fx_a.fx else "down",
+                "start": start,
+                "end": end,
+                "startDate": start["date"],
+                "endDate": end["date"],
+                "startPrice": bi.fx_a.fx,
+                "endPrice": bi.fx_b.fx,
+                "low": bi.low,
+                "high": bi.high,
+                "changePct": bi.fx_b.fx / bi.fx_a.fx - 1,
+                "mergedBars": bi.length,
+                "confirmed": key in finished,
+                "confirmedAt": known.get(("finished", key)) if key in finished else None,
+                "observedAt": known[("observed", key)],
+                "bars": end["sourceIndex"] - start["sourceIndex"] + 1,
             }
         )
-    return result
+    by_key = {_bi_key(b): i for i, b in enumerate(engine.bi_list)}
+    for z in engine.zs_list:
+        if len(z.bis) < 3 or not z.is_valid():
+            continue
+        a, b = by_key[_bi_key(z.bis[0])], by_key[_bi_key(z.bis[-1])]
+        key = (_bi_key(z.bis[0]), z.zd, z.zg)
+        result["centers"].append(
+            {
+                "id": f"center-{key}",
+                "source": "stroke",
+                "startStrokeIndex": a,
+                "endStrokeIndex": b,
+                "startDate": result["strokes"][a]["startDate"],
+                "endDate": result["strokes"][b]["endDate"],
+                "formedAt": known[("center", key)],
+                "zd": z.zd,
+                "zg": z.zg,
+                "dd": z.dd,
+                "gg": z.gg,
+                "componentCount": len(z.bis),
+                "state": "extension" if len(z.bis) > 3 else "newborn",
+                "confirmed": True,
+            }
+        )
+    result["strokeCenters"] = result["centers"]
+    result["latestFractal"] = result["fractals"][-1] if result["fractals"] else None
+    sure = [b for b in result["strokes"] if b["confirmed"]]
+    forming = [b for b in result["strokes"] if not b["confirmed"]]
+    result["latestConfirmedStroke"] = sure[-1] if sure else None
+    result["formingStroke"] = forming[-1] if forming else None
+    centers = result["centers"]
+    result["latestCenter"] = centers[-1] if centers else None
+    if centers:
+        result["trendType"] = "consolidation_proxy"
+        if len(centers) >= 2:
+            if centers[-1]["zd"] > centers[-2]["zg"]:
+                result["trendType"] = "uptrend_proxy"
+            elif centers[-1]["zg"] < centers[-2]["zd"]:
+                result["trendType"] = "downtrend_proxy"
+        p = result["currentPrice"]
+        result["pricePosition"] = (
+            "above" if p > centers[-1]["zg"] else "below" if p < centers[-1]["zd"] else "inside"
+        )

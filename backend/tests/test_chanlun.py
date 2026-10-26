@@ -29,24 +29,17 @@ def bars():
     return result
 
 
-def test_real_engine_has_strokes_segments_and_explicit_provenance(bars):
+def test_official_engine_contract_and_removed_features(bars):
     result = analyze_chanlun(bars)
-    assert result["engine"]["name"] == "chan.py"
-    assert result["engine"]["commit"].startswith("429d6ed")
-    assert result["strokes"] and result["segments"] and result["centers"]
-    assert result["definitionMode"] == "engine_rules"
+    assert result["ruleVersion"] == 4
+    assert result["engine"]["name"] == "czsc"
+    assert result["engine"]["version"] == "1.0.2"
+    assert result["capabilities"]["supportedSources"] == ["stroke"]
+    assert result["strokes"]
+    for key in ("segments", "segmentCenters", "divergences", "thirdSignals"):
+        assert result[key] == []
     assert all(s["confirmedAt"] >= s["endDate"] for s in result["strokes"] if s["confirmed"])
-    assert all(c["zd"] < c["zg"] for c in result["centers"])
-    assert result["strokes"][0]["startDate"] == "2025-01-07"
-    assert result["strokes"][0]["endPrice"] == pytest.approx(16.611367091031468)
-    assert result["centers"][0]["zg"] == pytest.approx(18.309313746034302)
-    assert result["divergences"][0]["a"]["macdArea"] == pytest.approx(3.6406269461632284)
     assert all(f["confirmedAt"] >= f["date"] for f in result["fractals"])
-    assert all(
-        d["availableDate"] >= d["c"]["endDate"]
-        for d in result["divergences"]
-        if d["status"] == "candidate"
-    )
 
 
 def test_historical_cutoff_cannot_see_future_or_invalid_future_rows(bars):
@@ -103,10 +96,11 @@ def test_cache_isolated_from_caller_mutation_and_price_revision(bars):
 
 def test_minute_time_labels_remain_beijing_wall_clock(bars):
     minute = [{**row, "date": f"{row['date']} 10:00"} for row in bars]
-    result = analyze_chanlun(minute, period="30m", source="segment")
-    assert result["source"] == "segment"
+    result = analyze_chanlun(minute, period="30m")
+    assert result["source"] == "stroke"
     assert result["strokes"][0]["startDate"].endswith("10:00")
-    assert result["centers"] == result["segmentCenters"]
+    assert result["centers"] == result["strokeCenters"]
+    assert result["interpretation"]["asOf"].endswith("10:00")
 
 
 def test_intraday_observation_does_not_expose_completed_daily_candle(bars):
@@ -120,16 +114,16 @@ def test_timezone_cutoff_is_rejected_and_engine_failure_is_explicit(bars, monkey
     with pytest.raises(ValueError, match="wall-clock"):
         analyze_chanlun(bars, as_of="2025-01-01T00:00:00+00:00")
     chanlun._analyze_cached.cache_clear()
-    original = chanlun.CKLine_List.add_single_klu
+    original = chanlun._load_engine
 
-    def fail(*args):
-        raise RuntimeError("synthetic engine failure")
+    def fail():
+        raise ImportError("synthetic missing engine")
 
-    monkeypatch.setattr(chanlun.CKLine_List, "add_single_klu", fail)
+    monkeypatch.setattr(chanlun, "_load_engine", fail)
     result = analyze_chanlun(bars)
-    assert result["status"] == "invalid_data"
+    assert result["status"] == "engine_unavailable"
     assert not result["strokes"]
-    monkeypatch.setattr(chanlun.CKLine_List, "add_single_klu", original)
+    monkeypatch.setattr(chanlun, "_load_engine", original)
     assert analyze_chanlun(bars)["status"] == "ready"
 
 
@@ -215,7 +209,7 @@ def test_kline_api_opt_in_daily_period_empty_gzip_and_validation(bars, monkeypat
         params={**params, "period": "1w", "include_chanlun": True, "chanlun_source": "segment"},
     )
     assert weekly.status_code == 200
-    assert weekly.json()["chanlun"]["source"] == "segment"
+    assert weekly.json()["chanlun"]["status"] == "unsupported"
     minute = frame.with_columns(
         pl.col("date").cast(pl.Datetime).dt.replace(hour=10).alias("datetime")
     ).drop("date")

@@ -430,10 +430,8 @@ function StockDailyKChartView({
                   {([
                     ['fractals', '分型'],
                     ['strokes', '笔'],
-                    ['segments', '线段代理'],
                     ['centers', '中枢'],
-                    ['candidates', '买卖点候选'],
-                    ['divergences', '背驰代理'],
+                    ['candidates', 'CZSC 辅助信号'],
                   ] as const).map(([key, label]) => (
                     <button
                       key={key}

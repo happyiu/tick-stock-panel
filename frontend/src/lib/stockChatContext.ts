@@ -79,6 +79,9 @@ function compactSignal(signal: ChanlunCandidateSignal): Record<string, unknown> 
     source: signal.source,
     origin: signal.origin,
     variant: signal.variant,
+    rule: signal.rule,
+    rawSignal: signal.rawSignal,
+    boundaryRuleSource: signal.boundaryRuleSource,
     structureConfirmed: signal.structureConfirmed,
     structureDate: signal.structureDate,
     availableDate: signal.availableDate,
@@ -99,6 +102,7 @@ function compactChanlun(analysis: ChanlunAnalysis): Record<string, unknown> {
     source: analysis.source,
     definitionMode: analysis.definitionMode,
     engine: analysis.engine,
+    capabilities: analysis.capabilities,
     approximationLoss: analysis.approximationLoss,
     status: analysis.status,
     issues: analysis.issues,
@@ -117,6 +121,7 @@ function compactChanlun(analysis: ChanlunAnalysis): Record<string, unknown> {
     thirdSignals: analysis.thirdSignals.slice(-4).map(item => compact(item, ['id', 'kind', 'status', 'structureDate', 'availableDate', 'price', 'boundary', 'invalidatedAt'])),
     currentPrice: analysis.currentPrice,
     pricePosition: analysis.pricePosition,
+    interpretation: analysis.interpretation ? compact(analysis.interpretation, ['version', 'ruleSource', 'asOf', 'closedPrice', 'phase', 'facts', 'observation']) : null,
   }
 }
 

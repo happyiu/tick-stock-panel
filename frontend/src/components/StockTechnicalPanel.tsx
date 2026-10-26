@@ -923,7 +923,7 @@ export function StockTechnicalPanel({
           </div>
 
           {!collapsed && (isLoading && bars.length === 0 ? (
-            <div className="p-2">
+            <div className="py-2">
               <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
                 {Array.from({ length: 6 }, (_, index) => <div key={index} className="h-[116px] animate-pulse rounded-card border border-border bg-surface/60" />)}
               </div>
@@ -937,7 +937,7 @@ export function StockTechnicalPanel({
           ) : bars.length === 0 ? (
             <div className="flex items-center justify-center px-4 py-6 text-center text-xs text-muted">暂无技术指标数据</div>
           ) : (
-            <div className="space-y-2 p-2">
+            <div className="space-y-2 py-2">
               <div className="rounded-card border border-border bg-surface/70 p-2.5 shadow-sm">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <span className="text-[12px] font-medium text-foreground">技术研判</span>
@@ -1355,7 +1355,7 @@ function ETFIndicatorScores({ score }: { score: TechnicalScoreRow | null }) {
     { label: '方向分', kind: 'direction' as const, value: score?.category_direction_score, available: score?.direction_available, coverage: score?.category_direction_coverage },
   ]
   return (
-    <section className="px-2.5 pb-2.5 pt-4">
+    <section className="pb-2.5 pt-4">
       <div className="grid grid-cols-1 gap-1.5">
         {summary.map(item => (
           <div key={item.label} className="rounded border border-border/70 bg-base/40 p-2">

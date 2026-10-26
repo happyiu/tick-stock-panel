@@ -7,8 +7,7 @@ import { StockPanel } from './StockPanel'
 import type { CandlestickProps } from '@/lib/kline-chart'
 import type { StockLevels } from '@/lib/api'
 import { emptyChanlunAnalysis } from '@/lib/chanlun'
-import type { StockChanlunPanelProps } from './StockChanlunPanel'
-const state = vi.hoisted(() => ({ chart: {} as CandlestickProps, levels: vi.fn(), chanlun: vi.fn(), structure: {} as StockChanlunPanelProps, daily: vi.fn(), catalog: vi.fn() }))
+const state = vi.hoisted(() => ({ chart: {} as CandlestickProps, levels: vi.fn(), chanlun: vi.fn(), daily: vi.fn(), catalog: vi.fn() }))
 vi.mock('@/lib/api', async importOriginal => ({
   ...await importOriginal<typeof import('@/lib/api')>(),
   api: {
@@ -28,7 +27,6 @@ vi.mock('./KLineCandlestick', async importOriginal => ({
 vi.mock('./StockInfoBar', () => ({ StockInfoBar: () => null }))
 vi.mock('./StockIntradayChart', () => ({ StockIntradayChart: () => null }))
 vi.mock('./StockTechnicalPanel', () => ({ StockTechnicalPanel: () => null }))
-vi.mock('./StockChanlunPanel', () => ({ StockChanlunPanel: (props: StockChanlunPanelProps) => { state.structure = props; return <div /> } }))
 vi.mock('./StockAiChatPanel', () => ({ StockAiChatPanel: () => null }))
 vi.mock('@/lib/useSharedQueries', () => ({ useQuoteStatus: () => ({}) }))
 const levels: StockLevels = {
@@ -64,9 +62,9 @@ async function click(label: string, role = 'button') {
   expect(element, label).toBeDefined()
   await act(async () => (element as HTMLButtonElement).click()); await settle()
 }
-it('关键价位位于结构分析右边，按需加载，点击画线和曲线，再点移除，保留原有标线', async () => {
+it('关键价位位于缠论结构右边，按需加载，点击画线和曲线，再点移除，保留原有标线', async () => {
   await render({ priceLines: [{ value: 0.48, label: '自定义' }] })
-  expect([...host.querySelectorAll('[role="tab"]')].map(tab => tab.textContent)).toEqual(['指标分析', '结构分析', '关键价位', 'AI分析'])
+  expect([...host.querySelectorAll('[role="tab"]')].map(tab => tab.textContent)).toEqual(['指标分析', '缠论结构', '关键价位', 'AI分析'])
   expect(state.levels).not.toHaveBeenCalled()
   await click('关键价位', 'tab')
   expect(state.levels).toHaveBeenCalledWith('512000.SH', 250, '2026-10-15')
@@ -80,7 +78,7 @@ it('关键价位位于结构分析右边，按需加载，点击画线和曲线�
   const previousCalls = state.levels.mock.calls.length
   await click('立即计算右侧分析')
   expect(state.levels.mock.calls.length).toBeGreaterThan(previousCalls)
-  await click('结构分析', 'tab')
+  await click('缠论结构', 'tab')
   expect(state.chart.priceLines?.map(line => line.label)).toContain('支撑')
   await click('关键价位', 'tab'); await click('压力支撑'); await click('布林带')
   expect(state.chart.priceLines?.some(line => line.label === '支撑')).toBe(false)
@@ -137,25 +135,25 @@ it('错误可重试，无价位时提示，空组不可点击', async () => {
   expect(gap.disabled).toBe(true)
 })
 
-it('缠论使用后端结果，切历史、结构来源和标的时隔离结果，加载失败可重试', async () => {
+it('缠论结构按需共享三周期后端缠论，切历史和标的隔离结果', async () => {
   state.chanlun.mockResolvedValue({ ...emptyChanlunAnalysis(), currentPrice: 0.497 })
-  await render(); await click('结构分析', 'tab')
-  expect(state.chanlun).toHaveBeenLastCalledWith('512000.SH', '1d', { source: 'stroke', asOf: '2026-10-15' })
+  await render()
+  expect(state.chanlun.mock.calls.map(call => call[1])).toEqual(['1d'])
+  await click('缠论结构', 'tab')
+  expect(state.chanlun).toHaveBeenCalledWith('512000.SH', '1d', { source: 'stroke', asOf: '2026-10-15' })
   expect(state.chart.chanlunAnalysis?.currentPrice).toBe(0.497)
   await act(async () => state.chart.onDateClick?.('2026-10-14')); await settle(); await settle()
-  expect(state.chanlun).toHaveBeenLastCalledWith('512000.SH', '1d', { source: 'stroke', asOf: '2026-10-14' })
-  await act(async () => state.structure.onSourceChange?.('segment')); await settle(); await settle()
-  expect(state.chanlun).toHaveBeenLastCalledWith('512000.SH', '1d', { source: 'segment', asOf: '2026-10-14' })
-  const dailyCalls = state.chanlun.mock.calls.filter(call => call[1] === '1d').length
-  await act(async () => state.structure.onToggleMultiPeriod?.()); await settle(); await settle()
-  expect(state.chanlun.mock.calls.filter(call => call[1] === '1d')).toHaveLength(dailyCalls)
+  expect(state.chanlun).toHaveBeenCalledWith('512000.SH', '1d', { source: 'stroke', asOf: '2026-10-14' })
+  expect(host.querySelector('#stock-analysis-tabpanel')?.querySelector('[aria-label="缠论结构概览"]')).not.toBeNull()
+  expect([...host.querySelectorAll('.chanlun-overview-period')].map(el => el.textContent)).toEqual(['周线', '日线', '30分钟'])
+  for (const target of ['1w', '1d', '30m']) {
+    expect(state.chanlun.mock.calls.filter(call => call[1] === target && call[2].asOf === '2026-10-15')).toHaveLength(1)
+    expect(state.chanlun).toHaveBeenCalledWith('512000.SH', target, { source: 'stroke', asOf: '2026-10-14' })
+  }
   state.chanlun.mockRejectedValue(new Error('缠论不可用'))
   await render({ symbol: '159915.SZ' }); await settle()
   expect(state.chart.chanlunAnalysis?.currentPrice).toBeNull()
-  expect(state.structure.error?.message).toBe('缠论不可用')
-  state.chanlun.mockResolvedValue({ ...emptyChanlunAnalysis(), currentPrice: 2 })
-  await act(async () => state.structure.onRetry?.()); await settle(); await settle()
-  expect(state.chart.chanlunAnalysis?.currentPrice).toBe(2)
+
 })
 
 it('目录加载后信息条与图表只发一次行情请求，切换指标共享更新后的缓存键', async () => {

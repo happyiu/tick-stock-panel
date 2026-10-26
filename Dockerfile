@@ -122,6 +122,8 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
 # (<root>/backend/app/) 推导的, 容器内会错算到 /。这里用环境变量显式指定
 # 三个关键路径, 确保 static / tiers / data 都指向容器内正确位置。
 COPY backend/app ./app
+# Fail the build if the pinned CZSC wheel/native runtime cannot load.
+RUN /app/.venv/bin/python -c "from app.services.chanlun import _load_engine; _load_engine()"
 # a-stock-data 仅安装 mootdx.quotes 实际使用的 Python 包；--no-deps 避免
 # 上游旧版 httpx/py-mini-racer 声明与当前项目及 ARM 镜像冲突。
 RUN uv pip install --no-deps --python /app/.venv/bin/python \

@@ -13,6 +13,7 @@
   pyinstaller packaging/tsp.spec                # 产物在 dist/TSP/
 """
 import sys
+from importlib.metadata import version
 from importlib.util import find_spec
 from pathlib import Path
 
@@ -44,7 +45,10 @@ datas = []
 binaries = []
 hiddenimports = []
 
-for pkg in ("polars", "pyarrow", "duckdb", "fastexcel"):
+if version("czsc") != "1.0.2":
+    raise RuntimeError("Desktop build requires czsc==1.0.2")
+
+for pkg in ("polars", "pyarrow", "duckdb", "fastexcel", "czsc", "wbt"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b
@@ -130,7 +134,7 @@ for pkg in (
     "tickflow",  # tickflow/__version__.py 用 importlib.metadata 读版本
     "uvicorn", "polars", "duckdb", "pyarrow", "httpx", "numpy", "pandas",
     "openai", "platformdirs", "winotify", "plyer", "apscheduler",
-    "python-dotenv", "fastexcel",
+    "python-dotenv", "fastexcel", "czsc", "wbt",
 ):
     datas += _safe_metadata(pkg)
 
@@ -154,7 +158,6 @@ excludes = [
     "numba",
     "llvmlite",
     "matplotlib",
-    "plotly",
     "ipywidgets",
     "nbformat",
     "nbconvert",

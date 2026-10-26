@@ -21,7 +21,8 @@ export function chanlunQueryOptions(
         ? await api.klineDaily(symbol, undefined, range, undefined, false, options)
         : await api.klinePeriod(symbol, period, range, days, false, options)
       if (!response.chanlun) throw new Error('缠论计算结果缺失，请更新后端后重试。')
-      if (response.chanlun.status === 'invalid_data') throw new Error(response.chanlun.issues[0] ?? '缠论计算失败')
+      if (response.chanlun.ruleVersion !== 4) throw new Error('缠论规则版本不匹配，请更新后端。')
+      if (['invalid_data', 'unsupported', 'engine_unavailable'].includes(response.chanlun.status)) throw new Error(response.chanlun.issues[0] ?? '缠论计算失败')
       return response.chanlun
     },
     staleTime: 30_000,

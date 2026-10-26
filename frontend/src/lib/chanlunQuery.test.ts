@@ -41,3 +41,18 @@ it('旧后端和计算异常显式报错，不回退到前端旧公式', async (
   } })
   await expect(options.queryFn()).rejects.toThrow('行情异常')
 })
+
+it('契约升级隔离缓存，明确拒绝不支持和内核缺失状态', async () => {
+  const options = chanlunQueryOptions('A', 'etf', '1d', range, 20, 'stroke', null)
+  expect(options.queryKey.slice(0, 2)).toEqual(['chanlun', 4])
+  for (const status of ['unsupported', 'engine_unavailable'] as const) {
+    vi.mocked(api.klineDaily).mockResolvedValue({ symbol: 'A', rows: [], chanlun: {
+      ...emptyChanlunAnalysis(), status, issues: [status],
+    } })
+    await expect(options.queryFn()).rejects.toThrow(status)
+  }
+  vi.mocked(api.klineDaily).mockResolvedValue({ symbol: 'A', rows: [], chanlun: {
+    ...emptyChanlunAnalysis(), ruleVersion: 3,
+  } as never })
+  await expect(options.queryFn()).rejects.toThrow('规则版本不匹配')
+})

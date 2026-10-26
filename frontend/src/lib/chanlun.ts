@@ -17,6 +17,8 @@ export interface ChanlunBarInput {
   close: number
   periodEnd?: string | null
   isClosed?: boolean
+  volume?: number | null
+  amount?: number | null
   macdHist?: number | null
   macd_hist?: number | null
   ma20?: number | null
@@ -67,6 +69,7 @@ export interface ChanlunStroke {
   changePct: number | null
   confirmed: boolean
   confirmedAt: string | null
+  observedAt?: string
 }
 
 export interface ChanlunCenter {
@@ -131,6 +134,10 @@ export interface ChanlunCandidateSignal {
   kind: ChanlunCandidateKind
   status: ChanlunSignalStatus
   source: ChanlunStructureSource
+  rule?: { function: string; params: Record<string, string | number> }
+  rawSignal?: { key: string; value: string }
+  boundaryRuleSource?: string
+  observedAt?: string
   variant?: string
   structureConfirmed?: boolean
   boundaryRule?: string
@@ -162,14 +169,28 @@ export interface ChanlunThirdSignal {
   lowerLevelTrigger: 'missing'
 }
 
+export interface ChanlunInterpretation {
+  version: 1
+  ruleSource: 'project'
+  asOf: string | null
+  closedPrice: number | null
+  phase: { key: 'forming' | 'oscillating' | 'leaving' | 'insufficient'; label: string; subtitle: string; description: string }
+  centerOrdinal: number
+  legs: { label: string; strokes: ChanlunStroke[] }[]
+  facts: string[]
+  observation: { title: string; conditions: { id: string; text: string; state: 'met' | 'waiting'; warning: boolean }[] }
+  levels: { key: string; label: string; price: number }[]
+}
+
 export interface ChanlunAnalysis {
-  ruleVersion: 3
+  ruleVersion: 4
   period: '30m' | '1d' | '1w' | '1mo'
   source: ChanlunStructureSource
   definitionMode: 'engine_rules'
-  engine?: { name: string; commit: string; config: Record<string, unknown> }
+  engine?: { name: string; version?: string; runtime?: string; commit: string; config: Record<string, unknown> }
+  capabilities?: { supportedSources: string[]; segments: boolean; divergences: boolean; recursiveConfirmation: boolean; signalRules: { function: string; params: Record<string, string | number> }[] }
   approximationLoss: string
-  status: 'ready' | 'insufficient' | 'invalid_data'
+  status: 'ready' | 'insufficient' | 'invalid_data' | 'unsupported' | 'engine_unavailable'
   issues: string[]
   window: {
     start: string | null
@@ -196,6 +217,7 @@ export interface ChanlunAnalysis {
   latestSignal: ChanlunThirdSignal | null
   currentPrice: number | null
   pricePosition: 'inside' | 'above' | 'below' | null
+  interpretation?: ChanlunInterpretation | null
 }
 
 /** 加载/空态仅创建数据容器，结构计算统一由后端完成。 */
@@ -204,13 +226,14 @@ export function emptyChanlunAnalysis(
   source: ChanlunStructureSource = 'stroke',
 ): ChanlunAnalysis {
   return {
-    ruleVersion: 3, period, source, definitionMode: 'engine_rules',
-    approximationLoss: '按固定引擎规则计算；单周期结构不等于次级别递归确认，买卖点仅为候选',
+    ruleVersion: 4, period, source, definitionMode: 'engine_rules',
+    capabilities: { supportedSources: ['stroke'], segments: false, divergences: false, recursiveConfirmation: false, signalRules: [] },
+    approximationLoss: 'CZSC官方辅助信号；单周期条件不等于次级别确认；趋势为本项目中枢位置近似',
     status: 'insufficient', issues: [],
     window: { start: null, end: null, bars: 0, mergedBars: 0 },
     bars: [], mergedBars: [], fractals: [], strokes: [], segments: [], centers: [],
     strokeCenters: [], segmentCenters: [], trendType: 'unclear', divergences: [],
     candidateSignals: [], thirdSignals: [], latestFractal: null, latestConfirmedStroke: null,
-    formingStroke: null, latestCenter: null, latestSignal: null, currentPrice: null, pricePosition: null,
+    formingStroke: null, latestCenter: null, latestSignal: null, currentPrice: null, pricePosition: null, interpretation: null,
   }
 }

@@ -26,3 +26,13 @@ it('旧会话读取时移除废弃数据，保留会话与结构字段且不修�
   expect(legacy.structure.elliott).toBeDefined()
   expect(stripLegacyStockChatContext({ symbol: '510300.SH' })).toEqual({ symbol: '510300.SH' })
 })
+
+it('AI结构解读保留后端阶段和项目规则来源，不将流程图当成背驰确认', () => {
+  const a = emptyChanlunAnalysis('30m')
+  a.interpretation = { version: 1, ruleSource: 'project', asOf: '2026-10-26 15:00', closedPrice: 1,
+    phase: { key: 'forming', label: '中枢形成', subtitle: '刚形成', description: '三笔重叠' },
+    centerOrdinal: 1, legs: [], facts: ['实际结构事实'], observation: { title: '观察边界', conditions: [] }, levels: [], }
+  const snapshot = buildStockChatSnapshot({ symbol: '510300.SH', period: '30m', selectedDate: null, chanlun: a,
+    response: { symbol: '510300.SH', asset_type: 'etf', rows: [{ date: '2026-10-26 15:00', open: 1, high: 1, low: 1, close: 1 }] } })
+  expect(snapshot?.structure.chanlun).toMatchObject({ capabilities: { divergences: false }, interpretation: { ruleSource: 'project', phase: { key: 'forming' }, facts: ['实际结构事实'] } })
+})

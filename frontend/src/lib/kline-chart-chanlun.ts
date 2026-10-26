@@ -64,6 +64,7 @@ export function buildChanlunOverlays(
 ): OverlayCreate[] {
   if (!analysis || !config?.enabled) return []
   const byDate = new Map(bars.map(bar => [bar.date, bar]))
+  for (const bar of bars) if (typeof bar.periodEnd === 'string') byDate.set(bar.periodEnd, bar)
   const overlays: OverlayCreate[] = []
   const add = (id: string, dates: string[], prices: number[], annotation: StructureAnnotation) => {
     if (dates.some(date => !byDate.has(date)) || prices.some(price => !Number.isFinite(price))) return
@@ -84,11 +85,9 @@ export function buildChanlunOverlays(
       tooltip: `${bottom ? '底' : '顶'}分型${timing(fractal.date, fractal.confirmedAt)}`,
     })
   }
-  for (const [kind, enabled, structures] of [
-    ['stroke', config.strokes, analysis.strokes], ['segment', config.segments, analysis.segments],
-  ] as const) if (enabled) for (const structure of structures ?? []) {
-    add(`${kind}-${structure.id}`, [structure.startDate, structure.endDate], [structure.startPrice, structure.endPrice], {
-      kind, color: structure.direction === 'up' ? COLORS.bull : COLORS.bear, confirmed: structure.confirmed,
+  if (config.strokes) for (const structure of analysis.strokes ?? []) {
+    add(`stroke-${structure.id}`, [structure.startDate, structure.endDate], [structure.startPrice, structure.endPrice], {
+      kind: 'stroke', color: structure.direction === 'up' ? COLORS.bull : COLORS.bear, confirmed: structure.confirmed,
     })
   }
   if (config.centers) for (const center of analysis.centers ?? []) {
@@ -96,24 +95,13 @@ export function buildChanlunOverlays(
   }
   if (config.candidates) for (const signal of analysis.candidateSignals ?? []) {
     if (signal.status !== 'candidate' && signal.status !== 'invalidated') continue
-    const labels = { first_buy: '1买', second_buy: '2买', third_buy: '3买', first_sell: '1卖', second_sell: '2卖', third_sell: '3卖' }
+    const labels = { first_buy: 'B1', second_buy: 'B2', third_buy: 'B3', first_sell: 'S1', second_sell: 'S2', third_sell: 'S3' }
     const buy = signal.kind.endsWith('_buy'), invalidated = signal.status === 'invalidated'
     const label = `${labels[signal.kind]}${invalidated ? '失效' : '候选'}`
     add(`candidate-${signal.id}`, [signal.availableDate], [signal.price], {
       kind: 'candidate', label, above: !buy, invalidated,
       color: invalidated ? textColor : buy ? COLORS.bull : COLORS.bear,
-      tooltip: `${label}${timing(signal.structureDate, signal.availableDate)}\n失效边界：${signal.boundary}`,
-    })
-  }
-  if (config.divergences) for (const divergence of analysis.divergences ?? []) {
-    if (divergence.status !== 'candidate') continue
-    const date = divergence.availableDate
-    if (!date) continue
-    const price = analysis.bars.find(bar => bar.date === date)?.close ?? analysis.currentPrice
-    if (price == null) continue
-    add(`divergence-${divergence.id}`, [date], [price], {
-      kind: 'divergence', color: '#F59E0B', label: '背驰候选', above: true,
-      tooltip: `${divergence.kind === 'trend' ? '趋势' : '盘整'}背驰候选\n${divergence.evidence}`,
+      tooltip: `${label}${signal.rule ? ` · ${signal.rule.function}` : ''}${timing(signal.structureDate, signal.availableDate)}\n失效边界：${signal.boundary}（本项目规则）`,
     })
   }
   return overlays
