@@ -6,6 +6,11 @@ import {
 } from '@/lib/chanlunPresentation'
 import { fmtAssetPrice, fmtPct } from '@/lib/format'
 
+const SIGNAL_NAMES = {
+  first_buy: '一买观察', second_buy: '二买观察', third_buy: '三买观察',
+  first_sell: '一卖观察', second_sell: '二卖观察', third_sell: '三卖观察',
+}
+
 const STAGES = [
   { key: 'forming', label: '中枢形成', hint: '三笔产生重叠区间', description: '采用官方有效笔中枢；至少三笔形成核心重叠区间，边界相等时也保留。' },
   { key: 'oscillating', label: '中枢震荡', hint: '围绕中枢往返', description: '中枢包含更多笔，或已闭合K线曾离开后回到区间。阶段是本项目的展示规则。' },
@@ -13,9 +18,10 @@ const STAGES = [
   { key: 'diverging', label: '背驰', hint: '当前暂未提供', description: '当前未提供背驰分析，不能依据空结果判断没有背驰，也不能由辅助信号推导背驰阶段。' },
 ]
 
-function StructureFlow({ interpretation }: { interpretation: ChanlunInterpretation }) {
+function StructureFlow({ interpretation, macdAvailable }: { interpretation: ChanlunInterpretation; macdAvailable: boolean }) {
   const id = useId().replace(/:/g, '')
   const [help, setHelp] = useState<number | null>(null)
+  const stages = macdAvailable ? STAGES.map((s, i) => i === 3 ? { ...s, hint: '仅供MACD观察', description: '图上提供官方MACD背驰条件观察；单次命中不足以确认严格趋势背驰，也不用于自动切换当前阶段。' } : s) : STAGES
   const stage = STAGES.findIndex(s => s.key === interpretation.phase.key)
   return <>
     <div className="chanlun-flow" role="group" aria-label="走势分析阶段流程图">
@@ -30,14 +36,14 @@ function StructureFlow({ interpretation }: { interpretation: ChanlunInterpretati
       </svg>
       {['延伸', '突破', '比较力度'].map((text, i) => <span key={text} className={`chanlun-flow-edge${stage === i && i < 2 ? ' outgoing' : ''}`} style={{ left: '50%', top: `${24 + i * 25}%` }}>{text}</span>)}
       <span className="chanlun-flow-edge renew">中枢新生</span><span className="chanlun-flow-edge return">回到中枢</span><span className="chanlun-flow-edge turn">转折</span>
-      {STAGES.map((s, i) => <button key={s.key} type="button" className={`chanlun-flow-node${stage === i ? ' active' : ''}${i === 3 ? ' unavailable' : ''}`}
+      {stages.map((s, i) => <button key={s.key} type="button" className={`chanlun-flow-node${stage === i ? ' active' : ''}${i === 3 && !macdAvailable ? ' unavailable' : ''}`}
         style={{ top: `${(20 + i * 132) / 530 * 100}%` }} aria-pressed={stage === i}
         aria-label={`${s.label}，${stage === i ? interpretation.phase.subtitle : s.hint}，查看阶段说明`} onClick={() => setHelp(help === i ? null : i)}>
         <strong>{stage === i && <span aria-hidden="true">● </span>}{s.label}</strong>
         {stage === i ? <><span className="chanlun-flow-subtitle">{interpretation.phase.subtitle}</span><small>窗口内第 {interpretation.centerOrdinal} 个中枢</small></> : i === 3 && <small>{s.hint}</small>}
       </button>)}
     </div>
-    {help != null && <p className="chanlun-detail-note" role="status"><strong>{STAGES[help].label}：</strong>{STAGES[help].description}</p>}
+    {help != null && <p className="chanlun-detail-note" role="status"><strong>{stages[help].label}：</strong>{stages[help].description}</p>}
   </>
 }
 
@@ -98,14 +104,14 @@ export function StockChanlunInterpretation({ items, selected, onSelect, asOf, hi
               <p>以最新笔中枢展示进入笔 a 和后续笔 b，尚未确认递归走势段。</p>
             </details>
           </div>}
-          {interpretation.phase.key !== 'insufficient' && <><p className="chanlun-flow-caption">阶段流程 · {label}级</p><StructureFlow key={selected} interpretation={interpretation} /></>}
+          {interpretation.phase.key !== 'insufficient' && <><p className="chanlun-flow-caption">阶段流程 · {label}级</p><StructureFlow key={selected} interpretation={interpretation} macdAvailable={analysis?.capabilities?.divergences === true} /></>}
           <div className="chanlun-appeared"><h4>已经出现</h4><ul>{(interpretation.facts.length ? interpretation.facts : [interpretation.phase.description]).map(fact => <li key={fact}><span aria-hidden="true">✓</span>{fact}</li>)}</ul>
             {!hideDates && interpretation.asOf && <p className="chanlun-detail-note">结构观察截至 {interpretation.asOf}</p>}
           </div>
           <button type="button" className="chanlun-next-observe" onClick={() => setTab('next')}>接下来观察什么<span aria-hidden="true">›</span></button>
           <div className="chanlun-signal-section"><h4>CZSC 辅助信号 <span>{signals.length}</span></h4>
             {!signals.length && <p className="chanlun-detail-note">当前窗口暂无仍有效的辅助信号。</p>}
-            {(allSignals ? signals : signals.slice(0, 3)).map(signal => <details key={signal.id} className="chanlun-signal-item"><summary><span className={signal.kind.endsWith('_buy') ? 'text-bull' : 'text-bear'}>{signalCode(signal)}</span><span>辅助信号 · 候选</span><strong>{price(signal.price)}</strong></summary>
+            {(allSignals ? signals : signals.slice(0, 3)).map(signal => <details key={signal.id} className="chanlun-signal-item"><summary><span className={signal.kind.endsWith('_buy') ? 'text-bull' : 'text-bear'}>{signalCode(signal)}</span><span>{SIGNAL_NAMES[signal.kind]} · 条件命中</span><strong>{price(signal.price)}</strong></summary>
               <div className="chanlun-signal-body">{!hideDates && <><p>首次可知：{signal.availableDate}</p><p>结构极值：{signal.structureDate}</p></>}
                 <p>对应笔：{signal.structureConfirmed ? '已完成' : '未完成'}</p><p>失效边界：{price(signal.boundary)}（触及即失效，本项目规则）</p>
                 <p>次级别确认：暂不可用</p><p className="chanlun-rule-name">官方规则：{signal.rule?.function ?? '未提供'} {signal.rule && JSON.stringify(signal.rule.params)}</p>
@@ -114,7 +120,7 @@ export function StockChanlunInterpretation({ items, selected, onSelect, asOf, hi
             </details>)}
             {signals.length > 3 && <button type="button" className="chanlun-all-signals" onClick={() => setAllSignals(!allSignals)}>{allSignals ? '收起信号' : `查看全部 ${signals.length} 个信号`}</button>}
           </div>
-          <p className="chanlun-detail-note">阶段按已闭合K线和笔中枢描述；背驰暂未提供。信号为辅助条件，尚未联立次级别确认。</p>
+          <p className="chanlun-detail-note">阶段按已闭合K线和笔中枢描述；{analysis?.capabilities?.divergences ? '图上MACD背驰仅供观察' : '背驰暂未提供'}。信号为辅助条件，尚未联立次级别确认。</p>
         </> : <>
           <Observation item={item} title={`本级（${label}）`} />
           {[{ period: CHANLUN_OVERVIEW_PERIODS[index + 1], title: '下一级 · 区间套观察' }, { period: CHANLUN_OVERVIEW_PERIODS[index - 1], title: '上一级 · 大环境' }].map(adjacent => <Fragment key={adjacent.title}>

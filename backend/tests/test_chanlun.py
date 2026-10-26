@@ -29,14 +29,17 @@ def bars():
     return result
 
 
-def test_official_engine_contract_and_removed_features(bars):
+def test_official_engine_contract_and_chart_rule_sources(bars):
     result = analyze_chanlun(bars)
     assert result["ruleVersion"] == 4
     assert result["engine"]["name"] == "czsc"
     assert result["engine"]["version"] == "1.0.2"
     assert result["capabilities"]["supportedSources"] == ["stroke"]
     assert result["strokes"]
-    for key in ("segments", "segmentCenters", "divergences", "thirdSignals"):
+    assert result["capabilities"]["segments"] is True
+    assert result["capabilities"]["segmentRuleSource"] == "project"
+    assert result["capabilities"]["divergences"] is True
+    for key in ("segmentCenters", "thirdSignals"):
         assert result[key] == []
     assert all(s["confirmedAt"] >= s["endDate"] for s in result["strokes"] if s["confirmed"])
     assert all(f["confirmedAt"] >= f["date"] for f in result["fractals"])
@@ -53,7 +56,7 @@ def test_open_tail_does_not_confirm_structures(bars):
     before = analyze_chanlun(bars)
     tail = {**bars[-1], "date": "2026-10-17", "close": 25, "high": 30, "low": 1, "is_closed": False}
     after = analyze_chanlun([*bars, tail])
-    for key in ("fractals", "strokes", "segments", "centers"):
+    for key in ("fractals", "strokes", "segments", "centers", "trends", "centerExtensions", "divergences"):
         assert before[key] == after[key]
     assert after["currentPrice"] == 25
     assert after["issues"]

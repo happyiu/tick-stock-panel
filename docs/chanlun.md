@@ -8,7 +8,7 @@
 
 `min_bi_len=6`，`max_bi_num=max(50, 已闭合K数)`，显式覆盖环境变量默认值。分析窗口与响应 K线相同，不偷偷添加预热历史；不同起点可能形成不同结构。支持30分钟、日、周、月；中枢采用官方 `zs_list`，要求至少三笔且 `is_valid()`，允许 ZG=ZD。趋势分类仍是本项目最近两个中枢位置近似，不是官方递归走势确认。
 
-线段、线段中枢、旧 MACD 背驰分析在 v4 下线。兼容响应字段保留空数组，能力元数据明确标记不可用。未增加筛选任务、通知、回测和交易。
+官方分型、笔与笔中枢仍直接映射原生输出。图层扩展采用 `chartRules.version=1`：线段在后端基于官方笔按项目特征序列推导，背驰观察调用固定官方MACD规则；趋势云带及中枢延长线为项目绘图投影。线段中枢、旧 MACD 面积背驰和旧三类信号引擎继续停用；对应兼容字段保留空数组。未增加筛选任务、通知、回测和交易。
 
 ## 官方辅助信号
 
@@ -40,7 +40,7 @@ OHLC沿用现有前复权口径，量额不另行缩放。缺少成交量保留 
 - 唯一支持来源是 stroke；兼容接收 segment，但返回 status=unsupported 和空结构，禁止静默替代。
 - 内核加载失败或版本不符为 engine_unavailable；计算异常为 invalid_data，不缓存失败，也不破坏普通行情接口。
 - 后端最多缓存16份不可变结果，键含完整OHLCV/成交额、时间和闭合状态、周期、来源、观察截止、引擎版本及参数，返回独立副本。原生实例只在一次计算内使用。
-- 前端查询键加入契约版本4，继续隔离资产、标的、周期、窗口和刷新版本；旧线段/背驰覆盖层配置安全忽略，不改写用户配置。
+- 前端查询键加入契约版本4与 `chart-rules-v1`，继续隔离资产、标的、周期、窗口和刷新版本；缺少 `chartRulesVersion=1` 的旧线段/背驰覆盖层选项不自动启用新规则，读取时不写配置，新选择由用户操作保存。
 - AI快照同步提供能力和规则元数据，不将空旧字段解释为“未发现背驰”。多周期仅作只读对照。
 
 ## 结构分析首块概览
@@ -55,23 +55,34 @@ OHLC沿用现有前复权口径，量额不另行缩放。缺少成交量保留 
 
 布局参考 chanL 的阶段图、本级/相邻级别观察和价位梯。后端新增可选 `interpretation`（version=1、ruleSource=project），由现有官方笔、中枢和已闭合K线生成展示解读，不更改 `trendType` 或官方辅助信号规则。前端只展示该字段，旧响应缺少解读时明确提示重新计算。查询键增加 `interpretation-v1` 隔离旧缓存；AI快照包含阶段、事实及观察条件。
 
-阶段：收盘位于中枢核心区间外为“离开中枢”；形成后曾有闭合收盘位于区间外、当前回到区间内为“回到中枢”；其余按三笔形成/三笔以上延伸展示。仅已闭合K线可推进阶段，未闭合尾K不会产生阶段确认。背驰节点只展示不可用说明，不恢复旧背驰引擎。中枢边界相等仍有效，价位梯以现价为距离基准，不计算中枢宽度比例。
+阶段：收盘位于中枢核心区间外为“离开中枢”；形成后曾有闭合收盘位于区间外、当前回到区间内为“回到中枢”；其余按三笔形成/三笔以上延伸展示。仅已闭合K线可推进阶段，未闭合尾K不会产生阶段确认。图上的MACD背驰观察不直接确认严格背驰阶段，不恢复旧背驰引擎。中枢边界相等仍有效，价位梯以现价为距离基准，不计算中枢宽度比例。
 
 公式 a＋中枢＋b 只示意最新中枢及其前后真实笔，缺失进入笔和待形成后续笔明确标记，不冒充递归走势段。阶段图的箭头表示可能的观察分支，不是预测路径。相邻周期采用现有周/日/30分钟结果作只读对照，低于30分钟或高于周线的未接入级别不补造数据，次级别联立确认仍不可用。
 
 走势分析只列观察截止时仍有效的 CZSC 辅助事件，按首次可知时间倒序；可展开规则、原始输出、首次可知/极值时间、对应笔完成情况及项目失效边界。下一步观察列出中枢边界、离开后的回抽条件，以及三周期中枢/所选周期信号价位梯。失效信号不进入有效清单，历史回看只按当时状态判断。
+
+## 线段、趋势、背驰观察与中枢延长线
+
+- **线段**：`segments` 的 `ruleSource=project`、`rule=feature-sequence-v1`。最少三笔且初始三笔有重叠；反向笔构成特征序列，按当前段方向处理包含关系。无缺口特征分型可确认端点；有缺口时再等待反向特征分型。未完成笔不参与特征确认，末段保留为虚线。逐根重放时记录真实首次 `observedAt` / `confirmedAt`，不把确认时间回填成端点时间。线段显示为蓝色粗线，不替换官方笔，也不作为 `chanlun_source=segment` 的中枢分析源。
+- **趋势**：`trends` 由相邻笔中枢核心区间关系分组，保持与现有 `trendType` 相同的上下移口径。反向或重叠关系切换时开启新组；云带连接实际中枢上下沿，红色上行、绿色下行、琥珀色盘整。当前组延伸到最后已闭合K线，标为“当前”，边缘虚线；`ruleSource=project`，属于中枢位置近似，非官方递归走势确认。
+- **背驰观察**：`divergences` 新记录采用 `kind=macd`、`ruleSource=czsc`，调用官方 [`tas_macd_bc_V230804(di=1)`](https://github.com/waditu/czsc/blob/v1.0.2/crates/czsc-signals/src/tas.rs#L4560)，其MACD参数固定12/26/9。官方规则在最近七笔范围内检查中枢与同向分型DIF强弱。逐根记录首次命中、原始key/value、两个比较端点、对应笔完成情况；同一笔持续命中不重复，当前笔条件消失或端点被撤回时记录失效，切换检查新笔不抹除历史。菱形标记放在首次可知位置，虚线连接原比较端点，失效记录灰色保留。它不是旧MACD面积背驰，也不自动成为B/S信号或严格趋势背驰。未闭合K不会创建或确认背驰观察。
+- **中枢延长线**：`centerExtensions` 沿官方中枢固定的ZG/ZD，从中枢末端延长到最后已闭合K线；不投射未来价格，最新中枢边界有中文标签。零宽中枢只绘制一条参考线。延长线可独立开关，无须开启中枢矩形。
+
+四个新图层默认关闭，菜单按后端能力开放。前端只投影后端坐标；新线段和背驰图层拒绝使用没有规则来源的旧结果。密集视图中失效背驰保留菱形和悬停详情、隐藏文字；窗口外标记不挤入可见区。AI快照同步携带线段和背驰来源、规则、首次可知时间及当前趋势组，避免把项目推导当成官方原生输出。
+
+线段只复用确认所依赖笔序列完全未变的历史前缀；端点或笔完成状态被撤回时，从受影响位置重算。完整重算与重放结果在测试中交叉核对。5000根合成K线在运行开发服务的本机上冷算约35.81秒、缓存命中约0.091秒；500/2000根分别约0.998/6.774秒。该记录不与早期基准作严格性能比较。缠论查询使用现有300秒计算超时，普通行情查询仍为30秒；长窗口首次计算仍可能等待，不适合直接按标的在行情回调内批量重放。
 
 ## 安装、验证与回滚
 
 ```sh
 cd backend
 uv sync --frozen
-uv run --frozen pytest tests/test_chanlun.py tests/test_chanlun_czsc.py tests/test_kline_periods.py -q
-uv run --frozen ruff check app/services/chanlun.py tests/test_chanlun.py tests/test_chanlun_czsc.py scripts/benchmark_chanlun.py
+uv run --frozen pytest tests/test_chanlun.py tests/test_chanlun_czsc.py tests/test_chanlun_geometry.py tests/test_chanlun_segments.py tests/test_chanlun_interpretation.py tests/test_kline_periods.py -q
+uv run --frozen ruff check app/services/chanlun*.py tests/test_chanlun*.py scripts/benchmark_chanlun.py
 uv run --frozen python scripts/benchmark_chanlun.py
 cd ../frontend
 pnpm test:chanlun
-pnpm exec vitest run src/components/StockChanlunPanel.test.tsx src/components/StockPanel.test.tsx src/components/KLineCandlestick.test.tsx src/lib/stockChatContext.test.ts
+pnpm exec vitest run src/lib/api.chanlun-timeout.test.ts src/components/StockChanlunPanel.test.tsx src/components/StockPanel.test.tsx src/components/KLineCandlestick.test.tsx src/components/StockDailyKChart.test.tsx src/lib/stockChatContext.test.ts
 pnpm build
 ```
 
@@ -96,3 +107,9 @@ pnpm build
 长窗口首次重放仍有明显耗时。K线API为同步路由，计算在工作线程执行；本次没有增加全市场扫描，也不在行情回调线程重放。后续筛选应单独评估并发和增量状态，不能直接把逐标的完整重放搬入实时回调。
 
 本次定向验证：后端37项、前端49项通过，Ruff和前端生产构建通过；官方一致性样本覆盖六类信号命中与不命中。现有Polars日期转换弃用提示、部分前端测试的查询模拟提示及构建分包体积提示仍存在，本次未扩展处理。
+
+## 绘图扩展验证记录（2026-10-27）
+
+后端61项、前端81项定向测试通过，Ruff、前端生产构建及 `git diff --check` 通过。新增验证覆盖特征序列包含/缺口/反向确认、线段首次确认时序、完整重算与前缀复用一致、官方MACD双向命中及事件失效、周/月中枢在实际周期结束日可见、独立图层开关、旧配置门控、零宽边界和长计算超时。
+
+本机页面实查创新药ETF日线和30分钟数据，确认四个新图层开关、蓝色线段、趋势云带、背驰标记及延长线可绘制，核对窄桌面暗色布局及多周期解读联动。历史首次可知和未闭合K边界由自动测试验证。本次未重新打包或部署，也未验证Windows安装包；沿用原有依赖，无用户行情、策略或配置文件迁移。

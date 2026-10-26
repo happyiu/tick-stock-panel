@@ -116,7 +116,9 @@ function compactChanlun(analysis: ChanlunAnalysis): Record<string, unknown> {
       ? compact(analysis.formingStroke, ['direction', 'startDate', 'endDate', 'startPrice', 'endPrice', 'changePct', 'confirmed', 'confirmedAt'])
       : null,
     latestCenter: analysis.latestCenter ? compact(analysis.latestCenter, ['startDate', 'endDate', 'zd', 'zg', 'dd', 'gg', 'componentCount', 'state', 'source']) : null,
-    divergences: analysis.divergences.slice(-4).map(item => compact(item, ['id', 'kind', 'direction', 'status', 'source', 'availableDate', 'a', 'c', 'evidence'])),
+    divergences: analysis.divergences.slice(-4).map(item => compact(item, ['id', 'kind', 'direction', 'status', 'source', 'ruleSource', 'availableDate', 'structureDate', 'price', 'rule', 'rawSignal', 'references', 'invalidatedAt', 'invalidationReason', 'evidence'])),
+    segments: analysis.segments.slice(-4).map(item => compact(item, ['id', 'direction', 'startDate', 'endDate', 'startPrice', 'endPrice', 'componentCount', 'confirmed', 'confirmedAt', 'observedAt', 'ruleSource', 'rule'])),
+    trends: analysis.trends?.slice(-3).map(item => compact(item, ['id', 'direction', 'centerIds', 'startDate', 'endDate', 'availableDate', 'current', 'ruleSource'])),
     candidateSignals: analysis.candidateSignals.slice(-6).map(compactSignal),
     thirdSignals: analysis.thirdSignals.slice(-4).map(item => compact(item, ['id', 'kind', 'status', 'structureDate', 'availableDate', 'price', 'boundary', 'invalidatedAt'])),
     currentPrice: analysis.currentPrice,

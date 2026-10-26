@@ -6,6 +6,7 @@ import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { StockDailyKChart } from './StockDailyKChart'
 import type { CandlestickProps } from '@/lib/kline-chart'
+import { emptyChanlunAnalysis } from '@/lib/chanlun'
 
 const directory = resolve(import.meta.dirname, '../../../backend/app/indicators/chart_defaults')
 const definitions = readdirSync(directory).filter(name => name.endsWith('.json')).map(name => JSON.parse(readFileSync(resolve(directory, name), 'utf8')))
@@ -249,4 +250,24 @@ it('调用方明确关闭MA时隐藏菜单中的MA开关，保持原有组件契
   await click('指标')
   expect(host.querySelector('[aria-label="MA 均线"]')).toBeNull()
   expect(host.querySelector('[data-show-ma]')?.getAttribute('data-show-ma')).toBe('false')
+})
+
+it('缠论新图层按后端能力开放，旧线段背驰配置隔离，新选择切股重开可恢复', async () => {
+  localStorage.setItem('stock_preview_chanlun_overlay', JSON.stringify({ enabled: true, segments: true, divergences: true }))
+  const analysis = emptyChanlunAnalysis()
+  Object.assign(analysis.capabilities!, { segments: true, segmentRuleSource: 'project', divergences: true, trends: true, centerExtensions: true })
+  await act(async () => root.render(<StockDailyKChart symbol="A" chanlunAnalysis={analysis} />))
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="配置缠论覆盖层"]')!.click())
+  const toggle = (label: string) => [...host.querySelectorAll<HTMLButtonElement>('[role="checkbox"]')].find(b => b.textContent?.trim() === label)!
+  expect(toggle('线段（推导）').getAttribute('aria-checked')).toBe('false')
+  expect(toggle('背驰观察').getAttribute('aria-checked')).toBe('false')
+  for (const label of ['线段（推导）', '趋势', '背驰观察', '中枢延长线']) await act(async () => toggle(label).click())
+  expect(JSON.parse(localStorage.getItem('stock_preview_chanlun_overlay')!)).toMatchObject({ chartRulesVersion: 1, segments: true, trends: true, divergences: true, centerExtensions: true })
+  await act(async () => root.render(null))
+  await act(async () => root.render(<StockDailyKChart symbol="B" chanlunAnalysis={analysis} />))
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="配置缠论覆盖层"]')!.click())
+  expect(toggle('线段（推导）').getAttribute('aria-checked')).toBe('true')
+  await act(async () => root.render(<StockDailyKChart symbol="B" chanlunAnalysis={emptyChanlunAnalysis()} />))
+  expect(toggle('线段（推导）').disabled).toBe(true)
+  expect(toggle('背驰观察').disabled).toBe(true)
 })

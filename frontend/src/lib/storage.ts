@@ -94,6 +94,9 @@ export interface StockPreviewChanlunOverlayConfig {
   centers: boolean
   candidates: boolean
   divergences: boolean
+  trends?: boolean
+  centerExtensions?: boolean
+  chartRulesVersion?: 1
 }
 
 export const storage = {

@@ -15,7 +15,9 @@ from functools import lru_cache
 from hashlib import sha256
 from importlib.metadata import version
 
+from app.services.chanlun_geometry import build_center_extensions, build_trends
 from app.services.chanlun_interpretation import build_interpretation
+from app.services.chanlun_segments import build_segments
 
 logger = logging.getLogger(__name__)
 ENGINE_VERSION = "1.0.2"
@@ -27,15 +29,21 @@ SIGNAL_RULES = [
     {"function": "cxt_second_bs_V240524", "params": {"di": 1, "w": 9, "t": 2}},
     {"function": "cxt_third_bs_V230318", "params": {"di": 1, "ma_type": "SMA", "timeperiod": 34}},
 ]
-ENGINE_CONFIG = {"min_bi_len": 6, "max_bi_num": "max(50, closed_bars)", "signalRules": SIGNAL_RULES}
+DIVERGENCE_RULE = {"function": "tas_macd_bc_V230804", "params": {"di": 1}}
+CHART_RULES = {"version": 1, "segmentRule": "project-feature-sequence-v1", "trendRule": "project-center-core-position-v1", "divergenceRules": [DIVERGENCE_RULE]}
+ENGINE_CONFIG = {"min_bi_len": 6, "max_bi_num": "max(50, closed_bars)", "signalRules": SIGNAL_RULES, "chartRules": CHART_RULES}
 CAPABILITIES = {
     "supportedSources": ["stroke"],
-    "segments": False,
-    "divergences": False,
+    "segments": True,
+    "divergences": True,
     "recursiveConfirmation": False,
+    "trends": True,
+    "centerExtensions": True,
+    "segmentRuleSource": "project",
+    "divergenceRules": [DIVERGENCE_RULE],
     "signalRules": SIGNAL_RULES,
 }
-LOSS = "CZSC官方辅助信号；单周期条件不等于次级别确认；趋势为本项目中枢位置近似"
+LOSS = "CZSC官方笔与中枢；线段和趋势为项目推导；MACD背驰仅作官方条件观察；未作次级别联立确认"
 KINDS = {
     "一买": "first_buy",
     "一卖": "first_sell",
@@ -98,6 +106,8 @@ def _empty(period, source, rows, issues, status="insufficient"):
         "strokeCenters": [],
         "segmentCenters": [],
         "divergences": [],
+        "trends": [],
+        "centerExtensions": [],
         "candidateSignals": [],
         "thirdSignals": [],
         "trendType": "unclear",
@@ -122,7 +132,7 @@ def analyze_chanlun(rows: list[dict], *, period="1d", source="stroke", as_of=Non
         if len(cutoff) == 10:
             cutoff += " 23:59:59"
     if source == "segment":
-        return _empty(period, source, [], ["CZSC版本暂不提供线段和线段中枢"], "unsupported")
+        return _empty(period, source, [], ["分析来源仅支持笔；线段图层为项目推导，不作为独立中枢分析源"], "unsupported")
     normalized = []
     for row in rows:
         label = _text(row.get("date"))[: 16 if period == "30m" else 10]
@@ -305,6 +315,45 @@ def _update_signals(signals, episodes, bis, finished, matches, row, rows, bi_key
         _invalidate_at_boundary(signal, row)
 
 
+def _update_divergences(events, episodes, bis, bi_keys, finished, matches, row, rows):
+    current = bi_keys[-1] if bi_keys else None
+    matched = bool(matches)
+    old = episodes.get(current)
+    if matched and (old is None or (old["status"] == "invalidated" and not old["_active"])):
+        bi, raw = bis[-1], matches[0]
+        references = []
+        for index in (-5, -3):
+            reference = bis[index]
+            end = rows[_anchor(reference.fx_b).id]
+            references.append({"endDate": end["date"], "endPrice": reference.fx_b.fx})
+        identity = [DIVERGENCE_RULE, rows[current[0]]["date"], rows[current[1]]["date"], *current[2:], row["periodEnd"]]
+        event = {
+            "id": f"macd-{sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:24]}",
+            "kind": "macd", "source": "stroke", "ruleSource": "czsc",
+            "direction": "up" if raw.v1 == "空头" else "down", "status": "candidate",
+            "structureDate": rows[current[1]]["date"], "price": bi.fx_b.fx,
+            "availableDate": row["periodEnd"], "observedAt": row["periodEnd"],
+            "structureConfirmed": current in finished, "references": references,
+            "rule": copy.deepcopy(DIVERGENCE_RULE), "rawSignal": {"key": raw.key, "value": raw.value},
+            "invalidatedAt": None, "invalidationReason": None,
+            "evidence": "官方MACD12/26/9黄白线背驰条件命中；仅作背驰观察，未确认递归走势背驰",
+            "_biKey": current,
+        }
+        events.append(event)
+        episodes[current] = event
+    keys = set(bi_keys)
+    for event in events:
+        event["_active"] = event["_biKey"] == current and matched
+        if event["status"] == "invalidated":
+            continue
+        key = event["_biKey"]
+        event["structureConfirmed"] = key in finished
+        if key not in keys:
+            _invalidate(event, row["periodEnd"], "structure_replaced")
+        elif key == current and not matched:
+            _invalidate(event, row["periodEnd"], "condition_disappeared")
+
+
 @lru_cache(maxsize=16)
 def _analyze_cached(serialized, period, source, cutoff, engine_version, config):
     rows = json.loads(serialized)
@@ -314,6 +363,7 @@ def _analyze_cached(serialized, period, source, cutoff, engine_version, config):
     engine = None
     previous_state = None
     known, episodes, signals = {}, {}, []
+    divergence_events, divergence_episodes, segments = [], {}, []
     volume_available = True
     open_rows = iter(r for r in rows if not r["isClosed"])
     pending_open = next(open_rows, None)
@@ -362,6 +412,27 @@ def _analyze_cached(serialized, period, source, cutoff, engine_version, config):
                     if len(z.bis) >= 3 and z.is_valid():
                         key = (_bi_key(z.bis[0]), z.zd, z.zg)
                         known.setdefault(("center", key), available)
+                segment_inputs = [{
+                    "index": j, "direction": "up" if key[3] > key[2] else "down",
+                    "startDate": closed[key[0]]["date"], "endDate": closed[key[1]]["date"],
+                    "startPrice": key[2], "endPrice": key[3], "low": min(key[2], key[3]), "high": max(key[2], key[3]),
+                    "startSourceIndex": closed[key[0]]["sourceIndex"], "endSourceIndex": closed[key[1]]["sourceIndex"],
+                    "confirmed": key in finished, "confirmedAt": known.get(("finished", key)),
+                } for j, (bi, key) in enumerate(zip(bis, bi_keys, strict=True))]
+                common = 0
+                if previous_state:
+                    old_keys, old_finished = previous_state
+                    for j, (key, old_key) in enumerate(zip(bi_keys, old_keys, strict=False)):
+                        if key != old_key or (key in finished) != (j < old_finished):
+                            break
+                        common += 1
+                # Reuse only segments whose entire confirmation proof is unchanged.
+                prefix = [s for s in segments if s["confirmed"] and s["confirmation"]["lastStrokeIndex"] < common]
+                segments = build_segments(segment_inputs, confirmed_prefix=prefix)
+                for segment in segments:
+                    segment["observedAt"] = known.setdefault(("segment", segment["id"]), available)
+                    if segment["confirmed"]:
+                        segment["confirmedAt"] = known.setdefault(("segment_finished", segment["id"]), available)
                 previous_state = state
             matches = []
             if bis:
@@ -371,6 +442,10 @@ def _analyze_cached(serialized, period, source, cutoff, engine_version, config):
                     for raw in call_signal(rule["function"], engine, rule["params"]):
                         if raw.v1 in KINDS:
                             matches.append((rule, raw))
+            divergence_matches = [raw for raw in call_signal(DIVERGENCE_RULE["function"], engine, DIVERGENCE_RULE["params"])
+                                  if raw.v1 in {"多头", "空头"}] if len(bis) >= 7 else []
+            _update_divergences(divergence_events, divergence_episodes, bis, bi_keys, finished,
+                                divergence_matches, row, closed)
             # Process any unclosed intervening candle at its actual time, not after later events.
             while pending_open is not None and pending_open["date"] < row["date"]:
                 for signal in signals:
@@ -378,6 +453,9 @@ def _analyze_cached(serialized, period, source, cutoff, engine_version, config):
                 pending_open = next(open_rows, None)
             _update_signals(signals, episodes, bis, finished, matches, row, closed, bi_keys)
         _project_structures(result, engine, closed, known)
+        result["segments"] = segments
+        result["trends"] = build_trends(result["centers"], closed[-1]["periodEnd"])
+        result["centerExtensions"] = build_center_extensions(result["centers"], closed[-1]["periodEnd"])
         for row in rows:
             if not row["isClosed"] and row["date"] > closed[-1]["date"]:
                 for signal in signals:
@@ -386,6 +464,10 @@ def _analyze_cached(serialized, period, source, cutoff, engine_version, config):
             signal.pop("_biKey")
             signal.pop("_ruleActive", None)
         result["candidateSignals"] = signals
+        for event in divergence_events:
+            event.pop("_biKey")
+            event.pop("_active")
+        result["divergences"] = divergence_events
     except BaseException as exc:
         # PyO3 PanicException derives directly from BaseException. Never swallow cancellation/exit.
         if not isinstance(exc, Exception) and type(exc).__name__ != "PanicException":

@@ -64,6 +64,7 @@ def official_replay():
         ("cxt_first_sell_V221126", {"di": 1}),
         ("cxt_second_bs_V240524", {"di": 1, "w": 9, "t": 2}),
         ("cxt_third_bs_V230318", {"di": 1, "timeperiod": 34, "ma_type": "SMA"}),
+        ("tas_macd_bc_V230804", {"di": 1}),
     ]
     last_len, rollbacks = 0, 0
     for i, row in enumerate(rows):
@@ -141,6 +142,49 @@ def test_all_six_signal_types_match_native_at_first_observation(official_replay)
         assert hits[(s["rule"]["function"], index, s["availableDate"])] == s["rawSignal"]["value"]
         assert s["availableDate"] >= s["structureDate"]
     assert len({s["id"] for s in events}) == len(events)
+
+
+def test_macd_observations_match_official_hits_and_keep_first_known_time(official_replay):
+    rows, _, hits, counts, _ = official_replay
+    assert counts["多头"] > 0 and counts["空头"] > 0 and counts["其他"] > 0
+    result = adapter.analyze_chanlun(rows)
+    events = result["divergences"]
+    assert {event["direction"] for event in events} == {"up", "down"}
+    assert len({e["id"] for e in events}) == len(events)
+    for event in events:
+        index = next(i for i, r in enumerate(rows) if r["date"] == event["structureDate"])
+        assert hits[("tas_macd_bc_V230804", index, event["availableDate"])] == event["rawSignal"]["value"]
+        assert len(event["references"]) == 2
+        assert event["availableDate"] >= event["structureDate"]
+        assert event["ruleSource"] == "czsc"
+    for event in events[:4]:
+        prefix = adapter.analyze_chanlun(rows, as_of=event["availableDate"])
+        matched = next(e for e in prefix["divergences"] if e["id"] == event["id"])
+        assert matched["status"] == "candidate"
+        earlier = [r for r in rows if r["date"] < event["availableDate"]]
+        assert not any(e["id"] == event["id"] for e in adapter.analyze_chanlun(earlier)["divergences"])
+
+
+def test_segment_completion_is_recorded_during_replay_not_backdated(official_replay):
+    rows = official_replay[0]
+    result = adapter.analyze_chanlun(rows)
+    from app.services.chanlun_segments import build_segments
+    inputs = [{**s, "startSourceIndex": s["start"]["sourceIndex"], "endSourceIndex": s["end"]["sourceIndex"],
+               "low": min(s["startPrice"], s["endPrice"]), "high": max(s["startPrice"], s["endPrice"])}
+              for s in result["strokes"]]
+    full = build_segments(inputs)
+    assert [(s["id"], s["confirmed"], s["confirmation"]) for s in result["segments"]] == [(s["id"], s["confirmed"], s["confirmation"]) for s in full]
+    completed = [s for s in result["segments"] if s["confirmed"]]
+    assert completed
+    for segment in completed[:4]:
+        assert segment["ruleSource"] == "project"
+        assert segment["endDate"] < segment["confirmedAt"]
+        prefix = adapter.analyze_chanlun(rows, as_of=segment["confirmedAt"])
+        matched = next(s for s in prefix["segments"] if s["id"] == segment["id"])
+        assert matched["confirmed"] is True
+        assert matched["confirmedAt"] == segment["confirmedAt"]
+        earlier = [r for r in rows if r["date"] < segment["confirmedAt"]]
+        assert not any(s["id"] == segment["id"] and s["confirmed"] for s in adapter.analyze_chanlun(earlier)["segments"])
 
 
 def test_missing_volume_disables_only_first_class_and_is_prefix_local():
@@ -236,6 +280,51 @@ def test_event_lifecycle_dedup_withdrawal_reappearance_and_moving_window():
     # Removing its actual endpoint invalidates it.
     step(6, [], [bis[0]])
     assert events[1]["status"] == "invalidated"
+
+
+def test_macd_observation_lifecycle_keeps_historical_hits_and_deduplicates():
+    rows = make_rows(120)
+    c = czsc.CZSC([native_bar(r, i) for i, r in enumerate(rows)], max_bi_num=120, min_bi_len=6)
+    bis, events, episodes = c.bi_list, [], {}
+    assert len(bis) >= 7
+    keys = [adapter._bi_key(b) for b in bis]
+    raw = SimpleNamespace(v1="空头", key="test", value="空头_任意_任意_0")
+
+    def step(day, matched, current_bis=bis):
+        current_keys = [adapter._bi_key(b) for b in current_bis]
+        adapter._update_divergences(events, episodes, current_bis, current_keys, set(keys),
+                                    [raw] if matched else [], {"periodEnd": f"2025-01-{day:02}"}, rows)
+
+    step(1, True)
+    step(2, True)
+    assert len(events) == 1
+    step(3, False)
+    assert events[0]["invalidationReason"] == "condition_disappeared"
+    step(4, True)
+    assert len(events) == 2 and events[1]["availableDate"] == "2025-01-04"
+    step(5, False, [bis[-1], bis[0]])
+    assert events[1]["status"] == "candidate"
+    step(6, False, [bis[0]])
+    assert events[1]["invalidationReason"] == "structure_replaced"
+
+
+@pytest.mark.parametrize("period", ["1w", "1mo"])
+def test_chart_geometry_uses_actual_closed_period_end(period):
+    rows = make_rows(120)
+    for i, row in enumerate(rows):
+        start = datetime(2020, 1, 6) + timedelta(weeks=i) if period == "1w" else datetime(2020 + i // 12, i % 12 + 1, 1)
+        row["date"] = str(start.date())
+        row["period_end"] = str((start + timedelta(days=4 if period == "1w" else 20)).date())
+    full = adapter.analyze_chanlun(rows, period=period)
+    assert full["centers"]
+    formed = full["centers"][-1]["formedAt"]
+    prefix = [r for r in rows if r["period_end"] <= formed]
+    result = adapter.analyze_chanlun(prefix, period=period)
+    latest = result["centers"][-1]
+    assert latest["formedAt"] == prefix[-1]["period_end"]
+    assert latest["id"] in result["trends"][-1]["centerIds"]
+    assert result["trends"][-1]["endDate"] == prefix[-1]["period_end"]
+    assert all(e["endDate"] == prefix[-1]["period_end"] for e in result["centerExtensions"])
 
 
 def test_price_invalidation_does_not_repeat_while_condition_stays_true():

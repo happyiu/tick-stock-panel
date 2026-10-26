@@ -28,6 +28,9 @@ const DEFAULT_CHANLUN_OVERLAY: StockPreviewChanlunOverlayConfig = {
   centers: true,
   candidates: true,
   divergences: false,
+  trends: false,
+  centerExtensions: false,
+  chartRulesVersion: 1,
 }
 
 function normalizeChanlunOverlay(config: StockPreviewChanlunOverlayConfig): StockPreviewChanlunOverlayConfig {
@@ -35,10 +38,13 @@ function normalizeChanlunOverlay(config: StockPreviewChanlunOverlayConfig): Stoc
     enabled: config?.enabled !== false,
     fractals: config?.fractals === true,
     strokes: config?.strokes !== false,
-    segments: config?.segments === true,
+    segments: config?.chartRulesVersion === 1 && config?.segments === true,
     centers: config?.centers !== false,
     candidates: config?.candidates !== false,
-    divergences: config?.divergences === true,
+    divergences: config?.chartRulesVersion === 1 && config?.divergences === true,
+    trends: config?.trends === true,
+    centerExtensions: config?.centerExtensions === true,
+    chartRulesVersion: 1,
   }
 }
 
@@ -426,20 +432,26 @@ function StockDailyKChartView({
                 <Settings2 className="h-3 w-3" />
               </button>
               {chanlunMenuOpen && (
-                <div className="absolute left-0 top-full z-30 mt-1 w-36 rounded-card border border-border bg-surface p-1.5 shadow-xl">
+                <div className="absolute left-0 top-full z-30 mt-1 w-44 rounded-card border border-border bg-surface p-1.5 shadow-xl">
                   {([
-                    ['fractals', '分型'],
-                    ['strokes', '笔'],
-                    ['centers', '中枢'],
-                    ['candidates', 'CZSC 辅助信号'],
-                  ] as const).map(([key, label]) => (
+                    ['fractals', '分型', true, '官方CZSC分型'],
+                    ['strokes', '笔', true, '官方CZSC笔'],
+                    ['segments', '线段（推导）', chanlunAnalysis.capabilities?.segments === true, '基于官方笔的项目特征序列规则，虚线表示未完成'],
+                    ['centers', '中枢', true, '官方CZSC笔中枢'],
+                    ['trends', '趋势', chanlunAnalysis.capabilities?.trends === true, '按笔中枢位置连接的趋势云带，为项目近似展示'],
+                    ['divergences', '背驰观察', chanlunAnalysis.capabilities?.divergences === true, '官方MACD黄白线背驰条件，尚未确认严格趋势背驰'],
+                    ['centerExtensions', '中枢延长线', chanlunAnalysis.capabilities?.centerExtensions === true, '中枢上下沿延长至当前已闭合观察边界'],
+                    ['candidates', 'CZSC 辅助信号', true, '官方买卖辅助条件'],
+                  ] as const).map(([key, label, available, description]) => (
                     <button
                       key={key}
                       type="button"
                       role="checkbox"
-                      aria-checked={chanlunOverlay[key]}
+                      aria-checked={chanlunOverlay[key] === true}
+                      disabled={!available}
+                      title={available ? description : '当前后端尚未提供此图层，请更新或重新计算'}
                       onClick={() => updateChanlunOverlay({ [key]: !chanlunOverlay[key] })}
-                      className="flex w-full items-center gap-2 rounded-btn px-2 py-1.5 text-left text-[10px] text-secondary transition-colors hover:bg-elevated hover:text-foreground"
+                      className="flex w-full items-center gap-2 rounded-btn px-2 py-1.5 text-left text-[10px] text-secondary transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       <span className={`flex h-3.5 w-3.5 items-center justify-center rounded border ${chanlunOverlay[key] ? 'border-[#8B5CF6] bg-[#8B5CF6]' : 'border-border bg-base'}`}>
                         {chanlunOverlay[key] && <Check className="h-2.5 w-2.5 text-white" strokeWidth={3} />}

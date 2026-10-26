@@ -92,6 +92,7 @@ it('只展示当时有效的官方候选，区分首次可知、结构完成和�
   expect(html).toContain('1.234')
   expect(html).toContain('触及即失效，本项目规则')
   expect(html).toContain('cxt_first_buy_V221126')
+  expect(html).toContain('一买观察 · 条件命中')
   expect(html).not.toContain('辅助信号 · 已确认')
   expect(html).not.toContain('2026-10-27')
   const hidden = renderToStaticMarkup(<StockChanlunPanel items={data} period="1d" asOf="2026-10-26" hideDates />)

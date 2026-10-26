@@ -3492,6 +3492,7 @@ export const api = {
         : `/api/kline/daily?symbol=${encodeURIComponent(symbol)}&days=${days}`)
       + (extColumns ? `&ext_columns=${encodeURIComponent(extColumns)}` : '')
       + (includeTechnicalScores ? '&include_technical_scores=true' : '') + chanlunParams(chanlun) + chartIndicatorParams(chartIndicators),
+      chanlun ? { timeoutMs: COMPUTE_REQUEST_TIMEOUT_MS } : undefined,
     ),
   klineDailyLatest: (symbol: string) =>
     request<KlineDailyLatestResponse>(
@@ -3515,6 +3516,7 @@ export const api = {
       `/api/kline/period?symbol=${encodeURIComponent(symbol)}&period=${period}`
       + `&start_date=${dateRange.start}&end_date=${dateRange.end}&days=${days}`
       + (includeTechnicalScores ? '&include_technical_scores=true' : '') + chanlunParams(chanlun) + chartIndicatorParams(chartIndicators),
+      chanlun ? { timeoutMs: COMPUTE_REQUEST_TIMEOUT_MS } : undefined,
     ),
   klineMinuteBatch: (symbols: string[], date?: string, preferLocal?: boolean, since?: string) =>
     request<{ data: Record<string, MinuteKlineRow[]>; full_minute_local?: boolean; incremental?: boolean }>('/api/kline/minute-batch', {

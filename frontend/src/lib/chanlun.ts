@@ -106,6 +106,34 @@ export interface ChanlunSegment {
   changePct: number | null
   confirmed: boolean
   confirmedAt: string | null
+  observedAt?: string
+  ruleSource?: 'project'
+  rule?: string
+  confirmation?: { hasGap: boolean; featureStrokeIndices: number[]; reverseFeatureStrokeIndices: number[]; lastStrokeIndex: number | null }
+}
+
+export interface ChanlunTrend {
+  id: string
+  direction: ChanlunDirection | 'none'
+  centerIds: string[]
+  startDate: string
+  endDate: string
+  availableDate: string
+  current: boolean
+  band: { date: string; lower: number; upper: number }[]
+  ruleSource: 'project'
+}
+
+export interface ChanlunCenterExtension {
+  id: string
+  centerId: string
+  startDate: string
+  endDate: string
+  availableDate: string
+  zd: number
+  zg: number
+  latest: boolean
+  ruleSource: 'project'
 }
 
 export interface ChanlunCondition {
@@ -118,15 +146,25 @@ export interface ChanlunCondition {
 export interface ChanlunDivergence {
   id: string
   availableDate?: string
-  kind: 'trend' | 'consolidation'
+  kind: 'trend' | 'consolidation' | 'macd'
   direction: ChanlunDirection
-  status: 'candidate' | 'not_found' | 'unavailable'
+  status: 'candidate' | 'invalidated' | 'not_found' | 'unavailable'
   source: ChanlunStructureSource
-  movementAIndex: number
-  movementCIndex: number
-  a: { startDate: string; endDate: string; changePct: number | null; bars: number; force: number | null; macdArea: number | null }
-  c: { startDate: string; endDate: string; changePct: number | null; bars: number; force: number | null; macdArea: number | null }
+  movementAIndex?: number
+  movementCIndex?: number
+  a?: { startDate: string; endDate: string; changePct: number | null; bars: number; force: number | null; macdArea: number | null }
+  c?: { startDate: string; endDate: string; changePct: number | null; bars: number; force: number | null; macdArea: number | null }
   evidence: string
+  structureDate?: string
+  price?: number
+  observedAt?: string
+  structureConfirmed?: boolean
+  references?: { endDate: string; endPrice: number }[]
+  ruleSource?: 'czsc'
+  rule?: { function: string; params: Record<string, string | number> }
+  rawSignal?: { key: string; value: string }
+  invalidatedAt?: string | null
+  invalidationReason?: string | null
 }
 
 export interface ChanlunCandidateSignal {
@@ -188,7 +226,7 @@ export interface ChanlunAnalysis {
   source: ChanlunStructureSource
   definitionMode: 'engine_rules'
   engine?: { name: string; version?: string; runtime?: string; commit: string; config: Record<string, unknown> }
-  capabilities?: { supportedSources: string[]; segments: boolean; divergences: boolean; recursiveConfirmation: boolean; signalRules: { function: string; params: Record<string, string | number> }[] }
+  capabilities?: { supportedSources: string[]; segments: boolean; divergences: boolean; recursiveConfirmation: boolean; signalRules: { function: string; params: Record<string, string | number> }[]; trends?: boolean; centerExtensions?: boolean; segmentRuleSource?: 'project'; divergenceRules?: { function: string; params: Record<string, string | number> }[] }
   approximationLoss: string
   status: 'ready' | 'insufficient' | 'invalid_data' | 'unsupported' | 'engine_unavailable'
   issues: string[]
@@ -208,6 +246,8 @@ export interface ChanlunAnalysis {
   segmentCenters: ChanlunCenter[]
   trendType: ChanlunTrendType
   divergences: ChanlunDivergence[]
+  trends?: ChanlunTrend[]
+  centerExtensions?: ChanlunCenterExtension[]
   candidateSignals: ChanlunCandidateSignal[]
   thirdSignals: ChanlunThirdSignal[]
   latestFractal: ChanlunFractal | null
@@ -232,7 +272,7 @@ export function emptyChanlunAnalysis(
     status: 'insufficient', issues: [],
     window: { start: null, end: null, bars: 0, mergedBars: 0 },
     bars: [], mergedBars: [], fractals: [], strokes: [], segments: [], centers: [],
-    strokeCenters: [], segmentCenters: [], trendType: 'unclear', divergences: [],
+    strokeCenters: [], segmentCenters: [], trendType: 'unclear', divergences: [], trends: [], centerExtensions: [],
     candidateSignals: [], thirdSignals: [], latestFractal: null, latestConfirmedStroke: null,
     formingStroke: null, latestCenter: null, latestSignal: null, currentPrice: null, pricePosition: null, interpretation: null,
   }
