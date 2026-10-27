@@ -527,41 +527,39 @@ it('启用其他指标不重复克隆或更新未变化的公式结果，数据�
   expect(chart.overrideIndicator).toHaveBeenCalledTimes(1)
 })
 
-it('条件推演截断历史之后的K线，保留原始数据，点击分支展示条件；关闭后恢复', async () => {
+it('条件推演截断历史之后的K线，点击分支通知父组件且不在图下显示说明；关闭后恢复', async () => {
   const data = rows(), a = emptyChanlunAnalysis()
+  const onSelect = vi.fn()
   a.projection = { version: 1, ruleSource: 'project', status: 'ready', side: 'inside', description: '条件示意，不提供目标价',
     anchor: { date: data[2].date, availableDate: data[2].date, price: 11 },
     center: { kind: 'current', label: '当前中枢', centerId: 'a', zd: 10, zg: 12, formedAt: data[1].date },
     zones: [{ kind: 'current', label: '当前中枢', centerId: 'a', zd: 10, zg: 12, formedAt: data[1].date }],
     branches: [{ id: 1, label: '向上离开', target: 'upper', condition: '等待闭合收盘高于上沿', meaning: '仍须核对官方B3' }],
   }
-  await render({ data, chanlunAnalysis: a, projectionEnabled: true, assetType: 'etf' })
+  await render({ data, chanlunAnalysis: a, projectionEnabled: true, assetType: 'etf', onProjectionBranchSelect: onSelect })
   expect(state.bars).toHaveLength(3)
   expect(data).toHaveLength(5)
   expect(chart.setOffsetRightDistance).toHaveBeenCalledWith(228)
   const overlay = state.overlays.find(o => o.groupId === 'tsp-projection')!
   expect(overlay).toBeDefined()
   await act(async () => overlay.onClick?.({ figure: { key: 'branch-1' } } as never))
-  expect(host.querySelector('[aria-label="推演分支详情"]')?.textContent).toContain('等待闭合收盘高于上沿')
-  expect(host.textContent).toContain('10.000—12.000')
-  await render({ data, chanlunAnalysis: a, projectionEnabled: true, hideCurrentDate: true })
-  expect(host.querySelector('[aria-label="条件推演说明"]')?.textContent).not.toContain('2026-10')
+  expect(onSelect).toHaveBeenCalledWith(1)
+  expect(host.querySelector('[aria-label="条件推演说明"]')).toBeNull()
+  await render({ data, chanlunAnalysis: a, projectionEnabled: true, projectionBranchId: 1 })
+  expect(state.overlays.find(o => o.groupId === 'tsp-projection')?.extendData).toMatchObject({ selected: 1 })
   await render({ data, chanlunAnalysis: a, projectionEnabled: false })
   expect(state.bars).toHaveLength(5)
   expect(state.overlays.some(o => o.groupId === 'tsp-projection')).toBe(false)
   expect(host.querySelector('[aria-label="条件推演说明"]')).toBeNull()
 })
 
-it('推演旧后端或结构不足明确显示空态，不沿用上一份分支', async () => {
+it('推演缺少结构或发生错误时不绘制旧分支，提示交由右侧面板展示', async () => {
   await render({ projectionEnabled: true, chanlunAnalysis: emptyChanlunAnalysis() })
-  expect(host.textContent).toContain('旧后端需更新')
   expect(state.overlays.some(o => o.groupId === 'tsp-projection')).toBe(false)
   const a = emptyChanlunAnalysis()
   a.projection = { version: 1, ruleSource: 'project', status: 'insufficient', side: null, description: '',
     center: null, anchor: null, branches: [], zones: [] }
   await render({ projectionEnabled: true, chanlunAnalysis: a })
-  expect(host.textContent).toContain('此处尚无有效中枢')
   await render({ projectionEnabled: true, chanlunAnalysis: a, chanlunError: '原生内核不可用' })
-  expect(host.querySelector('[role="alert"]')?.textContent).toContain('原生内核不可用')
   expect(state.overlays.some(o => o.groupId === 'tsp-projection')).toBe(false)
 })

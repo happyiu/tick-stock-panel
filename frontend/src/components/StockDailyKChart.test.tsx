@@ -272,16 +272,16 @@ it('缠论新图层按后端能力开放，旧线段背驰配置隔离，新选�
   expect(toggle('背驰观察').disabled).toBe(true)
 })
 
-it('推演按后端能力开放，独立于缠论图层；切股和周期不沿用开启状态', async () => {
+it('推演由父组件控制，图表工具栏不再提供重复入口', async () => {
   const a = emptyChanlunAnalysis()
   a.capabilities!.projection = true
-  await act(async () => root.render(<StockDailyKChart symbol="A" chanlunAnalysis={a} />))
-  await click('推演')
+  await act(async () => root.render(<StockDailyKChart symbol="A" chanlunAnalysis={a} projectionEnabled />))
+  expect(host.querySelector('[aria-label="条件推演"]')).toBeNull()
   expect(host.querySelector('[data-projection]')?.getAttribute('data-projection')).toBe('true')
   await click('缠论')
   expect(host.querySelector('[data-projection]')?.getAttribute('data-projection')).toBe('true')
   await act(async () => root.render(<StockDailyKChart symbol="B" chanlunAnalysis={a} period="1w" />))
   expect(host.querySelector('[data-projection]')?.getAttribute('data-projection')).toBe('false')
   await act(async () => root.render(<StockDailyKChart symbol="B" chanlunAnalysis={emptyChanlunAnalysis()} />))
-  expect(host.querySelector<HTMLButtonElement>('[aria-label="条件推演"]')!.disabled).toBe(true)
+  expect(host.querySelector('[aria-label="条件推演"]')).toBeNull()
 })

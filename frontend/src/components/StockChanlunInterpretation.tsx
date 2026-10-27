@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useId, useState } from 'react'
-import type { ChanlunInterpretation } from '@/lib/chanlun'
+import type { ChanlunInterpretation, ChanlunProjection } from '@/lib/chanlun'
+import { ChanlunProjectionDetails } from './ChanlunProjectionDetails'
 import {
   activeChanlunSignals, chanlunPriceLevels, CHANLUN_OVERVIEW_PERIODS, CHANLUN_PERIOD_LABELS,
   periodPresentation, signalCode, type ChanlunOverviewPeriod, type ChanlunPeriodItem,
@@ -59,12 +60,22 @@ function Observation({ item, title, onSelect }: { item?: ChanlunPeriodItem; titl
   </div>
 }
 
-export function StockChanlunInterpretation({ items, selected, onSelect, asOf, hideDates, assetType }: {
+export function StockChanlunInterpretation({ items, selected, onSelect, asOf, hideDates, assetType,
+  projectionEnabled = false, projection, projectionError, projectionSelection, onProjectionBranchSelect }: {
   items: ChanlunPeriodItem[]; selected: ChanlunOverviewPeriod; onSelect: (period: ChanlunOverviewPeriod) => void
   asOf?: string | null; hideDates: boolean; assetType?: string
+  projectionEnabled?: boolean; projection?: ChanlunProjection | null; projectionError?: string
+  projectionSelection?: { id: number | null; revision: number } | null; onProjectionBranchSelect?: (id: number | null) => void
 }) {
   const id = useId()
-  const [tab, setTab] = useState<'trend' | 'next'>('trend')
+  type View = 'trend' | 'next' | 'projection'
+  const [tab, setTab] = useState<View>('trend')
+  const visibleTab = !projectionEnabled && tab === 'projection' ? 'trend' : tab
+  const tabs: View[] = projectionEnabled ? ['trend', 'next', 'projection'] : ['trend', 'next']
+  useEffect(() => {
+    if (projectionEnabled) setTab('projection')
+    else setTab(previous => previous === 'projection' ? 'trend' : previous)
+  }, [projectionEnabled, projectionSelection])
   const [allSignals, setAllSignals] = useState(false)
   useEffect(() => setAllSignals(false), [selected])
   const item = items.find(i => i.period === selected)
@@ -81,18 +92,21 @@ export function StockChanlunInterpretation({ items, selected, onSelect, asOf, hi
     <div className="chanlun-content-tabs" role="tablist" aria-label="缠论解读视角" onKeyDown={event => {
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
       event.preventDefault()
-      const next = event.key === 'Home' ? 'trend' : event.key === 'End' ? 'next' : tab === 'trend' ? 'next' : 'trend'
-      setTab(next)
-      event.currentTarget.querySelectorAll<HTMLButtonElement>('button')[next === 'trend' ? 0 : 1].focus()
+      const nextIndex = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+        : (tabs.indexOf(visibleTab) + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length
+      setTab(tabs[nextIndex])
+      event.currentTarget.querySelectorAll<HTMLButtonElement>('button')[nextIndex].focus()
     }}>
-      {(['trend', 'next'] as const).map(value => <button key={value} type="button" role="tab" id={`${id}-${value}`} aria-selected={tab === value}
-        aria-controls={`${id}-panel`} tabIndex={tab === value ? 0 : -1} onClick={() => setTab(value)}>{value === 'trend' ? '走势分析' : '下一步观察'}</button>)}
+      {tabs.map(value => <button key={value} type="button" role="tab" id={`${id}-${value}`} aria-selected={visibleTab === value}
+        aria-controls={`${id}-panel`} tabIndex={visibleTab === value ? 0 : -1} onClick={() => setTab(value)}>{value === 'trend' ? '走势分析' : value === 'next' ? '下一步观察' : '条件推演'}</button>)}
     </div>
-    <div id={`${id}-panel`} role="tabpanel" aria-labelledby={`${id}-${tab}`} className="chanlun-detail-card">
-      {error ? <div className="chanlun-detail-empty" role="alert"><p>{label}分析暂不可用：{error}</p>{item?.onRetry && <button type="button" onClick={item.onRetry}>重新加载</button>}</div>
+    <div id={`${id}-panel`} role="tabpanel" aria-labelledby={`${id}-${visibleTab}`} className="chanlun-detail-card">
+      {visibleTab === 'projection' ? <ChanlunProjectionDetails projection={projection} selected={projectionSelection?.id ?? null}
+        onSelect={id => onProjectionBranchSelect?.(id)} hideDates={hideDates} assetType={assetType} error={projectionError} />
+        : error ? <div className="chanlun-detail-empty" role="alert"><p>{label}分析暂不可用：{error}</p>{item?.onRetry && <button type="button" onClick={item.onRetry}>重新加载</button>}</div>
         : !analysis ? <p className="chanlun-detail-empty" role="status">{item?.isLoading ? '正在计算' : '等待读取'}{label}结构…</p>
         : !interpretation ? <p className="chanlun-detail-empty">{analysis?.status === 'ready' ? '结构解读尚未返回，请重新计算。' : '当前结构不足，等待已闭合K线形成有效笔和中枢。'}</p>
-        : tab === 'trend' ? <>
+        : visibleTab === 'trend' ? <>
           <h3 className="chanlun-detail-heading">{label} · {interpretation.phase.label} · {interpretation.phase.subtitle}</h3>
           {analysis?.latestCenter && <div className="chanlun-walk-formula">
             <span>当前走势 {view.trend}：</span>

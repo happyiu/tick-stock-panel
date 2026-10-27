@@ -1,41 +1,45 @@
 .chanlun-overview {
   --chanlun-spark-line: #64748b;
   container-type: inline-size;
-  padding: 18px 14px 12px;
+  padding: 6px 12px;
   border-radius: 20px;
-  background: #eef2f7;
+  background: transparent;
 }
-.dark .chanlun-overview { background: #141c25; --chanlun-spark-line: #c7d5e8; }
+.dark .chanlun-overview { --chanlun-spark-line: #c7d5e8; }
 .chanlun-overview-heading { display: flex; align-items: center; gap: 12px; min-height: 74px; margin-bottom: 20px; color: #4788f5; }
 .chanlun-overview-title { display: flex; align-items: flex-start; gap: 6px; flex-shrink: 0; }
-.chanlun-overview-title strong { font-size: 23px; line-height: 1.3; letter-spacing: .2px; font-weight: 700; }
-.chanlun-overview-title > span { padding: 1px 6px; border-radius: 12px; background: #4788f51a; font-size: 10px; font-weight: 600; }
-.chanlun-overview-spark { margin-left: auto; width: 130px; height: 48px; max-width: 32%; flex-shrink: 1; }
+.chanlun-overview-title strong { font-size: 22px; line-height: 1.3; letter-spacing: .2px; font-weight: 700; }
+.chanlun-overview-title > span { padding: 1px 6px; border-radius: 12px; background: #4788f51a; font-size: 9px; font-weight: 600; }
+.chanlun-overview-spark { margin-left: auto; width: 130px; height: 48px; min-width: 0; max-width: 32%; flex-shrink: 1; }
+.chanlun-projection-toggle { flex-shrink: 0; margin-left: auto; padding: 3px 6px; border: 1px solid hsl(var(--border)); border-radius: 6px; font-size: 10px; line-height: 1.5; color: hsl(var(--fg-muted)); }
+.chanlun-projection-toggle[aria-pressed="true"] { color: #4788f5; border-color: #4788f5; background: #4788f51a; }
+.chanlun-projection-toggle:disabled { opacity: .4; cursor: not-allowed; }
+.chanlun-projection-toggle:focus-visible { outline: 2px solid #4788f5; outline-offset: 3px; }
 .chanlun-overview-levels { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .chanlun-overview-level { display: flex; min-width: 0; flex-direction: column; align-items: flex-start; gap: 7px; border: 2px solid transparent; border-radius: 16px; padding: 12px 11px; text-align: left; background: #e2e8f0; transition: border-color .15s, background-color .15s; }
 .dark .chanlun-overview-level { background: #202e3c; }
 .chanlun-overview-level[aria-pressed="true"] { border-color: #4788f5; background: #4788f50e; }
 .dark .chanlun-overview-level[aria-pressed="true"] { background: #1c2b3c; }
 .chanlun-overview-level:focus-visible { outline: 2px solid #4788f5; outline-offset: 3px; }
-.chanlun-overview-period { color: hsl(var(--fg-secondary)); font-size: 13px; line-height: 1.4; }
+.chanlun-overview-period { color: hsl(var(--fg-secondary)); font-size: 12px; line-height: 1.4; }
 .chanlun-overview-level[aria-pressed="true"] .chanlun-overview-period { color: #4788f5; }
-.chanlun-overview-level strong { font-size: 13px; line-height: 1.4; font-weight: 650; }
-.chanlun-overview-phase, .chanlun-overview-signal { color: hsl(var(--fg-secondary)); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
-.chanlun-overview-signal { margin-top: -3px; color: color-mix(in srgb, hsl(var(--fg-secondary)) 78%, transparent); font-size: 11px; line-height: 1.45; }
+.chanlun-overview-level strong { font-size: 12px; line-height: 1.4; font-weight: 650; }
+.chanlun-overview-phase, .chanlun-overview-signal { color: hsl(var(--fg-secondary)); font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
+.chanlun-overview-signal { margin-top: -3px; color: color-mix(in srgb, hsl(var(--fg-secondary)) 78%, transparent); font-size: 10px; line-height: 1.45; }
 @container (max-width: 430px) {
   .chanlun-overview-heading { gap: 8px; min-height: 60px; margin-bottom: 14px; }
-  .chanlun-overview-title strong { font-size: 21px; }
+  .chanlun-overview-title strong { font-size: 20px; }
   .chanlun-overview-levels { gap: 7px; }
   .chanlun-overview-level { gap: 6px; padding: 10px 8px; border-radius: 13px; }
-  .chanlun-overview-period, .chanlun-overview-level strong { font-size: 12px; }
-  .chanlun-overview-phase, .chanlun-overview-signal { font-size: 11px; }
+  .chanlun-overview-period, .chanlun-overview-level strong { font-size: 11px; }
+  .chanlun-overview-phase, .chanlun-overview-signal { font-size: 10px; }
 }
 @container (max-width: 320px) {
-  .chanlun-overview-title strong { font-size: 19px; }
+  .chanlun-overview-title strong { font-size: 18px; }
   .chanlun-overview-levels { gap: 5px; }
   .chanlun-overview-level { padding: 9px 6px; }
-  .chanlun-overview-period, .chanlun-overview-level strong { font-size: 12px; }
-  .chanlun-overview-phase, .chanlun-overview-signal { font-size: 11px; }
+  .chanlun-overview-period, .chanlun-overview-level strong { font-size: 11px; }
+  .chanlun-overview-phase, .chanlun-overview-signal { font-size: 10px; }
 }
 
 .chanlun-interpretation {
@@ -48,22 +52,22 @@
 }
 .dark .chanlun-interpretation { --chanlun-detail-surface: #141c25; --chanlun-detail-node: #202e3c; --chanlun-detail-line: #2c3745; }
 .chanlun-content-tabs { display: flex; gap: 26px; padding: 0 5px 16px; }
-.chanlun-content-tabs button { position: relative; padding: 8px 0 12px; color: hsl(var(--fg-muted)); font-size: 14px; font-weight: 500; }
+.chanlun-content-tabs button { position: relative; padding: 8px 0 12px; color: hsl(var(--fg-muted)); font-size: 13px; font-weight: 500; }
 .chanlun-content-tabs button[aria-selected="true"] { color: hsl(var(--fg-primary)); font-weight: 650; }
 .chanlun-content-tabs button[aria-selected="true"]::after { position: absolute; content: ''; bottom: 0; left: calc(50% - 8px); width: 16px; height: 3px; border-radius: 3px; background: #4788f5; }
 .chanlun-interpretation button:focus-visible, .chanlun-interpretation summary:focus-visible { outline: 2px solid #4788f5; outline-offset: 3px; border-radius: 5px; }
 .chanlun-detail-card { padding: 18px 16px; border-radius: 18px; background: var(--chanlun-detail-surface); }
-.chanlun-detail-heading { font-size: 16px; font-weight: 650; line-height: 1.7; }
-.chanlun-detail-note { margin-top: 10px; font-size: 11px; line-height: 1.85; color: hsl(var(--fg-muted)); overflow-wrap: anywhere; }
-.chanlun-detail-empty { padding: 24px 0; font-size: 12px; line-height: 1.85; color: hsl(var(--fg-secondary)); }
+.chanlun-detail-heading { font-size: 15px; font-weight: 650; line-height: 1.7; }
+.chanlun-detail-note { margin-top: 10px; font-size: 10px; line-height: 1.85; color: hsl(var(--fg-muted)); overflow-wrap: anywhere; }
+.chanlun-detail-empty { padding: 24px 0; font-size: 11px; line-height: 1.85; color: hsl(var(--fg-secondary)); }
 .chanlun-detail-empty button { margin-top: 10px; color: #4788f5; }
-.chanlun-walk-formula { margin: 20px 0; font-size: 12px; color: hsl(var(--fg-muted)); }
-.chanlun-formula-parts { display: flex; align-items: center; gap: 9px; padding: 9px 4px; font-size: 15px; font-weight: 600; color: hsl(var(--fg-primary)); }
-.chanlun-formula-center { padding: 1px 7px; border-radius: 12px; background: #3478e3; color: #fff; font-size: 13px; }
-.chanlun-walk-formula details { margin-top: 3px; font-size: 11px; line-height: 1.85; color: hsl(var(--fg-secondary)); }
+.chanlun-walk-formula { margin: 20px 0; font-size: 11px; color: hsl(var(--fg-muted)); }
+.chanlun-formula-parts { display: flex; align-items: center; gap: 9px; padding: 9px 4px; font-size: 14px; font-weight: 600; color: hsl(var(--fg-primary)); }
+.chanlun-formula-center { padding: 1px 7px; border-radius: 12px; background: #3478e3; color: #fff; font-size: 12px; }
+.chanlun-walk-formula details { margin-top: 3px; font-size: 10px; line-height: 1.85; color: hsl(var(--fg-secondary)); }
 .chanlun-walk-formula summary { width: fit-content; cursor: pointer; color: hsl(var(--fg-muted)); }
 .chanlun-walk-formula details p { margin-top: 7px; }
-.chanlun-flow-caption { font-size: 12px; color: hsl(var(--fg-muted)); }
+.chanlun-flow-caption { font-size: 11px; color: hsl(var(--fg-muted)); }
 .chanlun-flow { position: relative; width: 100%; max-width: 360px; aspect-ratio: 360 / 530; min-height: 425px; margin: 0 auto; }
 .chanlun-flow > svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
 .chanlun-flow path { stroke-width: 1.5; }
@@ -73,63 +77,63 @@
 .chanlun-flow-turn { stroke: #8e6ac5; stroke-dasharray: 5 4; opacity: .25; }
 .chanlun-flow path.outgoing { stroke: #4788f5; stroke-width: 2; stroke-dasharray: 5 3; opacity: 1; }
 .chanlun-flow-node { box-sizing: border-box; position: absolute; left: 25.5%; width: 49%; height: 15.5%; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 4px; padding: 6px 5px; border: 1px solid var(--chanlun-detail-line); border-radius: 16px; background: var(--chanlun-detail-node); text-align: center; }
-.chanlun-flow-node strong { font-size: 14px; line-height: 1.45; font-weight: 600; color: hsl(var(--fg-secondary)); }
-.chanlun-flow-node small { font-size: 10px; line-height: 1.4; color: hsl(var(--fg-muted)); }
+.chanlun-flow-node strong { font-size: 13px; line-height: 1.45; font-weight: 600; color: hsl(var(--fg-secondary)); }
+.chanlun-flow-node small { font-size: 9px; line-height: 1.4; color: hsl(var(--fg-muted)); }
 .chanlun-flow-node.active { border: 2px solid #4788f5; background: color-mix(in srgb, #4788f5 12%, var(--chanlun-detail-surface)); }
 .chanlun-flow-node.active strong { color: hsl(var(--fg-primary)); }
 .chanlun-flow-node.active strong > span, .chanlun-flow-subtitle { color: #4788f5; }
-.chanlun-flow-subtitle { font-size: 12px; font-weight: 600; line-height: 1.3; }
+.chanlun-flow-subtitle { font-size: 11px; font-weight: 600; line-height: 1.3; }
 .chanlun-flow-node.unavailable { opacity: .55; }
-.chanlun-flow-edge { position: absolute; transform: translate(-50%, -50%); padding: 2px 4px; background: var(--chanlun-detail-surface); color: hsl(var(--fg-muted)); font-size: 10px; white-space: nowrap; }
+.chanlun-flow-edge { position: absolute; transform: translate(-50%, -50%); padding: 2px 4px; background: var(--chanlun-detail-surface); color: hsl(var(--fg-muted)); font-size: 9px; white-space: nowrap; }
 .chanlun-flow-edge.outgoing { color: #4788f5; }
 .chanlun-flow-edge.renew { left: 7%; top: 43%; color: #4788f5; opacity: .6; }
 .chanlun-flow-edge.return { left: 88%; top: 49%; color: #a97728; }
 .chanlun-flow-edge.turn { left: 97%; top: 72%; color: #8e6ac5; opacity: .5; }
 .chanlun-appeared { border-top: 1px solid var(--chanlun-detail-line); padding: 16px 0; }
-.chanlun-interpretation h4 { font-size: 13px; font-weight: 600; }
+.chanlun-interpretation h4 { font-size: 12px; font-weight: 600; }
 .chanlun-appeared ul { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
-.chanlun-appeared li { display: flex; gap: 9px; font-size: 12px; line-height: 1.85; color: hsl(var(--fg-secondary)); }
+.chanlun-appeared li { display: flex; gap: 9px; font-size: 11px; line-height: 1.85; color: hsl(var(--fg-secondary)); }
 .chanlun-appeared li > span { color: #4788f5; flex-shrink: 0; }
-.chanlun-next-observe { display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 12px 0; border-top: 1px solid var(--chanlun-detail-line); color: #4788f5; font-size: 12px; }
+.chanlun-next-observe { display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 12px 0; border-top: 1px solid var(--chanlun-detail-line); color: #4788f5; font-size: 11px; }
 .chanlun-signal-section { margin-top: 12px; }
 .chanlun-signal-section h4 { margin-bottom: 10px; }
-.chanlun-signal-section h4 > span { margin-left: 4px; font-size: 11px; color: hsl(var(--fg-muted)); }
+.chanlun-signal-section h4 > span { margin-left: 4px; font-size: 10px; color: hsl(var(--fg-muted)); }
 .chanlun-signal-item { padding: 12px 0; border-top: 1px solid var(--chanlun-detail-line); }
-.chanlun-signal-item summary { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 11px; color: hsl(var(--fg-secondary)); }
+.chanlun-signal-item summary { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 10px; color: hsl(var(--fg-secondary)); }
 .chanlun-signal-item summary::after { content: '⌄'; color: hsl(var(--fg-muted)); }
 .chanlun-signal-item[open] summary::after { content: '⌃'; }
 .chanlun-signal-item summary > span:first-child { padding: 3px 5px; border-radius: 6px; background: var(--chanlun-detail-node); font-weight: 650; }
-.chanlun-signal-item summary > strong { margin-left: auto; font-size: 12px; }
-.chanlun-signal-body { margin-top: 12px; font-size: 11px; line-height: 1.85; color: hsl(var(--fg-secondary)); }
+.chanlun-signal-item summary > strong { margin-left: auto; font-size: 11px; }
+.chanlun-signal-body { margin-top: 12px; font-size: 10px; line-height: 1.85; color: hsl(var(--fg-secondary)); }
 .chanlun-signal-body p + p { margin-top: 5px; }
 .chanlun-rule-name { overflow-wrap: anywhere; color: hsl(var(--fg-muted)); }
-.chanlun-all-signals { width: 100%; padding: 10px 0 0; font-size: 11px; color: #4788f5; }
+.chanlun-all-signals { width: 100%; padding: 10px 0 0; font-size: 10px; color: #4788f5; }
 .chanlun-observation-card { display: flex; flex-direction: column; gap: 11px; padding: 14px; border-radius: 13px; background: var(--chanlun-detail-node); }
 .chanlun-observation-card + .chanlun-observation-card { margin-top: 12px; }
-.chanlun-observation-caption { display: flex; align-items: center; justify-content: space-between; width: 100%; font-size: 11px; text-align: left; color: hsl(var(--fg-muted)); }
+.chanlun-observation-caption { display: flex; align-items: center; justify-content: space-between; width: 100%; font-size: 10px; text-align: left; color: hsl(var(--fg-muted)); }
 button.chanlun-observation-caption { color: #4788f5; }
-.chanlun-observation-card > strong { font-size: 13px; font-weight: 600; }
+.chanlun-observation-card > strong { font-size: 12px; font-weight: 600; }
 .chanlun-condition-list { display: flex; flex-direction: column; gap: 10px; }
-.chanlun-condition-list li { display: flex; gap: 8px; font-size: 12px; line-height: 1.85; color: hsl(var(--fg-secondary)); }
+.chanlun-condition-list li { display: flex; gap: 8px; font-size: 11px; line-height: 1.85; color: hsl(var(--fg-secondary)); }
 .chanlun-condition-list li > span:first-child { color: #4788f5; flex-shrink: 0; }
 .chanlun-condition-list li.warning > span:first-child { color: #bf8a35; }
 .chanlun-price-ladder { margin-top: 22px; }
 .chanlun-price-ladder h4 { margin-bottom: 12px; }
-.chanlun-price-level { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; margin-left: 3px; padding: 12px 7px 12px 12px; border-left: 1px solid var(--chanlun-detail-line); font-size: 11px; color: hsl(var(--fg-secondary)); }
+.chanlun-price-level { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; margin-left: 3px; padding: 12px 7px 12px 12px; border-left: 1px solid var(--chanlun-detail-line); font-size: 10px; color: hsl(var(--fg-secondary)); }
 .chanlun-price-level::before { content: ''; position: absolute; left: -3px; width: 5px; height: 5px; border-radius: 50%; background: hsl(var(--fg-muted)); }
-.chanlun-price-level > span:nth-child(2) { color: hsl(var(--fg-muted)); font-size: 10px; }
-.chanlun-price-level strong { font-size: 12px; font-variant-numeric: tabular-nums; font-weight: 600; }
+.chanlun-price-level > span:nth-child(2) { color: hsl(var(--fg-muted)); font-size: 9px; }
+.chanlun-price-level strong { font-size: 11px; font-variant-numeric: tabular-nums; font-weight: 600; }
 .chanlun-price-level.current { color: #4788f5; background: #4788f515; border-radius: 0 7px 7px 0; }
 .chanlun-price-level.current::before { background: #4788f5; }
 @container (max-width: 300px) {
   .chanlun-content-tabs { gap: 22px; }
-  .chanlun-content-tabs button { font-size: 13px; }
+  .chanlun-content-tabs button { font-size: 12px; }
   .chanlun-detail-card { padding: 15px 12px; }
-  .chanlun-detail-heading { font-size: 14px; }
+  .chanlun-detail-heading { font-size: 13px; }
   .chanlun-flow-node { left: 23%; width: 54%; border-radius: 13px; }
-  .chanlun-flow-node strong { font-size: 12px; }
-  .chanlun-flow-node small { font-size: 9px; }
-  .chanlun-flow-edge { font-size: 9px; }
+  .chanlun-flow-node strong { font-size: 11px; }
+  .chanlun-flow-node small { font-size: 8px; }
+  .chanlun-flow-edge { font-size: 8px; }
   .chanlun-flow-edge.renew { writing-mode: vertical-rl; left: 6%; }
   .chanlun-flow-edge.return { writing-mode: vertical-rl; left: 88%; }
   .chanlun-flow-edge.turn { writing-mode: vertical-rl; left: 97%; }

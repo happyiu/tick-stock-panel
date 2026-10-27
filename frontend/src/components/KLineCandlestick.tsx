@@ -18,7 +18,6 @@ import { ChartDrawingToolbar, DRAWING_GROUP } from './ChartDrawingToolbar'
 import { buildChanlunOverlays, CHANLUN_GROUP, chanlunTemplate } from '@/lib/kline-chart-chanlun'
 import { buildLevelOverlays, LEVEL_GROUP, levelTemplate } from '@/lib/kline-chart-levels'
 import { buildProjectionOverlay, PROJECTION_GROUP, projectionTemplate, projectionWidth } from '@/lib/kline-chart-projection'
-import { ChanlunProjectionDetails } from './ChanlunProjectionDetails'
 
 export { SUB_CHARTS, OVERLAY_INDICATORS } from '@/lib/kline-chart'
 export type { CandlestickProps, ChartMarker, ChartPriceLine, ChartPriceCurve, ChartRange, OHLC, VolumeCompareConfig } from '@/lib/kline-chart'
@@ -40,7 +39,7 @@ export function KLineCandlestick({
   showMA: requestedMA = true, showInfoBar = true, showMarkers = true, stockInfo, symbol = '', linkedPrice,
   onDateClick, onPriceDoubleClick, visibleBars = 60, activeIndicators = EMPTY,
   volumeCompare = DEFAULT_COMPARE, volumeCompareControls, addedDate, assetType, period = '1d', selectedDate,
-  chanlunAnalysis, chanlunOverlay, chanlunError, hideCurrentDate = false, projectionEnabled = false,
+  chanlunAnalysis, chanlunOverlay, chanlunError, hideCurrentDate = false, projectionEnabled = false, projectionBranchId = null, onProjectionBranchSelect,
   priceCurves = EMPTY, priceZones = EMPTY, priceLabelWidth = 0, highlightedKey, onHighlightChange, showRangeSelector = false,
 }: CandlestickProps) {
   const managed = indicatorDefinitions != null
@@ -66,9 +65,6 @@ export function KLineCandlestick({
   const chartData = useMemo(() => projectionEnabled && projection?.anchor
     ? data.filter(bar => bar.date <= projection.anchor!.date) : data, [data, projectionEnabled, projection?.anchor?.date])
   const bars = useMemo(() => toChartBars(chartData, volumeCompare.days), [chartData, volumeCompare.days])
-  const projectionContext = `${symbol}|${period}|${projection?.anchor?.availableDate}|${projection?.center?.centerId}`
-  const [projectionSelection, setProjectionSelection] = useState<{ context: string; id: number | null } | null>(null)
-  const selectedProjection = projectionSelection?.context === projectionContext ? projectionSelection.id : null
   const barsRef = useRef(bars)
   barsRef.current = bars
   const previousRef = useRef<ChartBar[]>([])
@@ -468,10 +464,10 @@ export function KLineCandlestick({
     const chart = chartRef.current
     if (!chart) return
     chart.removeOverlay({ groupId: PROJECTION_GROUP })
-    const overlays = projectionEnabled ? buildProjectionOverlay(bars, projection, theme, assetType, selectedProjection,
-      id => setProjectionSelection({ context: projectionContext, id })) : []
+    const overlays = projectionEnabled ? buildProjectionOverlay(bars, projection, theme, assetType, projectionBranchId,
+      id => onProjectionBranchSelect?.(id)) : []
     if (overlays.length) chart.createOverlay(overlays)
-  }, [bars, projection, projectionEnabled, theme, assetType, selectedProjection, projectionContext])
+  }, [bars, projection, projectionEnabled, theme, assetType, projectionBranchId, onProjectionBranchSelect])
 
   useEffect(() => {
     const chart = chartRef.current
@@ -732,8 +728,6 @@ export function KLineCandlestick({
         <label className="flex min-w-0 flex-1 items-center gap-1 whitespace-nowrap">终点<input aria-label="可见结束K线" className="w-full min-w-0 accent-sky-500" type="range" min={1} max={bars.length} value={Math.min(visibleRange.to, bars.length)} onChange={event => selectRange(Math.min(visibleRange.from, Number(event.target.value) - 1), Number(event.target.value))} /></label>
       </div>}
       {!bars.length && <div className="text-sm text-muted py-2">暂无有效日K数据</div>}
-      {projectionEnabled && <ChanlunProjectionDetails projection={projection} selected={selectedProjection}
-        onSelect={id => setProjectionSelection({ context: projectionContext, id })} hideDates={hideCurrentDate} assetType={assetType} error={chanlunError} />}
     </div>
   )
 }

@@ -365,6 +365,10 @@ export function StockPanel({
     storage.stockPreviewAnalysisSectionsV2.get(null),
   ))
   const [analysisTab, setAnalysisTab] = useState<StockAnalysisTab>('indicator')
+  const [projectionContext, setProjectionContext] = useState<string | null>(null)
+  const currentProjectionContext = `${symbol}|${period}|${resolvedRightPaneMode}`
+  const projectionEnabled = projectionContext === currentProjectionContext
+  const [projectionSelection, setProjectionSelection] = useState<{ context: string; id: number | null; revision: number } | null>(null)
   const [splitDragging, setSplitDragging] = useState(false)
   const [chartScrollbarHovered, setChartScrollbarHovered] = useState(false)
   const setFollowingLatest = useCallback((value: boolean) => {
@@ -542,6 +546,13 @@ export function StockPanel({
     () => chanlunQuery.data ?? emptyChanlunAnalysis(period, chanlunSource),
     [chanlunQuery.data, period, chanlunSource],
   )
+  const projectionSelectionContext = `${currentProjectionContext}|${chanlunAnalysis.projection?.anchor?.availableDate}|${chanlunAnalysis.projection?.center?.centerId}`
+  const activeProjectionSelection = projectionEnabled && projectionSelection?.context === projectionSelectionContext ? projectionSelection : null
+  const selectProjectionBranch = useCallback((id: number | null) => {
+    setProjectionSelection(previous => ({ context: projectionSelectionContext, id, revision: (previous?.revision ?? 0) + 1 }))
+    setAnalysisTab('structure')
+    setRightPaneDismissed(false)
+  }, [projectionSelectionContext])
   const overviewQueries = useQueries({
     queries: CHANLUN_OVERVIEW_PERIODS.map(candidatePeriod => {
       const end = new Date(`${(chanlunCutoff ?? chartDateRange.end).slice(0, 10)}T12:00:00`)
@@ -917,6 +928,9 @@ export function StockPanel({
                 includeTechnicalScores={includeTechnicalScores}
                 chanlunAnalysis={resolvedRightPaneMode === 'technical' ? chanlunAnalysis : undefined}
                 chanlunError={chanlunQuery.isError ? (chanlunQuery.error instanceof Error ? chanlunQuery.error.message : '缠论计算失败，请重试') : undefined}
+                projectionEnabled={projectionEnabled}
+                projectionBranchId={activeProjectionSelection?.id ?? null}
+                onProjectionBranchSelect={selectProjectionBranch}
                 visibleThrough={visibleThrough}
                 hideCurrentDate={hideCurrentDate}
                 selectedStrategy={selectedStrategy}
@@ -1058,7 +1072,11 @@ export function StockPanel({
                   onToggleCollapsed={() => toggleAnalysisSection('technicalCollapsed')}
                 />
                 </>}
-                {analysisTab === 'structure' && <StockChanlunPanel key={symbol} items={overviewItems} period={period} asOf={chanlunCutoff} hideDates={hideCurrentDate} assetType={analysisAssetType} />}
+                {analysisTab === 'structure' && <StockChanlunPanel key={symbol} items={overviewItems} period={period} asOf={chanlunCutoff} hideDates={hideCurrentDate} assetType={analysisAssetType}
+                  projectionEnabled={projectionEnabled} projectionAvailable={chanlunAnalysis.capabilities?.projection === true && !chanlunQuery.isError}
+                  projection={chanlunAnalysis.projection} projectionSelection={activeProjectionSelection} onProjectionBranchSelect={selectProjectionBranch}
+                  projectionError={chanlunQuery.isError ? (chanlunQuery.error instanceof Error ? chanlunQuery.error.message : '缠论计算失败，请重试') : undefined}
+                  onToggleProjection={() => setProjectionContext(projectionEnabled ? null : currentProjectionContext)} />}
                 {analysisTab === 'levels' && (
                   <div className="py-3 pr-1 text-xs">
                     {!priceLevelsEnabled ? (

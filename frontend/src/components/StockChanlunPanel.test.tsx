@@ -6,6 +6,7 @@ import { expect, it, vi } from 'vitest'
 import { emptyChanlunAnalysis } from '@/lib/chanlun'
 import { StockChanlunPanel } from './StockChanlunPanel'
 import type { ChanlunPeriodItem } from '@/lib/chanlunPresentation'
+import type { ChanlunProjection } from '@/lib/chanlun'
 
 function items(): ChanlunPeriodItem[] {
   return (['1w', '1d', '30m'] as const).map(period => {
@@ -23,6 +24,34 @@ function items(): ChanlunPeriodItem[] {
     return { period, analysis: a }
   })
 }
+
+it('开启推演后新增第三标签，支持键盘切换、空态错误和隐藏日期，关闭移除标签', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  const host = document.createElement('div'), root = createRoot(host)
+  document.body.append(host)
+  const projection: ChanlunProjection = { version: 1, ruleSource: 'project', status: 'insufficient', side: null,
+    anchor: { date: '2026-10-26', availableDate: '2026-10-26', price: 1.234 }, center: null, zones: [], branches: [], description: '条件示意' }
+  await act(async () => root.render(<StockChanlunPanel items={items()} period="1d" projectionEnabled projection={projection} hideDates />))
+  const tabs = () => [...host.querySelectorAll<HTMLButtonElement>('.chanlun-content-tabs [role="tab"]')]
+  expect(tabs().map(t => t.textContent)).toEqual(['走势分析', '下一步观察', '条件推演'])
+  expect(tabs()[2].getAttribute('aria-selected')).toBe('true')
+  const details = host.querySelector('[aria-label="条件推演说明"]')!
+  expect(details.textContent).toContain('此处尚无有效中枢')
+  expect(details.textContent).not.toContain('2026-10-26')
+  await act(async () => tabs()[2].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true })))
+  expect(tabs()[1].getAttribute('aria-selected')).toBe('true')
+  await act(async () => tabs()[1].dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })))
+  expect(tabs()[2].getAttribute('aria-selected')).toBe('true')
+  await act(async () => root.render(<StockChanlunPanel items={items()} period="1d" projectionEnabled projectionError="原生内核不可用" />))
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain('原生内核不可用')
+  await act(async () => root.render(<StockChanlunPanel items={items()} period="1d" projectionEnabled />))
+  expect(host.textContent).toContain('旧后端需更新')
+  await act(async () => root.render(<StockChanlunPanel items={items()} period="1d" />))
+  expect(tabs()).toHaveLength(2)
+  expect(tabs()[0].getAttribute('aria-selected')).toBe('true')
+  await act(async () => root.unmount())
+  host.remove()
+})
 
 it('保留概览并接入走势解读，日线默认选中且阶段联动', () => {
   const html = renderToStaticMarkup(<StockChanlunPanel items={items()} period="1d" />)

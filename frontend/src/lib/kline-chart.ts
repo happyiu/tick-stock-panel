@@ -113,6 +113,8 @@ export interface CandlestickProps {
   chanlunAnalysis?: ChanlunAnalysis
   chanlunOverlay?: StockPreviewChanlunOverlayConfig
   projectionEnabled?: boolean
+  projectionBranchId?: number | null
+  onProjectionBranchSelect?: (id: number) => void
   chanlunError?: string
   hideCurrentDate?: boolean
 }
