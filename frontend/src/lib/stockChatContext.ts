@@ -119,6 +119,7 @@ function compactChanlun(analysis: ChanlunAnalysis): Record<string, unknown> {
     divergences: analysis.divergences.slice(-4).map(item => compact(item, ['id', 'kind', 'direction', 'status', 'source', 'ruleSource', 'availableDate', 'structureDate', 'price', 'rule', 'rawSignal', 'references', 'invalidatedAt', 'invalidationReason', 'evidence'])),
     segments: analysis.segments.slice(-4).map(item => compact(item, ['id', 'direction', 'startDate', 'endDate', 'startPrice', 'endPrice', 'componentCount', 'confirmed', 'confirmedAt', 'observedAt', 'ruleSource', 'rule'])),
     trends: analysis.trends?.slice(-3).map(item => compact(item, ['id', 'direction', 'centerIds', 'startDate', 'endDate', 'availableDate', 'current', 'ruleSource'])),
+    projection: analysis.projection ? compact(analysis.projection, ['version', 'ruleSource', 'status', 'anchor', 'center', 'zones', 'side', 'branches', 'description']) : null,
     candidateSignals: analysis.candidateSignals.slice(-6).map(compactSignal),
     thirdSignals: analysis.thirdSignals.slice(-4).map(item => compact(item, ['id', 'kind', 'status', 'structureDate', 'availableDate', 'price', 'boundary', 'invalidatedAt'])),
     currentPrice: analysis.currentPrice,

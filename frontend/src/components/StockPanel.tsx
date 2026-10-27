@@ -916,6 +916,7 @@ export function StockPanel({
                 addedDate={addedDate}
                 includeTechnicalScores={includeTechnicalScores}
                 chanlunAnalysis={resolvedRightPaneMode === 'technical' ? chanlunAnalysis : undefined}
+                chanlunError={chanlunQuery.isError ? (chanlunQuery.error instanceof Error ? chanlunQuery.error.message : '缠论计算失败，请重试') : undefined}
                 visibleThrough={visibleThrough}
                 hideCurrentDate={hideCurrentDate}
                 selectedStrategy={selectedStrategy}

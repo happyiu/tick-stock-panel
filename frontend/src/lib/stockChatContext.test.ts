@@ -36,3 +36,11 @@ it('AI结构解读保留后端阶段和项目规则来源，不将流程图当�
     response: { symbol: '510300.SH', asset_type: 'etf', rows: [{ date: '2026-10-26 15:00', open: 1, high: 1, low: 1, close: 1 }] } })
   expect(snapshot?.structure.chanlun).toMatchObject({ capabilities: { divergences: false }, interpretation: { ruleSource: 'project', phase: { key: 'forming' }, facts: ['实际结构事实'] } })
 })
+
+it('AI快照保留条件推演依据与说明，不生成目标价或发生概率', () => {
+  const a = emptyChanlunAnalysis()
+  a.projection = { version: 1, ruleSource: 'project', status: 'insufficient', anchor: null, center: null, zones: [], branches: [], side: null, description: '条件示意，不表示目标价、发生概率或预计到达时间。' }
+  const snapshot = buildStockChatSnapshot({ symbol: 'A', period: '1d', selectedDate: null, chanlun: a,
+    response: { symbol: 'A', rows: [{ date: '2026-10-26', open: 1, close: 1, high: 1, low: 1 }] } })
+  expect(snapshot?.structure.chanlun).toMatchObject({ projection: a.projection })
+})

@@ -85,6 +85,7 @@ interface Props {
   includeTechnicalScores?: boolean
   /** 当前周期、当前历史截面的缠论结构近似结果；未传入时不显示相关控件和覆盖层。 */
   chanlunAnalysis?: ChanlunAnalysis
+  chanlunError?: string
   /** 调试进行中时只展示到当前推进的 K 线。 */
   visibleThrough?: string | null
   /** 调试设置开启时隐藏当前推进 K 线的日期。 */
@@ -227,6 +228,7 @@ function StockDailyKChartView({
   periodDays = DEFAULT_30M_DAYS,
   includeTechnicalScores = false,
   chanlunAnalysis,
+  chanlunError,
   visibleThrough,
   hideCurrentDate = false,
   selectedStrategy,
@@ -241,6 +243,8 @@ function StockDailyKChartView({
   // 加入自选日标注（与「异动」标记相互独立）
   const [showAddedMark, setShowAddedMark] = useState(true)
   const [chanlunMenuOpen, setChanlunMenuOpen] = useState(false)
+  const [projectionContext, setProjectionContext] = useState<string | null>(null)
+  const projectionEnabled = projectionContext === `${symbol}|${period}`
   const [chanlunOverlay, setChanlunOverlay] = useState<StockPreviewChanlunOverlayConfig>(() =>
     normalizeChanlunOverlay(storage.stockPreviewChanlunOverlay.get(DEFAULT_CHANLUN_OVERLAY)),
   )
@@ -464,6 +468,11 @@ function StockDailyKChartView({
             </div>
           )}
 
+          {chanlunAnalysis && <button type="button" aria-label="条件推演" aria-pressed={projectionEnabled}
+            disabled={!chanlunAnalysis.capabilities?.projection && !projectionEnabled}
+            title="基于当前观察位置的中枢展示三条条件路径，点击图上编号查看条件"
+            onClick={() => setProjectionContext(projectionEnabled ? null : `${symbol}|${period}`)}
+            className={`h-6 rounded-md border border-border/40 px-2 text-[10px] transition-colors disabled:opacity-40 ${projectionEnabled ? 'bg-accent/15 text-accent' : 'text-muted hover:text-secondary'}`}>推演</button>}
           {showMarkerToggle && effectiveShowLimitMarkers && (
             <button
               onClick={() => setShowMarkers(v => !v)}
@@ -634,6 +643,8 @@ function StockDailyKChartView({
           }
           addedDate={showAddedMark ? addedDate : null}
           chanlunAnalysis={chanlunAnalysis}
+          chanlunError={chanlunError}
+          projectionEnabled={projectionEnabled}
           chanlunOverlay={chanlunOverlay}
           hideCurrentDate={hideCurrentDate}
           showRangeSelector

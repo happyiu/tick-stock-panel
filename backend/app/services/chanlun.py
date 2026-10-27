@@ -17,6 +17,7 @@ from importlib.metadata import version
 
 from app.services.chanlun_geometry import build_center_extensions, build_trends
 from app.services.chanlun_interpretation import build_interpretation
+from app.services.chanlun_projection import build_projection
 from app.services.chanlun_segments import build_segments
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,7 @@ SIGNAL_RULES = [
     {"function": "cxt_third_bs_V230318", "params": {"di": 1, "ma_type": "SMA", "timeperiod": 34}},
 ]
 DIVERGENCE_RULE = {"function": "tas_macd_bc_V230804", "params": {"di": 1}}
-CHART_RULES = {"version": 1, "segmentRule": "project-feature-sequence-v1", "trendRule": "project-center-core-position-v1", "divergenceRules": [DIVERGENCE_RULE]}
+CHART_RULES = {"version": 1, "projectionVersion": 1, "segmentRule": "project-feature-sequence-v1", "trendRule": "project-center-core-position-v1", "divergenceRules": [DIVERGENCE_RULE]}
 ENGINE_CONFIG = {"min_bi_len": 6, "max_bi_num": "max(50, closed_bars)", "signalRules": SIGNAL_RULES, "chartRules": CHART_RULES}
 CAPABILITIES = {
     "supportedSources": ["stroke"],
@@ -39,6 +40,7 @@ CAPABILITIES = {
     "recursiveConfirmation": False,
     "trends": True,
     "centerExtensions": True,
+    "projection": True,
     "segmentRuleSource": "project",
     "divergenceRules": [DIVERGENCE_RULE],
     "signalRules": SIGNAL_RULES,
@@ -119,6 +121,7 @@ def _empty(period, source, rows, issues, status="insufficient"):
         "currentPrice": rows[-1]["close"] if rows else None,
         "pricePosition": None,
         "interpretation": None,
+        "projection": None,
     }
 
 
@@ -484,6 +487,7 @@ def _analyze_cached(serialized, period, source, cutoff, engine_version, config):
     if not result["strokes"]:
         result["issues"].append("尚未形成满足CZSC规则的有效笔")
     result["interpretation"] = build_interpretation(result)
+    result["projection"] = build_projection(result)
     return result
 
 

@@ -327,6 +327,16 @@ def test_chart_geometry_uses_actual_closed_period_end(period):
     assert all(e["endDate"] == prefix[-1]["period_end"] for e in result["centerExtensions"])
 
 
+def test_projection_historical_prefix_and_open_tail_keep_same_scenarios():
+    rows = make_rows(250)
+    prefix = adapter.analyze_chanlun(rows[:200])["projection"]
+    assert prefix["status"] == "ready"
+    assert adapter.analyze_chanlun(rows, as_of=rows[199]["date"])["projection"] == prefix
+    rows[200]["is_closed"] = False
+    rows[200].update(open=100, high=101, low=99, close=100)
+    assert adapter.analyze_chanlun(rows[:201])["projection"] == prefix
+
+
 def test_price_invalidation_does_not_repeat_while_condition_stays_true():
     rows = make_rows(100)
     c = czsc.CZSC([native_bar(r, i) for i, r in enumerate(rows)], max_bi_num=100, min_bi_len=6)

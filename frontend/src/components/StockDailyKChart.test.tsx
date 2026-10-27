@@ -21,8 +21,8 @@ vi.mock('@tanstack/react-query', () => ({
 }))
 vi.mock('./KLineCandlestick', async importOriginal => ({
   ...await importOriginal<typeof import('./KLineCandlestick')>(),
-  KLineCandlestick: ({ activeIndicators = [], period, showMA, toolbarControls, volumeCompareControls }: CandlestickProps) =>
-    <div data-indicators={activeIndicators.join(',')} data-period={period} data-show-ma={String(showMA)}>{toolbarControls}{activeIndicators.includes('vol') && volumeCompareControls}</div>,
+  KLineCandlestick: ({ activeIndicators = [], period, showMA, toolbarControls, volumeCompareControls, projectionEnabled }: CandlestickProps) =>
+    <div data-indicators={activeIndicators.join(',')} data-period={period} data-show-ma={String(showMA)} data-projection={String(projectionEnabled)}>{toolbarControls}{activeIndicators.includes('vol') && volumeCompareControls}</div>,
 }))
 
 let host: HTMLDivElement
@@ -270,4 +270,18 @@ it('缠论新图层按后端能力开放，旧线段背驰配置隔离，新选�
   await act(async () => root.render(<StockDailyKChart symbol="B" chanlunAnalysis={emptyChanlunAnalysis()} />))
   expect(toggle('线段（推导）').disabled).toBe(true)
   expect(toggle('背驰观察').disabled).toBe(true)
+})
+
+it('推演按后端能力开放，独立于缠论图层；切股和周期不沿用开启状态', async () => {
+  const a = emptyChanlunAnalysis()
+  a.capabilities!.projection = true
+  await act(async () => root.render(<StockDailyKChart symbol="A" chanlunAnalysis={a} />))
+  await click('推演')
+  expect(host.querySelector('[data-projection]')?.getAttribute('data-projection')).toBe('true')
+  await click('缠论')
+  expect(host.querySelector('[data-projection]')?.getAttribute('data-projection')).toBe('true')
+  await act(async () => root.render(<StockDailyKChart symbol="B" chanlunAnalysis={a} period="1w" />))
+  expect(host.querySelector('[data-projection]')?.getAttribute('data-projection')).toBe('false')
+  await act(async () => root.render(<StockDailyKChart symbol="B" chanlunAnalysis={emptyChanlunAnalysis()} />))
+  expect(host.querySelector<HTMLButtonElement>('[aria-label="条件推演"]')!.disabled).toBe(true)
 })

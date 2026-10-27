@@ -220,13 +220,34 @@ export interface ChanlunInterpretation {
   levels: { key: string; label: string; price: number }[]
 }
 
+export interface ChanlunProjection {
+  version: 1
+  ruleSource: 'project'
+  status: 'ready' | 'insufficient'
+  description: string
+  anchor: { date: string; availableDate: string; price: number } | null
+  center: ChanlunProjectionZone | null
+  zones: ChanlunProjectionZone[]
+  side: 'above' | 'below' | 'inside' | null
+  branches: { id: number; label: string; target: 'upper' | 'lower' | 'middle'; condition: string; meaning: string; rule?: { function: string; params: Record<string, number | string> } }[]
+}
+
+export interface ChanlunProjectionZone {
+  kind: 'current' | 'upper' | 'lower'
+  label: string
+  centerId: string
+  zd: number
+  zg: number
+  formedAt: string
+}
+
 export interface ChanlunAnalysis {
   ruleVersion: 4
   period: '30m' | '1d' | '1w' | '1mo'
   source: ChanlunStructureSource
   definitionMode: 'engine_rules'
   engine?: { name: string; version?: string; runtime?: string; commit: string; config: Record<string, unknown> }
-  capabilities?: { supportedSources: string[]; segments: boolean; divergences: boolean; recursiveConfirmation: boolean; signalRules: { function: string; params: Record<string, string | number> }[]; trends?: boolean; centerExtensions?: boolean; segmentRuleSource?: 'project'; divergenceRules?: { function: string; params: Record<string, string | number> }[] }
+  capabilities?: { supportedSources: string[]; segments: boolean; divergences: boolean; recursiveConfirmation: boolean; signalRules: { function: string; params: Record<string, string | number> }[]; trends?: boolean; centerExtensions?: boolean; projection?: boolean; segmentRuleSource?: 'project'; divergenceRules?: { function: string; params: Record<string, string | number> }[] }
   approximationLoss: string
   status: 'ready' | 'insufficient' | 'invalid_data' | 'unsupported' | 'engine_unavailable'
   issues: string[]
@@ -247,6 +268,7 @@ export interface ChanlunAnalysis {
   trendType: ChanlunTrendType
   divergences: ChanlunDivergence[]
   trends?: ChanlunTrend[]
+  projection?: ChanlunProjection | null
   centerExtensions?: ChanlunCenterExtension[]
   candidateSignals: ChanlunCandidateSignal[]
   thirdSignals: ChanlunThirdSignal[]

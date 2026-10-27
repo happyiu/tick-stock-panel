@@ -112,6 +112,8 @@ export interface CandlestickProps {
   assetType?: string
   chanlunAnalysis?: ChanlunAnalysis
   chanlunOverlay?: StockPreviewChanlunOverlayConfig
+  projectionEnabled?: boolean
+  chanlunError?: string
   hideCurrentDate?: boolean
 }
 

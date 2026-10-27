@@ -72,17 +72,33 @@ OHLC沿用现有前复权口径，量额不另行缩放。缺少成交量保留 
 
 线段只复用确认所依赖笔序列完全未变的历史前缀；端点或笔完成状态被撤回时，从受影响位置重算。完整重算与重放结果在测试中交叉核对。5000根合成K线在运行开发服务的本机上冷算约35.81秒、缓存命中约0.091秒；500/2000根分别约0.998/6.774秒。该记录不与早期基准作严格性能比较。缠论查询使用现有300秒计算超时，普通行情查询仍为30秒；长窗口首次计算仍可能等待，不适合直接按标的在行情回调内批量重放。
 
+## 条件推演
+
+参考 chanL 探索里的条件分支，采用后端 `chanlun_projection.py` 对现有 CZSC 笔中枢生成 `projection`（version=1、ruleSource=project）。这是 L3 核心扩展，复用当前行情、历史截止和分析缓存，不增加模型调用或独立行情请求。`engine.config.chartRules.projectionVersion=1` 和前端查询键 `projection-v1` 隔离旧结果；旧后端缺少能力时禁用入口。未增加用户配置或数据迁移。
+
+“推演”开关位于 K 线工具栏，默认关闭，按当前标的及周期启用，与其他缠论覆盖层独立。右侧留出条件示意区，绘制三条虚线路径和编号；点击路径编号或图下分支按钮可查看条件、含义及最近上下方历史中枢。无中枢、旧响应和计算错误明确显示状态。主图过低时提示增高，文字与按钮在窄屏换行。价格保持股票/ETF精度。
+
+- **中枢内**：向上离开、向下离开、继续震荡。
+- **中枢上方**：回抽未回、回到中枢、新高力度观察。
+- **中枢下方**：回到中枢、反弹未回、新低力度观察。
+
+区间仅取观察位置之前已经形成的官方笔中枢；中枢上下沿相等仍有效。力度分支按已确认口径核对官方 `tas_macd_bc_V230804(di=1)`，不恢复 chanL 的旧 MACD 柱面积条件。分支是尚待满足的观察条件，突破边界不等于确认 B3/S3，MACD观察不等于严格背驰或反转。
+
+锚点使用最后已闭合K线收盘价，`anchor.availableDate` 使用实际周期结束交易日；开放尾K不能推进推演。开启历史推演时，图表展示截断至后端锚点，关闭后恢复原始行情视图，输入数据保持只读。所有图层点仍锚定真实K线，右侧横向距离与分支终点采用示意布局，不创建未来K线、未来日期、目标价或概率。推演区遮住图表库自动外推的日期刻度，关闭十字线日期浮签，保留真实历史日期轴和OHLC日期。AI快照包含相同规则来源与说明，不能将示意路径当成预测结果。
+
+2026-10-27 定向验证：后端70项、前端88项测试通过，Ruff、前端生产构建和 `git diff --check` 通过。覆盖三个位置及边界、历史前缀/开放尾K、周线结束日、上下枢选择、虚线绘制与点击、空态/错误态、窄屏双主题、历史显示截断和关闭恢复。沿用现有原生依赖，本次未重新执行桌面打包或Docker部署。
+
 ## 安装、验证与回滚
 
 ```sh
 cd backend
 uv sync --frozen
-uv run --frozen pytest tests/test_chanlun.py tests/test_chanlun_czsc.py tests/test_chanlun_geometry.py tests/test_chanlun_segments.py tests/test_chanlun_interpretation.py tests/test_kline_periods.py -q
+uv run --frozen pytest tests/test_chanlun.py tests/test_chanlun_czsc.py tests/test_chanlun_geometry.py tests/test_chanlun_segments.py tests/test_chanlun_interpretation.py tests/test_chanlun_projection.py tests/test_kline_periods.py -q
 uv run --frozen ruff check app/services/chanlun*.py tests/test_chanlun*.py scripts/benchmark_chanlun.py
 uv run --frozen python scripts/benchmark_chanlun.py
 cd ../frontend
 pnpm test:chanlun
-pnpm exec vitest run src/lib/api.chanlun-timeout.test.ts src/components/StockChanlunPanel.test.tsx src/components/StockPanel.test.tsx src/components/KLineCandlestick.test.tsx src/components/StockDailyKChart.test.tsx src/lib/stockChatContext.test.ts
+pnpm exec vitest run src/lib/api.chanlun-timeout.test.ts src/lib/kline-chart-projection.test.ts src/components/StockChanlunPanel.test.tsx src/components/StockPanel.test.tsx src/components/KLineCandlestick.test.tsx src/components/StockDailyKChart.test.tsx src/lib/stockChatContext.test.ts
 pnpm build
 ```
 
