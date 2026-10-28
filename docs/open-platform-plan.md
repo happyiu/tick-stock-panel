@@ -76,6 +76,8 @@
 | Scope | 允许 | 默认签发 |
 |---|---|---|
 | `read:market` | 行情/指数/标的搜索/分时/日K 读取 | ✅ 新 Token 默认 |
+| `read:watchlist` | 共享自选列表与自选行情增强读取 | ❌ 显式勾选 |
+| `write:watchlist` | 单标的添加与删除，影响共享列表；不含清空、导入、分组 | ❌ 显式勾选 |
 | `read:analysis` | 策略列表与运行结果、回测报告与候选、市场环境、监控事件读取 | ❌ 显式勾选 |
 | `read:ext` | 扩展数据 rows/values/schema 读取 | ❌ 显式勾选 |
 | `write:ext` | 扩展表**行数据**程序化写入（`POST /api/ext-data/{id}/ingest`, 0.3.2 增） | ❌ 显式勾选 |
@@ -188,3 +190,9 @@
 - **契约冻结过早**: Tier A 从最小两组起步, 按二开反馈逐域升级, 未验证的端点留在 Tier B。
 - **限流误伤本机 UI**: Token 限流只作用于 Bearer 路径; UI 会话不受 Token 桶约束。
 - **不因开放破坏内部演进**: 开放面是「视图 + 网关」, 不重写内部路由; 内部 API 与开放 API 解耦, 由标注层衔接。
+
+### 缠境服务接入补充
+
+`GET /api/kline/period` 使用 `read:market`。共享自选仅开放精确路径 `GET /api/watchlist`、`GET /api/watchlist/enriched`（`read:watchlist`）、`POST /api/watchlist` 及 `DELETE /api/watchlist/{六位代码.SH|SZ|BJ}`（`write:watchlist`）。不允许以路径前缀放行自选管理接口；`DELETE /api/watchlist` 清空仍不开放。
+
+HStudioService 使用独立 Token 调用，App JWT 不转交此服务。已有 Token 的权限不会因新增 scope 自动扩大。

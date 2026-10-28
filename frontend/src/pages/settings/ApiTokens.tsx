@@ -7,6 +7,8 @@ import { cn } from '@/lib/cn'
 
 /** 对外开放 scope 清单 (与后端 api_tokens.SCOPES 同步) */
 const SCOPES: { key: string; label: string; desc: string; default: boolean }[] = [
+  { key: 'read:watchlist', label: '自选读取', desc: '读取与面板共用的自选及行情', default: false },
+  { key: 'write:watchlist', label: '自选增删', desc: '添加或删除单个自选，会影响面板共用列表', default: false },
   { key: 'read:market', label: '行情读取', desc: '标的搜索 / 日K / 分时 / 指数 / 市场快照', default: true },
   { key: 'read:ext', label: '扩展数据读取', desc: '扩展表 rows / values / schema 查询', default: false },
   { key: 'write:ext', label: '扩展数据写入', desc: '向已配置的扩展表程序化写入行数据 (会进入策略/回测数据面, 谨慎授予)', default: false },

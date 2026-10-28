@@ -4,12 +4,12 @@ evaluate() 是唯一入口: 认证中间件把 Bearer 明文交给它, 得到
 放行 / 401 / 403 / 429 的裁决与响应头。UI 会话完全不经过本模块。
 
 规则表按顺序匹配 (方法 + 路径前缀); 未命中 = 不对外开放 (403)。
-刻意不放进规则表的: SSE 流端点 (EventSource 无法带 Authorization 头,
-V2 用短期票据解决)、watchlist/监控规则管理、数据同步、设置 —— 保持最小开放面。
+自选只开放精确的读取、单标的添加和删除; 清空、分组、导入及其他管理操作不开放。
 """
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 from collections import deque
@@ -87,6 +87,17 @@ def required_scope(method: str, path: str) -> str | None:
 
     返回 "*" 表示仅需有效 Token (不做特定 scope 校验)。
     """
+    # Self-selected assets share the panel's list; never prefix-match management routes.
+    exact = {
+        ("GET", "/api/kline/period"): "read:market",
+        ("GET", "/api/watchlist"): "read:watchlist",
+        ("GET", "/api/watchlist/enriched"): "read:watchlist",
+        ("POST", "/api/watchlist"): "write:watchlist",
+    }
+    if (method, path) in exact:
+        return exact[(method, path)]
+    if method == "DELETE" and re.fullmatch(r"/api/watchlist/[0-9]{6}\.(SH|SZ|BJ)", path):
+        return "write:watchlist"
     for m, prefix, scope in _RULES:
         if (m == "*" or m == method) and (path == prefix or path.startswith(prefix.rstrip("/") + "/")):
             # read:ext 域内的拉取 Key 状态子路径属管理面 (脱敏也不外露)

@@ -208,3 +208,62 @@ def test_revoked_token_rejected_immediately(client: TestClient, tmp_path: Path):
     assert client.get("/api/kline/daily", headers=hdr).status_code == 200
     api_tokens.revoke_token(tmp_path, record["id"])
     assert client.get("/api/kline/daily", headers=hdr).status_code == 401
+
+
+def test_chanjing_scopes_and_management_boundaries(tmp_path):
+    f = api_gateway.required_scope
+    assert f("GET", "/api/kline/period") == "read:market"
+    for path in ("/api/watchlist", "/api/watchlist/enriched"):
+        assert f("GET", path) == "read:watchlist"
+    assert f("POST", "/api/watchlist") == "write:watchlist"
+    assert f("DELETE", "/api/watchlist/510300.SH") == "write:watchlist"
+    for method, path in [
+        ("DELETE", "/api/watchlist"), ("DELETE", "/api/watchlist/groups"),
+        ("POST", "/api/watchlist/batch"), ("POST", "/api/watchlist/import-codes"),
+        ("GET", "/api/watchlist/groups"), ("DELETE", "/api/watchlist/510300.SH/top"),
+        ("GET", "/api/kline/period/admin"),
+    ]:
+        assert f(method, path) is None
+    _, token = api_tokens.create_token(tmp_path, "chanjing", ["read:market", "read:watchlist", "write:watchlist"])
+    assert api_gateway.evaluate(tmp_path, "GET", "/api/watchlist", token)["status"] is None
+    _, read_token = api_tokens.create_token(tmp_path, "read", ["read:watchlist"])
+    assert api_gateway.evaluate(tmp_path, "POST", "/api/watchlist", read_token)["status"] == 403
+
+
+def test_shared_watchlist_roundtrip_uses_real_routes_without_touching_user_data(tmp_path, monkeypatch):
+    from unittest.mock import MagicMock
+
+    from fastapi.responses import JSONResponse
+
+    from app.api.watchlist import router
+    from app.config import settings
+    from app.services import watchlist
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    app = FastAPI()
+    repo = MagicMock()
+    repo.resolve_asset_type.return_value = "etf"
+    repo.get_name_map.return_value = {"510300.SH": "沪深300ETF"}
+    app.state.repo = repo
+    app.include_router(router)
+
+    @app.middleware("http")
+    async def token_gate(request, call_next):
+        token = request.headers.get("authorization", "").removeprefix("Bearer ")
+        verdict = api_gateway.evaluate(tmp_path, request.method, request.url.path, token)
+        if verdict["status"] is not None:
+            return JSONResponse(status_code=verdict["status"], content={"detail": verdict["detail"]})
+        return await call_next(request)
+
+    _, token = api_tokens.create_token(tmp_path, "shared", ["read:watchlist", "write:watchlist"])
+    headers = {"Authorization": f"Bearer {token}"}
+    with TestClient(app) as http:
+        for _ in range(2):
+            assert http.post("/api/watchlist", json={"symbol": "510300.SH"}, headers=headers).status_code == 200
+        rows = http.get("/api/watchlist", headers=headers).json()["symbols"]
+        assert len(rows) == 1 and rows[0]["asset_type"] == "etf"
+        assert [r["symbol"] for r in watchlist.list_symbols()] == ["510300.SH"]
+        assert http.delete("/api/watchlist", headers=headers).status_code == 403
+        assert http.delete("/api/watchlist/510300.SH", headers=headers).status_code == 200
+        assert watchlist.list_symbols() == []
+        assert http.get("/api/watchlist", headers=headers).json()["symbols"] == []
