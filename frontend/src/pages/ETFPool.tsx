@@ -1,3 +1,5 @@
+import './ETFPool.css'
+import { EtfRadar } from '@/components/EtfRadar'
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { ArrowDown, ArrowUp, ChevronsUpDown, ChevronDown, ChevronLeft, ChevronRight, Filter, RefreshCw, Search, X } from 'lucide-react'
@@ -15,6 +17,7 @@ const control = 'h-8 rounded-lg border border-border bg-surface px-3 py-1 text-s
 export function ETFPool() {
   const [search, setSearch] = useState('')
   const [params, setParams] = useState<EtfPoolParams>({ q: '', category: '', page: 1, pageSize: 20 })
+  const [radarContext, setRadarContext] = useState<{ intraday?: boolean; range: { start: string; end: string }; signalDate: string; label: string } | undefined>()
   const [selected, setSelected] = useState<EtfPoolRow | null>(null)
   const [showSignalPicker, setShowSignalPicker] = useState(false)
   const [signals, setSignals] = useState<ChartSignalSelection[]>([])
@@ -66,7 +69,10 @@ export function ETFPool() {
           <RefreshCw className={`h-4 w-4 ${query.isFetching ? 'animate-spin' : ''}`} />
         </button>
       } />
-      <div className="flex min-h-0 flex-1 flex-col gap-4 p-4 sm:p-5">
+      <div className="etf-pool-viewport min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+        <div className="etf-pool-layout">
+        <EtfRadar onSelect={(signal, range, intraday) => { setRadarContext({ intraday, range, signalDate: signal.structureDate, label: `${signal.variant} · 出现 ${signal.availableDate.slice(0, 10)}` }); setSelected({ ...signal, exchange: signal.symbol.split('.')[1] }) }} />
+        <section className="etf-pool-catalog" aria-label="ETF池行情列表">
         <div className="flex shrink-0 flex-wrap items-center gap-3">
           <div className="relative w-full sm:w-72">
             <Search className="absolute left-3 top-2 h-4 w-4 text-muted" />
@@ -95,7 +101,7 @@ export function ETFPool() {
           ETF 列表加载失败：{query.error.message}
           <button className="ml-3 text-accent" onClick={() => void query.refetch()}>重试</button>
         </div>}
-        <div className="min-h-0 flex-1 overflow-auto overscroll-contain rounded-xl border border-border bg-surface" aria-busy={query.isFetching}>
+        <div className="etf-pool-table min-h-[280px] flex-1 overflow-auto overscroll-contain rounded-xl border border-border bg-surface" aria-busy={query.isFetching}>
           <table className="w-full min-w-[640px] text-left text-sm">
             <thead className="sticky top-0 z-10 border-b border-border bg-elevated text-xs text-muted"><tr>
               <th className="px-4 py-3 font-medium">代码</th><th className="px-4 py-3 font-medium">ETF 名称</th>
@@ -109,8 +115,8 @@ export function ETFPool() {
             </tr></thead>
             <tbody className="divide-y divide-border">
               {data?.rows.map(row => <tr key={row.symbol} className="hover:bg-elevated/60">
-                <td className="px-4 py-3 font-mono"><button className="text-accent hover:underline" onClick={() => setSelected(row)}>{row.symbol}</button></td>
-                <td className="px-4 py-3"><button className="text-foreground hover:text-accent" onClick={() => setSelected(row)}>{row.name || row.code}</button></td>
+                <td className="px-4 py-3 font-mono"><button className="text-accent hover:underline" onClick={() => { setRadarContext(undefined); setSelected(row) }}>{row.symbol}</button></td>
+                <td className="px-4 py-3"><button className="text-foreground hover:text-accent" onClick={() => { setRadarContext(undefined); setSelected(row) }}>{row.name || row.code}</button></td>
                 <td className="px-4 py-3 text-right font-mono tabular-nums" title={row.quote_date ? `行情日期：${row.quote_date}` : '暂无行情数据'}>
                   <div>{fmtAssetPrice(row.last_price, 'etf')}</div>
                   {row.quote_date && <div className="mt-0.5 text-[10px] text-muted">{row.quote_date}</div>}
@@ -140,10 +146,12 @@ export function ETFPool() {
             <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
           </div>
         </div>
+        </section>
+        </div>
       </div>
       {showSignalPicker && <ChartSignalPickerDialog open period="1d" mode="etf-filter" selected={signals} signalMatch={params.signalMatch ?? 'all'} onClose={() => setShowSignalPicker(false)} onApply={applySignals} />}
       {selected && <Suspense fallback={<div role="status" className="p-4 text-muted">加载 ETF 详情…</div>}>
-        <StockPreviewDialog symbol={selected.symbol} name={selected.name} triggerInfo={{ asset_type: 'etf' }} onClose={() => setSelected(null)} navList={data?.rows} onNavigate={(symbol, name) => setSelected({ ...selected, symbol, name: name ?? '' })} />
+        <StockPreviewDialog key={`${selected.symbol}:${radarContext?.range.end ?? ""}`} radarContext={radarContext} symbol={selected.symbol} name={selected.name} triggerInfo={{ asset_type: 'etf' }} onClose={() => setSelected(null)} navList={data?.rows} onNavigate={(symbol, name) => setSelected({ ...selected, symbol, name: name ?? '' })} />
       </Suspense>}
     </div>
   )

@@ -34,6 +34,7 @@ import { StrategyPickerDialog } from '@/components/screener/StrategyPickerDialog
 import { ChartSignalPickerDialog } from '@/components/screener/ChartSignalPickerDialog'
 
 interface Props {
+  radarContext?: { intraday?: boolean; range: { start: string; end: string }; signalDate: string; label: string }
   symbol: string | null
   name?: string
   onClose: () => void
@@ -240,13 +241,14 @@ function fmtQuoteTime(timestampMs: number | null | undefined): string {
   }).format(new Date(timestampMs))
 }
 
-export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList: navListSource, watchlistRows, onNavigate }: Props) {
+export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList: navListSource, watchlistRows, onNavigate, radarContext }: Props) {
   const [view, setView] = useState<PreviewView>('daily')
   const [assetType, setAssetType] = useState<'stock' | 'etf' | 'index' | undefined>(triggerInfo?.asset_type)
   const [intradayDays, setIntradayDays] = useState<number | null>(loadIntradayDays)
   const [period, setPeriod] = useState<KlinePeriod>('1d')
   const [periodDays, setPeriodDays] = useState(load30mDays)
-  const [dateRange, setDateRange] = useState(() => previewKlineRange('1d', triggerInfo?.asset_type))
+  const [dateRange, setDateRange] = useState(() => radarContext?.range ?? previewKlineRange('1d', triggerInfo?.asset_type))
+  const [radarActive, setRadarActive] = useState(!!radarContext)
   const [chartSelectedDate, setChartSelectedDate] = useState<string | null>(null)
   const [findFeelOpen, setFindFeelOpen] = useState(false)
   const [tradeOpen, setTradeOpen] = useState(false)
@@ -1189,14 +1191,18 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                     />
                   )}
                   <div className="min-h-0 min-w-0 flex-1">
+                    {radarActive && radarContext && <div className="p-2 text-xs text-accent">雷达快照 {radarContext.range.end} · {radarContext.intraday ? '盘中模拟观察，可能变化或撤销' : '收盘数据'} · {radarContext.label} · 极值K线 {radarContext.signalDate}<button className="ml-3 underline" onClick={() => { setRadarActive(false); setDateRange(previewKlineRange('1d', 'etf')) }}>切换最新分析</button></div>}
                     <StockPanel
                       symbol={symbol}
                       height={420}
                       visibleBars={DEFAULT_VISIBLE_BARS[period]}
                       // 日K视图右侧展示跟随当前周期的技术指标卡片。
                       showIntraday
+                      initialStructure={!!radarContext}
+                      intradayObservation={!!radarContext?.intraday}
                       rightPaneMode="technical"
                       dateRange={dateRange}
+                      markers={radarActive && radarContext ? [{ date: radarContext.signalDate, kind: 'neutral', label: radarContext.label }] : undefined}
                       priceLines={monitorPriceLines}
                       onAssetTypeChange={setAssetType}
                       onSelectedDateChange={findFeelLocked ? undefined : handleChartSelectedDateChange}

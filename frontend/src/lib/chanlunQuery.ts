@@ -12,11 +12,12 @@ export function chanlunQueryOptions(
   source: ChanlunStructureSource,
   asOf: string | null,
   revision = 0,
+  observation = false,
 ) {
   return {
-    queryKey: QK.chanlun(symbol, assetType, period, range.start, range.end, days, source, asOf, revision),
+    queryKey: QK.chanlun(symbol, assetType, period, range.start, range.end, days, source, asOf, revision, observation),
     queryFn: async () => {
-      const options = { source, asOf }
+      const options = { source, asOf, ...(observation ? { observation } : {}) }
       const response = period === '1d'
         ? await api.klineDaily(symbol, undefined, range, undefined, false, options)
         : await api.klinePeriod(symbol, period, range, days, false, options)

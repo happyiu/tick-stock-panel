@@ -49,7 +49,7 @@ def _filter_signals(repo, df: pl.DataFrame, signal_ids: list[str], match: str) -
     return df.join(matches, on="symbol", how="semi"), latest.isoformat(), warnings
 
 
-def list_etfs(repo, *, q: str = "", category: str = "", exchange: str = "", page: int = 1, page_size: int = 20, sort_change_pct: Literal["asc", "desc"] | None = None, signal_ids: list[str] | None = None, signal_match: Literal["all", "any"] = "all") -> dict:
+def etf_catalog(repo) -> pl.DataFrame:
     source = repo.get_etf_instruments()
     df = pl.DataFrame(schema={"symbol": pl.String, "name": pl.String})
     if not source.is_empty() and "symbol" in source.columns:
@@ -68,6 +68,11 @@ def list_etfs(repo, *, q: str = "", category: str = "", exchange: str = "", page
         pl.col("symbol").str.split(".").list.last().alias("exchange"),
         classification.otherwise(pl.lit("其他")).alias("category"),
     )
+    return df
+
+
+def list_etfs(repo, *, q: str = "", category: str = "", exchange: str = "", page: int = 1, page_size: int = 20, sort_change_pct: Literal["asc", "desc"] | None = None, signal_ids: list[str] | None = None, signal_match: Literal["all", "any"] = "all") -> dict:
+    df = etf_catalog(repo)
     counts = dict(df.group_by("category").len().iter_rows())
     categories = [{"name": label, "count": counts.get(label, 0)} for label in (*[r[0] for r in _CATEGORY_RULES], "其他")]
     catalog_total = df.height

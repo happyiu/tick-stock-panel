@@ -8,6 +8,21 @@ import { toast } from '@/components/Toast'
 
 const BASE = ''
 
+export interface EtfRadarSignal {
+  id: string; symbol: string; code: string; name: string; category: string
+  variant: string; availableDate: string; structureDate: string; structureConfirmed: boolean; age: number
+}
+export interface EtfRadarSnapshot {
+  mode?: 'intraday' | 'closed'
+  date: string; range: { start: string; end: string }; computed_at: string; total: number
+  counts: { ready: number; missing: number; stale: number; insufficient: number; failed: number }
+  buy_count: number; sell_count: number; signals: EtfRadarSignal[]
+  failures: { symbol: string; message: string }[]
+}
+export interface EtfRadarResponse {
+  date: string; dates: string[]; snapshot: EtfRadarSnapshot | null; needs_update: boolean; total: number; job_id: string | null; job_date?: string | null
+}
+
 export interface EtfPoolParams {
   q: string
   category: string
@@ -587,12 +602,14 @@ export interface ChartDataStatus {
 }
 
 export interface ChanlunRequest {
+  observation?: boolean
   source: import('./chanlun').ChanlunStructureSource
   asOf?: string | null
 }
 
 function chanlunParams(options?: ChanlunRequest): string {
   return options ? `&include_chanlun=true&chanlun_source=${options.source}`
+    + (options.observation ? '&chanlun_observation=true' : '')
     + (options.asOf ? `&chanlun_as_of=${encodeURIComponent(options.asOf)}` : '') : ''
 }
 
@@ -3523,6 +3540,9 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ symbols, date, ...(preferLocal ? { prefer_local: true } : {}), ...(since ? { since } : {}) }),
     }),
+  etfRadar: (date = '') => request<EtfRadarResponse>(`/api/kline/etf-pool/radar${date ? `?date=${encodeURIComponent(date)}` : ''}`),
+  etfRadarScan: (date = '', force = false) => request<{ job_id: string; date?: string }>(`/api/kline/etf-pool/radar/scan?force=${force}${date ? `&date=${encodeURIComponent(date)}` : ''}`, { method: 'POST' }),
+  etfRadarJob: (id: string) => request<{ status: string; error?: string; log: { msg: string }[] }>(`/api/kline/etf-pool/radar/jobs/${encodeURIComponent(id)}`),
   etfPool: (params: EtfPoolParams) => {
     const query = new URLSearchParams({ page: String(params.page), page_size: String(params.pageSize) })
     if (params.q) query.set('q', params.q)

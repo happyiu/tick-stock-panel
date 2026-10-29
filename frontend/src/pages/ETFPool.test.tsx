@@ -9,7 +9,7 @@ import { ETFPool } from './ETFPool'
 import { useQuoteStream } from '@/lib/useQuoteStream'
 
 const fixtures = vi.hoisted(() => ({ request: vi.fn(), customSignals: vi.fn() }))
-vi.mock('@/lib/api', () => ({ api: { etfPool: fixtures.request, customSignalsList: fixtures.customSignals } }))
+vi.mock('@/lib/api', () => ({ api: { etfRadar: vi.fn().mockResolvedValue({ date: '2026-10-28', dates: [], snapshot: { date: '2026-10-28', signals: [], failures: [] }, needs_update: false }), etfPool: fixtures.request, customSignalsList: fixtures.customSignals } }))
 vi.mock('@/components/StockPreviewDialog', () => ({ StockPreviewDialog: ({ symbol }: { symbol: string }) => <div role="dialog">{symbol}</div> }))
 let host: HTMLDivElement
 let root: Root

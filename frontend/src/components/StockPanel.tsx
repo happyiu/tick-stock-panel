@@ -223,6 +223,8 @@ interface Props {
   height?: number
   showIntraday?: boolean
   /** 右侧分栏内容；empty 保留空白面板和关闭/展开交互。 */
+  intradayObservation?: boolean
+  initialStructure?: boolean
   rightPaneMode?: StockPanelRightPaneMode
   /** 兼容旧调用方：false 等价于 rightPaneMode="empty"。 */
   showIntradayChart?: boolean
@@ -304,6 +306,8 @@ export function StockPanel({
   height = 520,
   showIntraday = true,
   rightPaneMode,
+  initialStructure = false,
+  intradayObservation = false,
   showIntradayChart = true,
   className,
   onSelectDate,
@@ -364,7 +368,7 @@ export function StockPanel({
     storage.stockPreviewAnalysisSectionsV3.get(null),
     storage.stockPreviewAnalysisSectionsV2.get(null),
   ))
-  const [analysisTab, setAnalysisTab] = useState<StockAnalysisTab>('indicator')
+  const [analysisTab, setAnalysisTab] = useState<StockAnalysisTab>(initialStructure ? 'structure' : 'indicator')
   const [projectionContext, setProjectionContext] = useState<string | null>(null)
   const currentProjectionContext = `${symbol}|${period}|${resolvedRightPaneMode}`
   const projectionEnabled = projectionContext === currentProjectionContext
@@ -539,7 +543,7 @@ export function StockPanel({
     .filter((value): value is string => !!value).sort()[0] ?? null
   const chanlunQuery = useQuery({
     ...chanlunQueryOptions(symbol, analysisAssetType ?? 'stock', period, chartDateRange, periodDays,
-      chanlunSource, chanlunCutoff, analysisSnapshot?.contextKey === analysisContextKey ? analysisSnapshot.calculatedAt : 0),
+      chanlunSource, chanlunCutoff, analysisSnapshot?.contextKey === analysisContextKey ? analysisSnapshot.calculatedAt : 0, intradayObservation && period === '1d'),
     enabled: !!symbol && resolvedRightPaneMode === 'technical' && !!displayAnalysisResponse && analysisRows.length > 0,
   })
   const chanlunAnalysis = useMemo(

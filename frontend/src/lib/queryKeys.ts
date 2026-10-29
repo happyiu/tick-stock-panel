@@ -52,6 +52,8 @@ export const QK = {
   minuteBatch:          (symbols: string) => ['minute-batch', symbols] as const,
   instrumentNames: (symbols: string[]) => ['instrument-names', symbols.join(',')] as const,
   instrumentSearch:     (q: string, assetTypes?: string) => ['instrument-search', q, assetTypes ?? 'stock'] as const,
+  etfRadar: (date: string) => ['etf-radar', date] as const,
+  etfRadarJob: (id: string) => ['etf-radar-job', id] as const,
   etfPool:              (params: EtfPoolParams) => ['etf-pool', params] as const,
   etfPools:             ['etf-pool'] as const,
 
@@ -114,8 +116,8 @@ export const QK = {
   klinePeriod:          (symbol: string, period: string, start: string, end: string, days: number, includeTechnicalScores = false, indicators?: ChartIndicatorRequest) =>
                            ['kline-period', symbol, period, start, end, days, includeTechnicalScores ? 'technical-score-v10' : false, ...indicatorQuerySuffix(indicators)] as const,
   klineLatest:          (symbol: string) => ['kline-latest', symbol] as const,
-  chanlun:              (symbol: string, assetType: string, period: string, start: string, end: string, days: number, source: string, asOf: string | null, revision: number) =>
-                           ['chanlun', 4, symbol, assetType, period, start, end, days, source, asOf, revision, 'interpretation-v1', 'chart-rules-v1', 'projection-v1'] as const,
+  chanlun:              (symbol: string, assetType: string, period: string, start: string, end: string, days: number, source: string, asOf: string | null, revision: number, observation = false) =>
+                           ['chanlun', 4, symbol, assetType, period, start, end, days, source, asOf, revision, observation, 'interpretation-v1', 'chart-rules-v1', 'projection-v1'] as const,
   stockLevels:          (symbol: string, days?: number, endDate?: string) =>
     endDate ? ['stock-levels', symbol, days ?? 120, endDate] as const : ['stock-levels', symbol, days ?? 120] as const,
   klineMinute:          (symbol: string, date: string) =>

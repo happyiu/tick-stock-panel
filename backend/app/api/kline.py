@@ -5,6 +5,7 @@ import gzip
 import json
 import logging
 import math
+import re
 from datetime import date, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -86,12 +87,15 @@ def _with_chart_indicators(payload, request, indicator_ids, compare_days=1, hist
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-def _with_chanlun(payload: dict, enabled: bool, source: str, as_of: str | None) -> dict:
+def _with_chanlun(payload: dict, enabled: bool, source: str, as_of: str | None, observation: bool = False) -> dict:
     if enabled is not True:
         return payload
-    from app.services.chanlun import analyze_chanlun
+    from app.services.chanlun import analyze_chanlun, analyze_daily_observation
 
     try:
+        if observation is True and source == 'stroke' and payload.get('asset_type') == 'etf':
+            payload['chanlun'] = analyze_daily_observation(payload['rows'], as_of=as_of)
+            return payload
         payload["chanlun"] = analyze_chanlun(
             payload["rows"], period=payload.get("period", "1d"), source=source, as_of=as_of,
         )
@@ -259,6 +263,35 @@ _init_pinyin_dict()
 def _match_pinyin(name: str, keyword: str) -> bool:
     """keyword 是否匹配 name 任一拼音首字母串的前缀 (支持多音字)。"""
     return any(k.startswith(keyword) for k in _name_pinyin_keys(name))
+
+
+@router.get("/etf-pool/radar")
+def etf_radar_read(request: Request, date: str | None = None):
+    from app.services.etf_radar import get_radar
+    try:
+        return get_radar(request.app.state).read(date)
+    except ValueError as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
+
+
+@router.post("/etf-pool/radar/scan", status_code=202)
+def etf_radar_scan(request: Request, date: str | None = None, force: bool = False):
+    from app.services.etf_radar import get_radar
+    try:
+        return get_radar(request.app.state).start(date, force)
+    except ValueError as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
+
+
+@router.get("/etf-pool/radar/jobs/{job_id}")
+def etf_radar_job(request: Request, job_id: str):
+    from app.services.etf_radar import get_radar
+    if not re.fullmatch(r'[a-f0-9]{10}', job_id):
+        raise HTTPException(404, detail="任务不存在")
+    job = get_radar(request.app.state).jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, detail="任务不存在")
+    return job
 
 
 @router.get("/etf-pool")
@@ -539,6 +572,7 @@ def get_daily(
     ext_columns: Optional[str] = Query(None, description="逗号分隔的 ext 列: config_id.field_name"),
     include_technical_scores: bool = Query(False, description="是否附带 technical-score-v10 评分序列"),
     include_chanlun: bool = Query(False, description="是否附带固定规则的缠论结构"),
+    chanlun_observation: bool = Query(False),
     chanlun_source: Literal["stroke", "segment"] = Query("stroke"),
     chanlun_as_of: str | None = Query(None, description="缠论最晚可用时间 (北京墙钟)"),
     indicator_ids: str | None = Query(None, max_length=2200),
@@ -596,7 +630,7 @@ def get_daily(
             resp["technical_scores"] = score_payload
         return _gzip_payload(
             request,
-            _with_chanlun(_with_chart_indicators(_attach_ext(resp, repo, symbol, ext_columns), request, indicator_ids, indicator_compare_days, history_rows), include_chanlun, chanlun_source, chanlun_as_of),
+            _with_chanlun(_with_chart_indicators(_attach_ext(resp, repo, symbol, ext_columns), request, indicator_ids, indicator_compare_days, history_rows), include_chanlun, chanlun_source, chanlun_as_of, chanlun_observation),
             pref_key="daily_batch_compress",
         )
 
@@ -634,7 +668,7 @@ def get_daily(
             resp["technical_scores"] = {"version": TECHNICAL_SCORE_VERSION, "rows": []}
         return _gzip_payload(
             request,
-            _with_chanlun(_with_chart_indicators(_attach_ext(resp, repo, symbol, ext_columns), request, indicator_ids, indicator_compare_days, history_rows), include_chanlun, chanlun_source, chanlun_as_of),
+            _with_chanlun(_with_chart_indicators(_attach_ext(resp, repo, symbol, ext_columns), request, indicator_ids, indicator_compare_days, history_rows), include_chanlun, chanlun_source, chanlun_as_of, chanlun_observation),
             pref_key="daily_batch_compress",
         )
     # 追加/覆盖今日实时蜡烛. 仅评分路径需要重新构造 Polars 帧; 实时注入的
@@ -670,7 +704,7 @@ def get_daily(
         resp["technical_scores"] = score_payload
     return _gzip_payload(
         request,
-        _with_chanlun(_with_chart_indicators(_attach_ext(resp, repo, symbol, ext_columns), request, indicator_ids, indicator_compare_days, history_rows), include_chanlun, chanlun_source, chanlun_as_of),
+        _with_chanlun(_with_chart_indicators(_attach_ext(resp, repo, symbol, ext_columns), request, indicator_ids, indicator_compare_days, history_rows), include_chanlun, chanlun_source, chanlun_as_of, chanlun_observation),
         pref_key="daily_batch_compress",
     )
 

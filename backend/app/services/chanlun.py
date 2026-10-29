@@ -596,3 +596,22 @@ def _project_structures(result, engine, rows, known):
         result["pricePosition"] = (
             "above" if p > centers[-1]["zg"] else "below" if p < centers[-1]["zd"] else "inside"
         )
+
+
+def analyze_daily_observation(rows, *, as_of=None):
+    """Simulate the open daily tail for observation, never as confirmed structure."""
+    provisional = [r for r in rows if r.get('is_closed') is False]
+    simulated = [{**r, 'is_closed': True} if r in provisional else r for r in rows]
+    result = analyze_chanlun(simulated, period='1d', as_of=as_of)
+    result['observationMode'] = 'intraday' if provisional else 'closed'
+    if provisional:
+        result['issues'].append('盘中日K模拟观察，候选信号可能变化或撤销，不代表收盘确认')
+        for signal in result['candidateSignals']:
+            signal['provisional'] = True
+            signal['structureConfirmed'] = False
+        # Preserve the actual closure contract in the returned chart rows.
+        open_dates = {_text(r.get('date'))[:10] for r in provisional}
+        for row in result['bars']:
+            if row['date'] in open_dates:
+                row['isClosed'] = False
+    return result

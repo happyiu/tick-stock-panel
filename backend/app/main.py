@@ -393,6 +393,10 @@ async def _application_lifespan(app: FastAPI):
     except Exception:
         logger.exception("indicator monitor init failed")
 
+    from app.services.etf_radar import get_radar
+    etf_radar = get_radar(app.state)
+    etf_radar.start_scheduler()
+
     # 源码内二次开发启动钩子: 仅暴露稳定只读上下文, 单个扩展失败不影响核心启动。
     extension_registry = app.state.extension_registry
     start_backend_extensions(
@@ -403,6 +407,7 @@ async def _application_lifespan(app: FastAPI):
     try:
         yield
     finally:
+        etf_radar.stop()
         repo._on_refresh_done = None  # noqa: SLF001
         indicator_monitor = getattr(app.state, "indicator_monitor", None)
         if indicator_monitor:
