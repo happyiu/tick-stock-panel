@@ -212,7 +212,7 @@ function normalizeAnalysisSections(
 }
 
 export type StockPanelRightPaneMode = 'intraday' | 'technical' | 'empty'
-type StockAnalysisTab = 'indicator' | 'structure' | 'levels' | 'ai'
+type StockAnalysisTab = 'indicator' | 'structure' | 'dow' | 'wave' | 'levels' | 'ai'
 
 const STOCK_ANALYSIS_TABS: Array<{ id: StockAnalysisTab; label: string }> = [
   { id: 'indicator', label: '指标分析' },
@@ -279,13 +279,13 @@ interface Props {
   /** 调试设置开启时，不显示当前推进 K 线的日期。 */
   hideCurrentDate?: boolean
   /** 在标的详情顶部信息条打开策略选择器。 */
-  onAddStrategy?: (assetType: 'stock' | 'etf', period: KlinePeriod) => void
+  onAddStrategy?: (assetType: 'stock' | 'etf' | 'index', period: KlinePeriod) => void
   /** 当前日K图已选中的策略。 */
   selectedStrategy?: ChartStrategySelection | null
   /** 清除当前日K图的策略选择。 */
   onClearStrategy?: () => void
   /** 在标的详情顶部信息条打开信号库选择器。 */
-  onAddSignal?: (assetType: 'stock' | 'etf', period: KlinePeriod) => void
+  onAddSignal?: (assetType: 'stock' | 'etf' | 'index', period: KlinePeriod) => void
   /** 当前日K图已选中的信号库信号。 */
   selectedSignals?: ChartSignalSelection[]
   /** 清除当前日K图的信号选择。 */
@@ -546,6 +546,10 @@ export function StockPanel({
 
   const chanlunCutoff = [effectiveSelectedBarKey, visibleThrough, analysisRows.at(-1)?.date]
     .filter((value): value is string => !!value).sort()[0] ?? null
+  const [patternChoice, setPatternChoice] = useState<{ context: string; rows: KlineRow[]; pattern: import('@/lib/trendPatterns').PatternHit } | null>(null)
+  const patternContext = `${analysisContextKey}|${chanlunCutoff}|${analysisSnapshot?.calculatedAt ?? 0}`
+  useEffect(() => { setPatternChoice(null) }, [patternContext, displayAnalysisResponse?.rows])
+  const selectedPattern = patternChoice?.context === patternContext && patternChoice.rows === displayAnalysisResponse?.rows ? patternChoice.pattern : undefined
   const [dowSelected, setDowSelected] = useState('1d')
   const [dowOverlayContext, setDowOverlayContext] = useState<string | null>(null)
   const dowContext = `${analysisContextKey}|${chanlunCutoff}`
@@ -594,14 +598,14 @@ export function StockPanel({
         ...chanlunQueryOptions(symbol, analysisAssetType ?? 'stock', candidatePeriod, range, periodDays,
           chanlunSource, chanlunCutoff, analysisSnapshot?.contextKey === analysisContextKey ? analysisSnapshot.calculatedAt : 0),
         enabled: !!symbol && resolvedRightPaneMode === 'technical' && analysisTab === 'structure'
-          && candidatePeriod !== period && !!displayAnalysisResponse && !(candidatePeriod === '30m' && analysisAssetType === 'index'),
+          && candidatePeriod !== period && !!displayAnalysisResponse,
       }
     }),
   })
   const overviewItems = CHANLUN_OVERVIEW_PERIODS.map((candidatePeriod, index) => {
     const query = candidatePeriod === period ? chanlunQuery : overviewQueries[index]
     return { period: candidatePeriod, analysis: query.data, isLoading: query.isFetching && !query.data,
-      error: query.error, unavailable: candidatePeriod === '30m' && analysisAssetType === 'index' ? '指数暂不支持30分钟结构分析' : undefined,
+      error: query.error,
       onRetry: () => { void query.refetch() } }
   })
   const stockChatSnapshot = useMemo(
@@ -961,6 +965,8 @@ export function StockPanel({
                 periodDays={periodDays}
                 addedDate={addedDate}
                 includeTechnicalScores={includeTechnicalScores}
+                patternHit={selectedPattern}
+                onClearPattern={() => setPatternChoice(null)}
                 dowAnalysis={activeDow}
                 waveCandidate={waveOverlay === dowContext && period === wavePeriod && waveCandidate ? {...waveCandidate, displayDepth: waveDepth} : undefined}
                 chanlunAnalysis={resolvedRightPaneMode === 'technical' ? chanlunAnalysis : undefined}
@@ -1097,10 +1103,13 @@ export function StockPanel({
                 >
                 {analysisTab === 'indicator' && <>
                 <StockTechnicalPanel
+                  selectedPattern={selectedPattern?.id}
+                  onPatternSelect={pattern => setPatternChoice(pattern && displayAnalysisResponse ? { context: patternContext, rows: displayAnalysisResponse.rows, pattern } : null)}
+                  symbol={symbol}
+                  name={name}
                   rows={displayAnalysisResponse?.rows ?? []}
-                  technicalScores={displayAnalysisResponse?.technical_scores}
                   period={period}
-                  selectedDate={effectiveSelectedBarKey}
+                  selectedDate={chanlunCutoff}
                   assetType={analysisAssetType}
                   isLoading={analysisLoading}
                   error={analysisError}

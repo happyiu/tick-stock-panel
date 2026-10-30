@@ -13,6 +13,8 @@ const indicatorQuerySuffix = (value?: ChartIndicatorRequest) => value?.ids.lengt
 // ===== Query Key 工厂 =====
 
 export const QK = {
+  trendPatterns: (symbol: string, asset: string, period: string, asOf: string | null, rows: unknown) => ['trend-patterns', 'trend-pattern-v2', symbol, asset, period, asOf, rows] as const,
+  patternCatalog: ['pattern-catalog', 'trend-pattern-v2'] as const,
   wave: (symbol: string, asset: string, asOf: string, revision: number) => ['wave', 'wave-v3-alpha-0.14.3-r1-comparison-v2', symbol, asset, asOf, revision] as const,
   dow: (symbol: string, asset: string, period: string, asOf: string, revision: number) => ['dow', symbol, asset, period, asOf, revision] as const,
   indicatorMonitors: ['indicator-monitors'] as const,
@@ -61,7 +63,7 @@ export const QK = {
 
   // Screener
   screener:             ['screener'] as const,
-  screenerStrategies:   (assetType: string = 'stock', timeframe: '1d' | '1w' | '30m' | '1m' | 'all' = '1d') => ['screener-strategies', assetType, timeframe] as const,
+  screenerStrategies:   (assetType: string = 'stock', timeframe: '1d' | '1w' | '30m' | '1m' | 'all' = '1d', chart = false) => ['screener-strategies', assetType, timeframe, ...(chart ? ['chart'] : [])] as const,
   screenerCachedSummary: ['screener-cached', 'summary'] as const,
   screenerCachedResult: (strategyId: string, asOf?: string, ext?: string) => ['screener-cached', 'strategy', strategyId, asOf ?? '', ext ?? ''] as const,
   screenerCached:       (asOf?: string, ext?: string) => ['screener-cached', 'all', asOf ?? '', ext ?? ''] as const,

@@ -44,6 +44,19 @@ async function click(label: string) {
   await act(async () => button!.click())
 }
 
+it('菜单按用途分为五组，每个工具只出现一次且可直接选择', async () => {
+  await render()
+  await click('画线')
+  const groups = [...host.querySelectorAll('[role="group"]')]
+  expect(groups.map(group => group.getAttribute('aria-label'))).toEqual(['趋势线', '价格与时间线', '通道', '斐波那契', '自由绘制'])
+  expect(groups.map(group => [...group.querySelectorAll('button')].map(button => button.textContent))).toEqual([
+    ['趋势线', '射线', '直线'], ['水平线', '水平射线', '垂直线'], ['价格通道', '平行线'], ['斐波那契'], ['画笔'],
+  ])
+  await click('平行线')
+  expect(overlays[0].name).toBe('parallelStraightLine')
+  expect(host.querySelector('[role="dialog"]')).toBeNull()
+})
+
 it('坐标恢复拒绝未知工具、损坏数据和非有限值', () => {
   expect(normalizeDrawings(null)).toEqual([])
   expect(normalizeDrawings([null, {}, { name: 'system', points }, { name: 'segment', points: [points[0]] },
@@ -122,4 +135,19 @@ it('工具创建失败可重试，不写入未完成记录', async () => {
   await click('趋势线')
   expect(overlays).toHaveLength(1)
   expect(host.textContent).toContain('Esc取消')
+})
+
+it('测量完成保存，重新打开恢复，并可删除', async () => {
+  await render()
+  expect([...host.querySelectorAll('button')].slice(0, 2).map(button => button.textContent)).toEqual(['测量', '画线'])
+  await click('测量')
+  const measurement = overlays[0]
+  await act(async () => { measurement.points = points; measurement.onDrawEnd?.({ overlay: measurement } as never) })
+  expect(storage.chartDrawings('A', '1d').get([])).toEqual([{ name: 'TSP_MEASUREMENT', points, lock: false }])
+  await act(async () => root.render(null))
+  await render()
+  expect(overlays[0]).toMatchObject({ name: 'TSP_MEASUREMENT', points })
+  await act(async () => overlays[0].onSelected?.({ overlay: overlays[0] } as never))
+  await click('删除')
+  expect(storage.chartDrawings('A', '1d').get([])).toEqual([])
 })

@@ -276,6 +276,8 @@ class Interpreter:
         return int(value)
 
     def pivot_levels(self, args):
+        from app.indicators.pivots import pivot_candidate
+
         source, left_values, right_values, directions = args
         if isinstance(source, str):
             raise FormulaError('DRAWPIVOT价格序列必须为数值')
@@ -290,6 +292,7 @@ class Interpreter:
         values = pl.Series([v if closed and math.isfinite(v) else None
                             for v, closed in zip(source, self.closed, strict=True)], dtype=pl.Float64)
         rolling = values.rolling_max if direction == 1 else values.rolling_min
+        confirmed_values = values.to_list()
         extremes = rolling(window).to_list()
         right_extremes = rolling(right).to_list()
         breaks = self.env['HIGH' if direction == 1 else 'LOW']
@@ -309,7 +312,8 @@ class Interpreter:
                 continue
             pivot = i-right
             value = source[pivot]
-            if (direction * value < direction * extremes[i]
+            if (not pivot_candidate(confirmed_values, pivot, direction, left, right)
+                    or direction * value < direction * extremes[i]
                     or direction * value <= direction * right_extremes[i]
                     or direction * current > direction * value or value in active):
                 continue

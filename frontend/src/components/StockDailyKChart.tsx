@@ -84,6 +84,8 @@ interface Props {
   /** 技术分析模式下附带后端统一评分序列。 */
   includeTechnicalScores?: boolean
   /** 当前周期、当前历史截面的缠论结构近似结果；未传入时不显示相关控件和覆盖层。 */
+  patternHit?: import("@/lib/trendPatterns").PatternHit
+  onClearPattern?: () => void
   waveCandidate?: import("@/lib/wave").WaveCandidate
   dowAnalysis?: import("@/lib/dow").DowAnalysis
   chanlunAnalysis?: ChanlunAnalysis
@@ -100,7 +102,7 @@ interface Props {
   /** 清除当前图表上的策略选择。 */
   onClearStrategy?: () => void
   /** 编辑当前周期的已选信号。 */
-  onAddSignal?: (assetType: 'stock' | 'etf', period: KlinePeriod) => void
+  onAddSignal?: (assetType: 'stock' | 'etf' | 'index', period: KlinePeriod) => void
   /** 当前已选中的信号库信号；其命中会叠加在 K 线上。 */
   selectedSignals?: ChartSignalSelectionModel[]
   /** 清除当前图表上的信号选择。 */
@@ -232,6 +234,7 @@ function StockDailyKChartView({
   period = '1d',
   periodDays = DEFAULT_30M_DAYS,
   includeTechnicalScores = false,
+  patternHit, onClearPattern,
   waveCandidate,
   dowAnalysis,
   chanlunAnalysis,
@@ -270,7 +273,7 @@ function StockDailyKChartView({
     [kline.data?.rows, period, visibleThrough],
   )
   const rows = useMemo(() => toOHLC(displayRawRows, period), [displayRawRows, period])
-  const chartAssetType = kline.data?.asset_type === 'stock' || kline.data?.asset_type === 'etf'
+  const chartAssetType = kline.data?.asset_type === 'stock' || kline.data?.asset_type === 'etf' || kline.data?.asset_type === 'index'
     ? kline.data.asset_type
     : undefined
   const strategyTimeframe: '1d' | '1w' | '30m' | null = period === '1mo' ? null : period
@@ -383,7 +386,7 @@ function StockDailyKChartView({
   }, [period, selectedSignals, signalChartQuery.data?.markers, visibleThrough])
   const stockInfo = kline.data?.stock_info
   const limitMarkers = useMemo(() => buildLimitUpMarkers(displayRawRows), [displayRawRows])
-  const effectiveShowLimitMarkers = showLimitMarkers && period === '1d' && kline.data?.asset_type !== 'etf'
+  const effectiveShowLimitMarkers = showLimitMarkers && period === '1d' && kline.data?.asset_type === 'stock'
   const allMarkers = useMemo(() => [
     ...(markers ?? []),
     ...(effectiveShowLimitMarkers ? limitMarkers : []),
@@ -412,7 +415,7 @@ function StockDailyKChartView({
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           {showIndicatorControls && (<>
             <ChartIndicatorMenu allowMA={showMA} activeIndicators={effectiveMA ? ['ma', ...activeIndicators] : activeIndicators} onToggle={toggleIndicator}
-              monitorContext={chartAssetType && (period === '30m' || period === '1d') ? { symbol, asset_type: chartAssetType, period, compare_days: volumeCompare.days } : undefined} />
+              monitorContext={chartAssetType && chartAssetType !== 'index' && (period === '30m' || period === '1d') ? { symbol, asset_type: chartAssetType, period, compare_days: volumeCompare.days } : undefined} />
           {chanlunAnalysis && (
             <div
               className="relative ml-0.5 flex items-center"
@@ -646,6 +649,8 @@ function StockDailyKChartView({
           }
           addedDate={showAddedMark ? addedDate : null}
           dowAnalysis={dowAnalysis}
+          patternHit={patternHit}
+          onClearPattern={onClearPattern}
           waveCandidate={waveCandidate}
           chanlunAnalysis={chanlunAnalysis}
           chanlunError={chanlunError}

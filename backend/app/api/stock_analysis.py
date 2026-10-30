@@ -15,12 +15,12 @@ from __future__ import annotations
 import json
 import math
 from datetime import date, timedelta
-from typing import Annotated
+from typing import Annotated, Literal
 
 import polars as pl
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, FiniteFloat
 
 from app.indicators.levels import LEVEL_TYPES, compute_levels, summarize_levels
 from app.market_time import cn_now, cn_today
@@ -35,6 +35,51 @@ from app.services.stock_chat import (
 )
 
 router = APIRouter(prefix="/api/stock-analysis", tags=["stock-analysis"])
+
+
+class PatternCandle(BaseModel):
+    date: str = Field(max_length=32)
+    open: FiniteFloat
+    high: FiniteFloat
+    low: FiniteFloat
+    close: FiniteFloat
+    volume: FiniteFloat | None = None
+    is_closed: bool
+    period_end: str | None = Field(default=None, max_length=32)
+
+
+class TrendPatternRequest(BaseModel):
+    symbol: str = Field(min_length=1, max_length=32)
+    name: str = Field(default='', max_length=100)
+    period: Literal['1d', '1w', '1mo', '30m'] = '1d'
+    as_of: str | None = Field(default=None, max_length=32)
+    n: int = Field(default=250, ge=30, le=1500)
+    tail: int = Field(default=160, ge=1, le=1500)
+    rows: list[PatternCandle] = Field(max_length=1500)
+
+
+@router.post('/trend-patterns')
+def analyze_trend_patterns(body: TrendPatternRequest):
+    """Analyze the same normalized candle snapshot displayed by the chart.
+
+    Returns candles/indicators/trend/swings/levels/patterns/verdict. No separate
+    upstream fetch, persistence, or dependency on the legacy technical score.
+    """
+    from app.services.trend_patterns import analyze
+
+    try:
+        return analyze([row.model_dump(exclude_none=True) for row in body.rows], symbol=body.symbol,
+                       name=body.name, period=body.period, as_of=body.as_of, n=body.n, tail=body.tail)
+    except (ValueError, TypeError, KeyError, OverflowError) as exc:
+        raise HTTPException(status_code=422, detail='K线日期、顺序、价格或成交量无效') from exc
+
+
+@router.get('/pattern-catalog')
+def pattern_catalog():
+    """84 teaching patterns; example prices are separate from live analysis."""
+    from app.services.trend_patterns import VERSION, catalog
+
+    return {'version': VERSION, 'items': catalog()}
 
 
 def _to_float_list(series: pl.Series) -> list:

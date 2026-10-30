@@ -5,11 +5,12 @@ import { Modal } from '@/components/Modal'
 import { api, type KlinePeriod, type StrategyDetail, type StrategyTimeframe } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 
-type StrategyAssetType = 'stock' | 'etf'
+type StrategyAssetType = 'stock' | 'etf' | 'index'
 
 const ASSET_TYPE_LABEL: Record<StrategyAssetType, string> = {
   stock: '股票',
   etf: 'ETF',
+  index: '指数',
 }
 
 const PERIOD_LABEL: Record<KlinePeriod, string> = {
@@ -44,8 +45,8 @@ export function StrategyPickerDialog({ open, assetType, period, onClose, onSelec
   const timeframe = strategyTimeframeForPeriod(period)
   const queryTimeframe = timeframe ?? 'all'
   const strategiesQuery = useQuery({
-    queryKey: QK.screenerStrategies(assetType, queryTimeframe),
-    queryFn: () => api.screenerStrategies(assetType, queryTimeframe),
+    queryKey: QK.screenerStrategies(assetType, queryTimeframe, assetType === 'index'),
+    queryFn: () => api.screenerStrategies(assetType, queryTimeframe, assetType === 'index'),
     enabled: open && timeframe != null,
   })
 

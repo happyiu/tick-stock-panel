@@ -14,8 +14,8 @@ interface Props {
   rows: KlineRow[]
   assetType?: string
   period?: KlinePeriod
-  onAddStrategy?: (assetType: 'stock' | 'etf', period: KlinePeriod) => void
-  onAddSignal?: (assetType: 'stock' | 'etf', period: KlinePeriod) => void
+  onAddStrategy?: (assetType: 'stock' | 'etf' | 'index', period: KlinePeriod) => void
+  onAddSignal?: (assetType: 'stock' | 'etf' | 'index', period: KlinePeriod) => void
   /** 加监控回调 (个股弹窗传入, 有值时渲染 RadioTower 图标) */
   onMonitor?: () => void
   /** 自选状态与操作（传入对应回调时渲染 Star 图标） */
@@ -67,7 +67,7 @@ export function StockInfoBar({
 
   const displayName = stockInfo?.name ?? name ?? ''
   const extUrl = buildStockExternalUrl(loadStockExternalTemplate(), symbol)
-  const chartAssetType = assetType === 'stock' || assetType === 'etf' ? assetType : undefined
+  const chartAssetType = assetType === 'stock' || assetType === 'etf' || assetType === 'index' ? assetType : undefined
   const canAddStrategy = Boolean(chartAssetType && period && onAddStrategy)
   const canAddSignal = Boolean(chartAssetType && period && onAddSignal)
 
@@ -92,8 +92,8 @@ export function StockInfoBar({
             <button
               type="button"
               onClick={() => onAddStrategy?.(chartAssetType!, period!)}
-              title={`添加${chartAssetType === 'etf' ? ' ETF' : '股票'}策略`}
-              aria-label={`添加${chartAssetType === 'etf' ? ' ETF' : '股票'}策略`}
+              title={`添加${chartAssetType === 'index' ? '指数' : chartAssetType === 'etf' ? ' ETF' : '股票'}策略`}
+              aria-label={`添加${chartAssetType === 'index' ? '指数' : chartAssetType === 'etf' ? ' ETF' : '股票'}策略`}
               className="inline-flex shrink-0 items-center gap-1 rounded border border-accent/30 bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent transition-colors hover:border-accent/50 hover:bg-accent/15"
             >
               <Plus className="h-3 w-3" />

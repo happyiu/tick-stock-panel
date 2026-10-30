@@ -7,17 +7,18 @@ import { StockPanel } from './StockPanel'
 import type { CandlestickProps } from '@/lib/kline-chart'
 import type { StockLevels } from '@/lib/api'
 import { emptyChanlunAnalysis } from '@/lib/chanlun'
-const state = vi.hoisted(() => ({ chart: {} as CandlestickProps, levels: vi.fn(), chanlun: vi.fn(), daily: vi.fn(), catalog: vi.fn() }))
+const state = vi.hoisted(() => ({ technical: {} as import('./StockTechnicalPanel').StockTechnicalPanelProps, chart: {} as CandlestickProps, levels: vi.fn(), chanlun: vi.fn(), daily: vi.fn(), catalog: vi.fn(), wave: vi.fn(), asset: 'etf' }))
 vi.mock('@/lib/api', async importOriginal => ({
   ...await importOriginal<typeof import('@/lib/api')>(),
   api: {
     chartIndicators: state.catalog,
-    klineDaily: async (symbol: string, _days: unknown, _range: unknown, _ext: unknown, _scores: unknown, chanlun: unknown, indicators: unknown) => { if (!chanlun) state.daily(symbol, indicators); return ({ asset_type: 'etf', chanlun: chanlun ? await state.chanlun(symbol, '1d', chanlun) : undefined, rows: [
+    klineDaily: async (symbol: string, _days: unknown, _range: unknown, _ext: unknown, _scores: unknown, chanlun: unknown, indicators: unknown) => { if (!chanlun) state.daily(symbol, indicators); return ({ asset_type: state.asset, chanlun: chanlun ? await state.chanlun(symbol, '1d', chanlun) : undefined, rows: [
       { date: '2026-10-14', open: 0.49, high: 0.5, low: 0.48, close: 0.49 },
       { date: '2026-10-15', open: 0.49, high: 0.5, low: 0.48, close: 0.497 },
     ] }) },
-    klinePeriod: async (symbol: string, period: string, _range: unknown, _days: unknown, _scores: unknown, chanlun: unknown) => ({ asset_type: 'etf', chanlun: chanlun ? await state.chanlun(symbol, period, chanlun) : undefined, rows: [{ date: '2026-10-15', open: 0.49, high: 0.5, low: 0.48, close: 0.497 }] }),
+    klinePeriod: async (symbol: string, period: string, _range: unknown, _days: unknown, _scores: unknown, chanlun: unknown) => ({ asset_type: state.asset, chanlun: chanlun ? await state.chanlun(symbol, period, chanlun) : undefined, rows: [{ date: '2026-10-15', open: 0.49, high: 0.5, low: 0.48, close: 0.497 }] }),
     stockAnalysisLevels: state.levels,
+    waveAnalysis: state.wave,
   },
 }))
 vi.mock('./KLineCandlestick', async importOriginal => ({
@@ -26,7 +27,7 @@ vi.mock('./KLineCandlestick', async importOriginal => ({
 }))
 vi.mock('./StockInfoBar', () => ({ StockInfoBar: () => null }))
 vi.mock('./StockIntradayChart', () => ({ StockIntradayChart: () => null }))
-vi.mock('./StockTechnicalPanel', () => ({ StockTechnicalPanel: () => null }))
+vi.mock('./StockTechnicalPanel', () => ({ StockTechnicalPanel: (props: import('./StockTechnicalPanel').StockTechnicalPanelProps) => { state.technical = props; return null } }))
 vi.mock('./StockAiChatPanel', () => ({ StockAiChatPanel: () => null }))
 vi.mock('@/lib/useSharedQueries', () => ({ useQuoteStatus: () => ({}) }))
 const levels: StockLevels = {
@@ -46,7 +47,9 @@ const levels: StockLevels = {
 let host: HTMLDivElement, root: ReturnType<typeof createRoot>, client: QueryClient
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  state.asset = 'etf'
   localStorage.clear(); state.daily.mockClear(); state.catalog.mockReset().mockResolvedValue({ items: ['ma', 'vol'].map(id => ({ id, name: id === 'ma' ? 'MA 均线' : '成交量', source: 'custom', pane: id === 'ma' ? 'main' : 'sub', revision: 1, formula: '', description: '', height: 100 })), errors: [] }); state.levels.mockReset().mockResolvedValue(levels)
+  state.wave.mockReset().mockResolvedValue({ periods: { '1d': { counts: [] } }, saved: true })
   state.chanlun.mockReset().mockResolvedValue(emptyChanlunAnalysis())
   client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 5_000 } } })
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
@@ -64,7 +67,7 @@ async function click(label: string, role = 'button') {
 }
 it('关键价位位于缠论结构右边，按需加载，点击画线和曲线，再点移除，保留原有标线', async () => {
   await render({ priceLines: [{ value: 0.48, label: '自定义' }] })
-  expect([...host.querySelectorAll('[role="tab"]')].map(tab => tab.textContent)).toEqual(['指标分析', '缠论结构', '关键价位', 'AI分析'])
+  expect([...host.querySelectorAll('[role="tab"]')].map(tab => tab.textContent)).toEqual(['指标分析', '缠论结构', '道氏趋势', '波浪分析', '关键价位', 'AI分析'])
   expect(state.levels).not.toHaveBeenCalled()
   await click('关键价位', 'tab')
   expect(state.levels).toHaveBeenCalledWith('512000.SH', 250, '2026-10-15')
@@ -214,4 +217,56 @@ it('右侧概览的推演开关联动主图，切换对照卡片不改主图周�
   state.chanlun.mockResolvedValue(emptyChanlunAnalysis())
   await render({ symbol: 'A', period: '1w' })
   expect(toggle().disabled).toBe(true)
+})
+
+it('切换波浪候选同步主图，关闭后再次选择会显示标注，切股不沿用选择', async () => {
+  const base = { direction: 'up', stage: '5', status: 'valid', points: [{date: '2026-10-14',confirmedAt: '2026-10-15',value: .48,label: '0'}, {date: '2026-10-15',confirmedAt: '2026-10-15',value: .5,label: '5'}], rules: [], nextCondition: '等待确认', invalidation: { value: .5, direction: 'above', reason: '后续假设' } }
+  state.wave.mockResolvedValue({ snapshotId: 'snapshot', periods: { '1d': { counts: [{...base, id: 'primary', pattern: 'ending_diagonal'}, {...base, id: 'alternate', pattern: 'leading_diagonal'}], issues: [], invalidated: [] } }, saved: true })
+  await render()
+  await click('波浪分析', 'tab'); await settle()
+  expect(state.chart.waveCandidate).toBeUndefined()
+  await click('备选1：起始楔形')
+  expect(state.chart.waveCandidate?.id).toBe('alternate')
+  expect(host.textContent).toContain('当前查看：备选1 · 起始楔形')
+  expect(host.textContent).toContain('与主数浪共用相同拐点')
+  await click('主图波浪标注：已显示')
+  expect(state.chart.waveCandidate).toBeUndefined()
+  await click('主数浪：终结楔形')
+  expect(state.chart.waveCandidate?.id).toBe('primary')
+  await render({symbol: '159992.SZ'})
+  expect(state.chart.waveCandidate).toBeUndefined()
+})
+
+
+it('指数复用全部分析页签、指标菜单与缠论覆盖层', async () => {
+  state.asset = 'index'
+  await render({ symbol: '000001.SH' })
+  expect([...host.querySelectorAll('[role="tab"]')].map(tab => tab.textContent)).toEqual(['指标分析', '缠论结构', '道氏趋势', '波浪分析', '关键价位', 'AI分析'])
+  expect(host.textContent).toContain('指标')
+  expect(host.textContent).toContain('缠论')
+  await click('缠论结构', 'tab')
+  expect(state.chanlun.mock.calls.some(call => call[0] === '000001.SH' && call[1] === '1w')).toBe(true)
+  expect(state.chanlun.mock.calls.some(call => call[0] === '000001.SH' && call[1] === '30m')).toBe(true)
+  expect(host.textContent).not.toContain('指数暂不支持30分钟结构分析')
+  await click('关键价位', 'tab')
+  expect(state.levels).toHaveBeenCalledWith('000001.SH', 250, '2026-10-15')
+})
+
+it('形态选择保留分析截面，切页签保留，刷新和切股清除', async () => {
+  await render()
+  const hit = { id: 'double_bottom', name: '双底' } as import('@/lib/trendPatterns').PatternHit
+  await act(async () => state.technical.onPatternSelect?.(hit)); await settle()
+  expect(state.chart.patternHit?.id).toBe('double_bottom')
+  const date = state.chart.selectedDate
+  await click('缠论结构', 'tab')
+  expect(state.chart.patternHit?.id).toBe('double_bottom')
+  expect(state.chart.selectedDate).toBe(date)
+  await click('立即计算右侧分析')
+  expect(state.chart.patternHit).toBeUndefined()
+  await click('指标分析', 'tab')
+  await act(async () => state.technical.onPatternSelect?.(hit)); await settle()
+  await render({ symbol: '159915.SZ' })
+  expect(state.chart.patternHit).toBeUndefined()
+  await render()
+  expect(state.chart.patternHit).toBeUndefined()
 })

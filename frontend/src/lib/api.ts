@@ -3501,6 +3501,11 @@ export const api = {
     }),
 
   capabilities: () => request<CapabilitiesResponse>('/api/capabilities'),
+  analyzeTrendPatterns: (symbol: string, period: KlinePeriod, asOf: string | null, rows: import('./trendPatterns').TrendPatternInputCandle[], name = '') =>
+    request<import('./trendPatterns').TrendPatternAnalysis>('/api/stock-analysis/trend-patterns', {
+      method: 'POST', body: JSON.stringify({ symbol, name, period, as_of: asOf, rows }),
+    }),
+  patternCatalog: () => request<{ version: string; items: import('./trendPatterns').TeachingPattern[] }>('/api/stock-analysis/pattern-catalog'),
   version: () => request<{ version: string }>('/api/data/version'),
   redetectCapabilities: () =>
     request<CapabilitiesResponse>('/api/capabilities/redetect', { method: 'POST' }),
@@ -3787,9 +3792,9 @@ export const api = {
     ),
 
   // timeframe='all' 时不传参数 → 后端不过滤周期, 返回所有周期策略
-  screenerStrategies: async (assetType?: 'stock' | 'etf' | 'index', timeframe: '1d' | '1w' | '30m' | '1m' | 'all' = '1d') => {
+  screenerStrategies: async (assetType?: 'stock' | 'etf' | 'index', timeframe: '1d' | '1w' | '30m' | '1m' | 'all' = '1d', chart = false) => {
     const data = await request<{ strategies: StrategyDetail[]; load_errors?: StrategyLoadError[] }>(
-      `/api/strategies?${assetType ? `asset_type=${assetType}&` : ''}${timeframe !== 'all' ? `timeframe=${timeframe}` : ''}`,
+      `/api/strategies?${assetType ? `asset_type=${assetType}&` : ''}${timeframe !== 'all' ? `timeframe=${timeframe}` : ''}${chart ? '&chart=true' : ''}`,
     )
     return { presets: data.strategies, load_errors: data.load_errors }
   },
@@ -4813,7 +4818,7 @@ export const api = {
   strategySignals: (
     strategyId: string,
     symbol: string,
-    assetType: 'stock' | 'etf',
+    assetType: 'stock' | 'etf' | 'index',
     timeframe: '1d' | '1w' | '30m',
     range: { start: string; end: string },
     days = 20,
@@ -4834,7 +4839,7 @@ export const api = {
   signalChartMarkers: (
     signalIds: string[],
     symbol: string,
-    assetType: 'stock' | 'etf',
+    assetType: 'stock' | 'etf' | 'index',
     timeframe: KlinePeriod,
     range: { start: string; end: string },
     days = 20,

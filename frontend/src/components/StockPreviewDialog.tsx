@@ -258,7 +258,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
   const [findFeelPhase, setFindFeelPhase] = useState<'setup' | 'playing' | 'finished'>('setup')
   const [showMonitorEditor, setShowMonitorEditor] = useState(false)
   const [strategyPicker, setStrategyPicker] = useState<{
-    assetType: 'stock' | 'etf'
+    assetType: 'stock' | 'etf' | 'index'
     period: KlinePeriod
   } | null>(null)
   const [selectedStrategy, setSelectedStrategy] = useState<StrategyDetail | null>(null)
@@ -695,7 +695,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
     setSelectedSignals([])
   }
 
-  const handleOpenStrategyPicker = useCallback((nextAssetType: 'stock' | 'etf', nextPeriod: KlinePeriod) => {
+  const handleOpenStrategyPicker = useCallback((nextAssetType: 'stock' | 'etf' | 'index', nextPeriod: KlinePeriod) => {
     if (findFeelLocked) return
     setStrategyPicker({ assetType: nextAssetType, period: nextPeriod })
   }, [findFeelLocked])
@@ -705,7 +705,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
     setStrategyPicker(null)
   }, [])
 
-  const handleOpenSignalPicker = useCallback((_nextAssetType: 'stock' | 'etf', nextPeriod: KlinePeriod) => {
+  const handleOpenSignalPicker = useCallback((_nextAssetType: 'stock' | 'etf' | 'index', nextPeriod: KlinePeriod) => {
     if (findFeelLocked) return
     setSignalPicker({ period: nextPeriod })
   }, [findFeelLocked])
@@ -910,7 +910,6 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                     )}
                     <div className="inline-flex shrink-0 items-center rounded border border-border bg-elevated p-0.5" aria-label="K线周期">
                       {KLINE_PERIOD_OPTIONS
-                        .filter(option => assetType !== 'index' || option.value === '1d')
                         .map(option => (
                           <button
                             key={option.value}
@@ -1333,6 +1332,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
         <ChartSignalPickerDialog
           open
           period={signalPicker.period}
+          assetType={assetType}
           selected={selectedSignals}
           onClose={() => setSignalPicker(null)}
           onApply={handleSignalsApplied}

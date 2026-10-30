@@ -21,6 +21,7 @@ META = {
     "description": "MACD金叉当日 + 量能放大",
     "tags": ["MACD", "金叉", "放量"],
     "asset_types": ["stock", "etf"],
+    "chart_asset_types": ["index"],
     "timeframes": ["1d"],
     "params": [
         {"id": "require_macd_golden", "label": "要求MACD金叉", "type": "bool", "default": True},

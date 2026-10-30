@@ -6,6 +6,7 @@ import { expect, it, vi } from 'vitest'
 import { ChartSignalPickerDialog } from './ChartSignalPickerDialog'
 
 vi.mock('@/lib/api', () => ({ api: { customSignalsList: async () => ({ signals: [
+  { id: 'limit-wrapper', name: '自定义涨停', kind: 'entry', enabled: true, conditions: [{ left: 'signal_limit_up', op: '==', right: '1' }] },
   { id: 'formula', name: '公式进攻', kind: 'entry', enabled: true, definition_type: 'formula', conditions: [] },
   { id: 'condition', name: '条件进攻', kind: 'entry', enabled: true, conditions: [] },
 ] }) } }))
@@ -44,6 +45,22 @@ it.each(['1d', '30m', '1w', '1mo'] as const)('limits formula selections to daily
     for (let i = 0; i < 3; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
     expect(host.textContent).toContain('条件进攻')
     expect(host.textContent?.includes('公式进攻')).toBe(period === '1d' || period === '30m')
+  } finally {
+    await act(async () => root.unmount()); client.clear(); host.remove()
+  }
+})
+
+it('index charts expose price signals and exclude stock price-limit signals', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  const host = document.createElement('div'); document.body.append(host)
+  const root = createRoot(host)
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  try {
+    await act(async () => root.render(<QueryClientProvider client={client}><ChartSignalPickerDialog open assetType="index" period="1d" selected={[]} onClose={() => {}} onApply={() => {}} /></QueryClientProvider>))
+    expect(host.textContent).toContain('signal_macd_golden')
+    expect(host.textContent).not.toContain('signal_limit_up')
+    expect(host.textContent).not.toContain('signal_limit_down')
+    expect(host.textContent).not.toContain('自定义涨停')
   } finally {
     await act(async () => root.unmount()); client.clear(); host.remove()
   }

@@ -18,6 +18,7 @@ META = {
     "description": "MA5上穿MA20当日触发, 量能配合",
     "tags": ["均线", "金叉"],
     "asset_types": ["stock", "etf"],
+    "chart_asset_types": ["index"],
     "timeframes": ["1d"],
     "params": [
         {"id": "require_ma_golden", "label": "要求MA5上穿MA20", "type": "bool", "default": True},

@@ -1,3 +1,4 @@
+import { buildPatternOverlays, PATTERN_GROUP, patternZoneTemplate } from '@/lib/kline-chart-patterns'
 import { waveLegLabel, waveSegmentTemplate } from '@/lib/kline-chart-wave'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -27,6 +28,7 @@ chartIndicators.forEach(indicator => registerIndicator(indicator))
 formulaIndicators.forEach(indicator => registerIndicator(indicator))
 const registeredServerFormulas = new Set<string>()
 const legacyDefinitions = [...DEFAULT_SUB_CHARTS.map(i => ({ ...i, pane: 'sub' as const })), ...DEFAULT_MAIN_CHARTS.map(i => ({ ...i, height: 100, pane: 'main' as const }))].map(i => ({ ...i, id: i.key, name: i.label, source: i.key.startsWith('builtin-') ? 'builtin' : 'custom', revision: 1 }))
+registerOverlay(patternZoneTemplate)
 registerOverlay(waveSegmentTemplate)
 registerOverlay(annotationTemplate)
 registerOverlay(chanlunTemplate)
@@ -41,7 +43,7 @@ export function KLineCandlestick({
   showMA: requestedMA = true, showInfoBar = true, showMarkers = true, stockInfo, symbol = '', linkedPrice,
   onDateClick, onPriceDoubleClick, visibleBars = 60, activeIndicators = EMPTY,
   volumeCompare = DEFAULT_COMPARE, volumeCompareControls, addedDate, assetType, period = '1d', selectedDate,
-  waveCandidate, dowAnalysis, chanlunAnalysis, chanlunOverlay, chanlunError, hideCurrentDate = false, projectionEnabled = false, projectionBranchId = null, onProjectionBranchSelect,
+  patternHit, onClearPattern, waveCandidate, dowAnalysis, chanlunAnalysis, chanlunOverlay, chanlunError, hideCurrentDate = false, projectionEnabled = false, projectionBranchId = null, onProjectionBranchSelect,
   priceCurves = EMPTY, priceZones = EMPTY, priceLabelWidth = 0, highlightedKey, onHighlightChange, showRangeSelector = false,
 }: CandlestickProps) {
   const managed = indicatorDefinitions != null
@@ -437,6 +439,7 @@ export function KLineCandlestick({
       createRange: ({ defaultRange }) => {
         const values = priceLines.filter(line => line.affectScale !== false)
           .map(line => line.value).filter(value => Number.isFinite(value) && value > 0)
+        if (patternHit) values.push(...[patternHit.triggerPrice, patternHit.stopPrice, patternHit.targetPrice].filter((value): value is number => value != null && Number.isFinite(value) && value > 0))
         const visible = chart.getVisibleRange()
         const dates = new Set(bars.slice(Math.max(0, visible.from), visible.to).map(bar => bar.date))
         for (const curve of priceCurves) for (const row of curve.data) {
@@ -451,7 +454,26 @@ export function KLineCandlestick({
     chart.removeOverlay({ groupId: ANNOTATION_GROUP })
     const overlays = buildAnnotations(bars, showMarkers ? markers : [], ranges, priceLines.filter(line => !line.key), addedDate, linkedPrice, ct.text, onDateClick, precision)
     if (overlays.length) chart.createOverlay(overlays)
-  }, [bars, markers, ranges, priceLines, priceCurves, showMarkers, addedDate, linkedPrice, theme, onDateClick, precision])
+  }, [bars, markers, ranges, priceLines, priceCurves, patternHit, showMarkers, addedDate, linkedPrice, theme, onDateClick, precision])
+
+  const patternDrawing = useMemo(() => patternHit ? buildPatternOverlays(bars, patternHit, precision) : null, [bars, patternHit, precision])
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    chart.removeOverlay({ groupId: PATTERN_GROUP })
+    if (!hideCurrentDate && patternDrawing?.overlays.length) chart.createOverlay(patternDrawing.overlays)
+    return () => { chart.removeOverlay({ groupId: PATTERN_GROUP }) }
+  }, [patternDrawing, hideCurrentDate, chartInstance])
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart || !patternHit?.geometry || hideCurrentDate) return
+    const from = bars.findIndex(bar => bar.date >= patternHit.geometry!.start.slice(0,16))
+    const to = bars.findLastIndex(bar => bar.date <= patternHit.geometry!.end.slice(0,16))
+    if (from < 0 || to < from) return
+    const width = chart.getSize('candle_pane', 'main')?.width ?? 600
+    chart.setBarSpace(Math.max(0.5, Math.min(40, width / (to - from + 12))))
+    chart.scrollToDataIndex(Math.min(bars.length - 1, to + 5))
+  }, [patternHit, chartInstance, hideCurrentDate])
 
   useEffect(() => {
     const chart = chartRef.current
@@ -669,6 +691,11 @@ export function KLineCandlestick({
     <div className="w-full relative" onMouseLeave={() => { setHover(null); setStructureTooltip(null); onHighlightChange?.(null) }}>
       <div className="mb-2 flex flex-wrap items-start gap-x-3 gap-y-2">
         {toolbarControls}
+        {patternHit && <div className="flex flex-wrap items-center gap-2 text-xs text-accent" role="status">
+          <span>{patternHit.name} · {patternHit.status === 'confirmed' ? '已确认' : '形成中'}</span>
+          {!patternHit.geometry ? <span>缺少结构数据，请刷新分析</span> : patternDrawing?.incomplete ? <span>结构数据不完整</span> : null}
+          <button type="button" onClick={onClearPattern}>取消形态</button>
+        </div>}
         <ChartDrawingToolbar chart={chartInstance} symbol={symbol} period={period} ready={bars.length > 0} hidden={hideCurrentDate} />
       </div>
       {showInfoBar && (

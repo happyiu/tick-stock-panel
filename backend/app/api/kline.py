@@ -747,8 +747,6 @@ def get_period_kline(
     include_analysis = include_technical_scores
     repo = request.app.state.repo
     asset_type = repo.resolve_asset_type(symbol)
-    if asset_type == "index":
-        raise HTTPException(status_code=400, detail="指数周期切换暂未开放")
 
     try:
         end = date.fromisoformat(end_date) if end_date else cn_today()
@@ -783,7 +781,7 @@ def get_period_kline(
 
             native = snapshot.frame
             source = "chart"
-            if start <= cn_today() <= end and in_continuous_session():
+            if asset_type != "index" and start <= cn_today() <= end and in_continuous_session():
                 latest = get_minute(request, symbol=symbol, trade_date=cn_today(), live=True)
                 latest_rows = latest.get("rows", []) if isinstance(latest, dict) else []
                 if latest_rows:
@@ -820,11 +818,12 @@ def get_period_kline(
             return _with_chanlun(_with_chart_indicators(response, request, indicator_ids, indicator_compare_days, history_rows), include_chanlun, chanlun_source, chanlun_as_of, include_dow=include_dow, dow_as_of=dow_as_of)
         # 多取自然日覆盖节假日，最终严格裁成最近 N 个实际交易日。
         scan_start = min(start, end - timedelta(days=days * 3 + 20))
-        minute = repo.get_minute_range([symbol], scan_start, end, asset_type=asset_type)
+        # 指数分钟不落本地库; 只使用声明了原生周期的图表源。
+        minute = pl.DataFrame() if asset_type == "index" else repo.get_minute_range([symbol], scan_start, end, asset_type=asset_type)
         source = "local" if not minute.is_empty() else "none"
 
         # 当日形成中的分钟 K 复用详情分时的 live 路径，覆盖本地增量落盘的滞后尾部。
-        if start <= cn_today() <= end and in_continuous_session():
+        if asset_type != "index" and start <= cn_today() <= end and in_continuous_session():
             latest = get_minute(request, symbol=symbol, trade_date=cn_today(), live=True)
             latest_rows = latest.get("rows", []) if isinstance(latest, dict) else []
             if latest_rows:

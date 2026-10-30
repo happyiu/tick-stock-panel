@@ -19,6 +19,7 @@ const DAILY_ONLY_SIGNAL_IDS = new Set([
   'signal_n_day_low',
 ])
 const MAX_SELECTED_SIGNALS = 32
+const INDEX_LIMIT_FIELDS = new Set(['signal_limit_up', 'signal_limit_down', 'signal_limit_down_recovery', 'signal_broken_limit_up', 'consecutive_limit_ups', 'consecutive_limit_downs'])
 const ETF_UNSUPPORTED_SIGNALS = new Set(['signal_limit_up', 'signal_limit_down', 'signal_limit_down_recovery', 'signal_broken_limit_up'])
 
 const PERIOD_LABEL: Record<KlinePeriod, string> = {
@@ -43,6 +44,7 @@ interface SignalOption extends ChartSignalSelection {
 interface Props {
   open: boolean
   period: KlinePeriod
+  assetType?: 'stock' | 'etf' | 'index'
   selected: ChartSignalSelection[]
   onClose: () => void
   onApply: (signals: ChartSignalSelection[], match?: 'all' | 'any') => void
@@ -50,7 +52,7 @@ interface Props {
   signalMatch?: 'all' | 'any'
 }
 
-export function ChartSignalPickerDialog({ open, period, selected, onClose, onApply, mode = 'chart', signalMatch = 'all' }: Props) {
+export function ChartSignalPickerDialog({ open, period, selected, onClose, onApply, mode = 'chart', signalMatch = 'all', assetType }: Props) {
   const [search, setSearch] = useState('')
   const [scope, setScope] = useState<'selected' | 'all'>('all')
   const [draft, setDraft] = useState<ChartSignalSelection[]>(() => selected.map(item => ({ ...item })))
@@ -64,12 +66,14 @@ export function ChartSignalPickerDialog({ open, period, selected, onClose, onApp
 
   const builtinOptions = useMemo<SignalOption[]>(() => (
     BUILTIN_SIGNAL_DEFINITIONS
+      .filter(signal => assetType !== 'index' || !ETF_UNSUPPORTED_SIGNALS.has(signal.id))
       .filter(signal => period === '1d' || !DAILY_ONLY_SIGNAL_IDS.has(signal.id))
       .map(signal => ({ ...signal }))
-  ), [period])
+  ), [period, assetType])
 
   const customOptions = useMemo<SignalOption[]>(() => {
     return (customSignalsQuery.data?.signals ?? [])
+      .filter(signal => assetType !== 'index' || !signal.conditions.some(condition => INDEX_LIMIT_FIELDS.has(condition.left) || INDEX_LIMIT_FIELDS.has(condition.right.replace(/^field:/, ''))))
       .filter(signal => signal.enabled && (signal.timeframe ?? 'daily') === 'daily')
       .filter(signal => signal.definition_type !== 'formula' || period === '1d' || period === '30m')
       .map(signal => ({
@@ -80,7 +84,7 @@ export function ChartSignalPickerDialog({ open, period, selected, onClose, onApp
         description: signal.definition_type === 'formula' ? '来自信号库的公式信号，支持日线和 30F。' : '来自信号库的自定义条件信号，按当前 K 线周期计算。',
         custom: true,
       }))
-  }, [customSignalsQuery.data?.signals, period])
+  }, [customSignalsQuery.data?.signals, period, assetType])
 
   const selectedIds = useMemo(() => new Set(draft.map(signal => signal.id)), [draft])
   const groups = useMemo(() => {

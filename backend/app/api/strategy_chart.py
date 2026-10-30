@@ -18,7 +18,7 @@ router = APIRouter(prefix="/api/strategy-chart", tags=["strategy-chart"])
 def get_signal_chart_markers(
     request: Request,
     symbol: str = Query(..., description="标的代码"),
-    asset_type: Literal["stock", "etf"] = Query(..., description="资产类型"),
+    asset_type: Literal["stock", "etf", "index"] = Query(..., description="资产类型"),
     timeframe: Literal["1d", "1w", "30m", "1mo"] = Query("1d", description="K线周期"),
     start_date: date = Query(..., description="展示起始日期"),
     end_date: date = Query(..., description="展示截止日期"),
@@ -79,7 +79,7 @@ def get_strategy_chart_signals(
     strategy_id: str,
     request: Request,
     symbol: str = Query(..., description="标的代码"),
-    asset_type: Literal["stock", "etf"] = Query(..., description="资产类型"),
+    asset_type: Literal["stock", "etf", "index"] = Query(..., description="资产类型"),
     timeframe: Literal["1d", "1w", "30m"] = Query("1d", description="K线周期"),
     start_date: date = Query(..., description="展示起始日期"),
     end_date: date = Query(..., description="展示截止日期"),
@@ -98,7 +98,7 @@ def get_strategy_chart_signals(
     if strategy.meta.get("research_only"):
         raise HTTPException(status_code=404, detail=f"unknown strategy: {strategy_id}")
 
-    supported_assets = strategy.meta.get("asset_types", ["stock"])
+    supported_assets = [*strategy.meta.get("asset_types", ["stock"]), *strategy.meta.get("chart_asset_types", [])]
     if asset_type not in supported_assets:
         raise HTTPException(
             status_code=400,

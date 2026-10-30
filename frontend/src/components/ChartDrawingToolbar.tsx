@@ -2,20 +2,29 @@ import { useEffect, useRef, useState } from 'react'
 import type { Chart, OverlayCreate, OverlayMode, Point } from 'klinecharts'
 import { Pencil, MousePointer2, Magnet, LockKeyhole, Trash2, X } from 'lucide-react'
 import { storage } from '@/lib/storage'
+import { MEASUREMENT_NAME, snapMeasurement } from '@/lib/kline-chart-measurement'
 
 export const DRAWING_GROUP = 'tsp-user-drawings'
-export const DRAWING_TOOLS = [
-  { name: 'segment', label: '趋势线', points: 2 },
-  { name: 'horizontalStraightLine', label: '水平线', points: 1 },
-  { name: 'horizontalRayLine', label: '水平射线', points: 1 },
-  { name: 'rayLine', label: '射线', points: 2 },
-  { name: 'straightLine', label: '直线', points: 2 },
-  { name: 'verticalStraightLine', label: '垂直线', points: 1 },
-  { name: 'priceChannelLine', label: '价格通道', points: 3 },
-  { name: 'parallelStraightLine', label: '平行线', points: 3 },
-  { name: 'fibonacciLine', label: '斐波那契', points: 2 },
-  { name: 'brush', label: '画笔', points: 2 },
+const DRAWING_TOOL_GROUPS = [
+  { label: '趋势线', tools: [
+    { name: 'segment', label: '趋势线', points: 2 },
+    { name: 'rayLine', label: '射线', points: 2 },
+    { name: 'straightLine', label: '直线', points: 2 },
+  ] },
+  { label: '价格与时间线', tools: [
+    { name: 'horizontalStraightLine', label: '水平线', points: 1 },
+    { name: 'horizontalRayLine', label: '水平射线', points: 1 },
+    { name: 'verticalStraightLine', label: '垂直线', points: 1 },
+  ] },
+  { label: '通道', tools: [
+    { name: 'priceChannelLine', label: '价格通道', points: 3 },
+    { name: 'parallelStraightLine', label: '平行线', points: 3 },
+  ] },
+  { label: '斐波那契', tools: [{ name: 'fibonacciLine', label: '斐波那契', points: 2 }] },
+  { label: '自由绘制', tools: [{ name: 'brush', label: '画笔', points: 2 }] },
 ]
+export const DRAWING_TOOLS = [...DRAWING_TOOL_GROUPS.flatMap(group => group.tools), { name: MEASUREMENT_NAME, label: '测量', points: 2 }]
+
 type SavedDrawing = { name: string; points: Array<Partial<Point>>; lock: boolean }
 
 /** 只恢复工具名和有限坐标，不从本地存储恢复事件、任意样式或系统覆盖物。 */
@@ -65,12 +74,15 @@ export function ChartDrawingToolbar({ chart, symbol, period, ready, hidden }: {
     }
     const attach = (drawing: OverlayCreate): OverlayCreate => ({
       ...drawing, groupId: DRAWING_GROUP, paneId: 'candle_pane',
+      onDrawing: ({ overlay }) => { snapMeasurement(chart, overlay) },
+      onPressedMoving: ({ overlay }) => { snapMeasurement(chart, overlay) },
       onDrawEnd: ({ overlay }) => {
+        snapMeasurement(chart, overlay)
         pending.current = null; setTool(null); setSelected(overlay.id); save()
       },
       onSelected: ({ overlay }) => { setSelected(overlay.id) },
       onDeselected: ({ overlay }) => { setSelected(current => current === overlay.id ? null : current) },
-      onPressedMoveEnd: () => { save() },
+      onPressedMoveEnd: ({ overlay }) => { snapMeasurement(chart, overlay); save() },
       onRemoved: ({ overlay }) => {
         if (!suppressSave.current) { setSelected(null); save(overlay.id) }
       },
@@ -116,19 +128,24 @@ export function ChartDrawingToolbar({ chart, symbol, period, ready, hidden }: {
   const buttonClass = 'inline-flex h-6 items-center justify-center gap-1 rounded border border-border/40 px-2 text-[10px] text-muted hover:bg-elevated hover:text-foreground aria-pressed:bg-accent/10 aria-pressed:text-accent aria-pressed:border-accent/40 disabled:opacity-40 disabled:cursor-not-allowed'
   return (
     <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-1" aria-label="画线工具栏">
+      <button type="button" className={buttonClass} disabled={disabled} aria-pressed={tool === MEASUREMENT_NAME} onClick={() => { setOpen(false); start(MEASUREMENT_NAME) }}>测量</button>
       <div className="relative" onBlur={event => {
         if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false)
       }} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); setOpen(false) } }}>
         <button type="button" className={buttonClass} disabled={disabled} aria-expanded={open} aria-label="画线工具" onClick={() => setOpen(value => !value)}>
           <Pencil className="h-3 w-3" />画线
         </button>
-        {open && <div role="dialog" aria-label="选择画线工具" className="absolute left-0 top-full z-40 mt-1 grid w-60 max-w-[calc(100vw-2rem)] grid-cols-2 gap-1 rounded border border-border bg-surface p-2 shadow-xl">
-          {DRAWING_TOOLS.map(item => <button key={item.name} type="button" className={`${buttonClass} justify-start`} onClick={() => start(item.name)}>{item.label}</button>)}
-          <p className="col-span-2 text-[10px] text-muted">点击依次取点；画笔按住拖动。Esc 取消。</p>
+        {open && <div role="dialog" aria-label="选择画线工具" className="absolute left-0 top-full z-40 mt-1 max-h-[60vh] w-60 max-w-[calc(100vw-2rem)] space-y-2 overflow-y-auto rounded border border-border bg-surface p-2 shadow-xl">
+          {DRAWING_TOOL_GROUPS.map(group => <div key={group.label} role="group" aria-label={group.label} className="space-y-1">
+            <div className="text-[10px] font-medium text-muted">{group.label}</div>
+            <div className="grid grid-cols-2 gap-1">
+              {group.tools.map(item => <button key={item.name} type="button" className={`${buttonClass} justify-start`} onClick={() => start(item.name)}>{item.label}</button>)}
+            </div>
+          </div>)}
         </div>}
       </div>
       <button type="button" className={buttonClass} disabled={disabled} aria-pressed={!tool} title="结束画线，恢复选择（Esc）" onClick={cancel}><MousePointer2 className="h-3 w-3" />选择</button>
-      <button type="button" className={buttonClass} disabled={disabled} aria-pressed={magnet} title="吸附K线高低点" onClick={() => {
+      <button type="button" className={buttonClass} disabled={disabled} aria-pressed={magnet} title="测量吸附收盘价，其他工具吸附K线高低点" onClick={() => {
         setMagnet(!magnet)
         chart?.overrideOverlay({ groupId: DRAWING_GROUP, mode: magnet ? 'normal' : 'strong_magnet' })
       }}><Magnet className="h-3 w-3" />吸附</button>

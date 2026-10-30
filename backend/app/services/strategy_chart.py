@@ -494,7 +494,7 @@ class StrategyChartService:
                 )
                 if not snapshot.frame.is_empty():
                     frame = prepare_native_30m(snapshot.frame)
-            if frame.is_empty():
+            if frame.is_empty() and asset_type != "index":
                 try:
                     minute = self.repo.get_minute_range(
                         [symbol], warmup_start, end, asset_type=asset_type
@@ -503,6 +503,8 @@ class StrategyChartService:
                     minute = self.repo.get_minute_range([symbol], warmup_start, end)
                 frame = aggregate_minute_30m(minute)
             if frame.is_empty():
+                if asset_type == "index":
+                    raise ValueError("暂无指数30F数据,请检查图表行情数据源")
                 raise ValueError("无 30F 分钟K数据 — 请先在 数据→分钟K 完成对应资产的历史同步")
 
         if frame.is_empty():
@@ -584,6 +586,7 @@ class StrategyChartService:
         """计算信号库中所选原子信号在单只标的上的历史命中。"""
         from app.config import settings
         from app.indicators.pipeline import (
+            LIMIT_SIGNAL_OUTPUTS,
             compute_indicators,
             compute_limit_signals,
             compute_signals,
@@ -593,6 +596,8 @@ class StrategyChartService:
 
         if timeframe not in SUPPORTED_TIMEFRAMES:
             raise ValueError(f"当前 K 线不支持 {timeframe} 信号")
+        if asset_type == "index" and any(_resolve_signal_column(s.strip()) in _CHART_LIMIT_SIGNAL_IDS for s in signal_ids):
+            raise ValueError("指数不支持涨跌停信号")
 
         dependencies = get_signal_dependencies()
         daily_custom_ids = {
@@ -626,6 +631,13 @@ class StrategyChartService:
         if selected_formula_ids and timeframe not in formula_signals.PERIODS:
             raise ValueError("公式信号仅支持日线和30F周期")
 
+        indicator_dependencies: set[str] = set()
+        for signal_id in normalized:
+            indicator_dependencies.update(dependencies.get(signal_id, ()))
+        if asset_type == "index" and indicator_dependencies & set(LIMIT_SIGNAL_OUTPUTS):
+            raise ValueError("指数不支持引用涨跌停字段的信号")
+        if set(normalized) & set(_CHART_LIMIT_SIGNAL_IDS):
+            indicator_dependencies.update({"change_pct", "vol_ratio_5d"})
         frame = self.load_frame(
             symbol=symbol,
             asset_type=asset_type,
@@ -639,11 +651,6 @@ class StrategyChartService:
         if frame.is_empty():
             return []
 
-        indicator_dependencies: set[str] = set()
-        for signal_id in normalized:
-            indicator_dependencies.update(dependencies.get(signal_id, ()))
-        if set(normalized) & set(_CHART_LIMIT_SIGNAL_IDS):
-            indicator_dependencies.update({"change_pct", "vol_ratio_5d"})
         frame = compute_indicators(frame, needed=indicator_dependencies)
         frame = compute_signals(frame, needed=set(normalized), period=timeframe)
         limit_ids = set(normalized) & set(_CHART_LIMIT_SIGNAL_IDS)

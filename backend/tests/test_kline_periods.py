@@ -6,7 +6,6 @@ from types import SimpleNamespace
 
 import polars as pl
 import pytest
-from fastapi import HTTPException
 
 from app.api import kline as kline_api
 from app.services.kline_periods import aggregate_daily_period, aggregate_minute_30m
@@ -235,10 +234,51 @@ def test_period_api_returns_latest_requested_30m_trade_days():
     assert all(row["is_closed"] is True for row in result["rows"])
 
 
-def test_period_api_rejects_index_scope():
-    repo = _Repo()
-    repo.resolve_asset_type = lambda _symbol: "index"
-    with pytest.raises(HTTPException, match="指数周期切换暂未开放"):
-        kline_api.get_period_kline(
-            _request(repo), "000001.SH", "1w", "2026-01-01", "2026-09-05", 20,
-        )
+@pytest.mark.parametrize("period", ["1w", "1mo"])
+def test_period_api_routes_index_to_independent_daily_storage(period):
+    daily = pl.DataFrame({
+        "symbol": ["000001.SH"] * 2,
+        "date": [date(2026, 9, 3), date(2026, 9, 4)],
+        "open": [3000., 3010.], "high": [3020., 3030.], "low": [2990., 3000.],
+        "close": [3010., 3020.], "volume": [100., 200.], "amount": [1000., 2000.],
+    })
+    repo = _Repo(daily=daily, asset_type="index")
+    result = kline_api.get_period_kline(
+        _request(repo), "000001.SH", period, "2026-09-01", "2026-09-05", 20,
+    )
+    assert repo.last_daily_asset_type == "index"
+    assert result["asset_type"] == "index"
+    assert result["rows"][0]["close"] == 3020.
+    assert result["rows"][0]["volume"] == 300.
+
+
+def test_index_30m_never_reads_stock_minute_storage(monkeypatch):
+    from app.services.chart_data import ChartSnapshot
+    repo = _Repo(asset_type="index")
+    repo.get_minute_range = lambda *a, **kw: pytest.fail("指数不得回退股票分钟库")
+    monkeypatch.setattr(kline_api, "_chart_snapshot", lambda *a: ChartSnapshot(pl.DataFrame(), "test"))
+    result = kline_api.get_period_kline(
+        _request(repo), "000001.SH", "30m", "2026-09-01", "2026-09-05", 20,
+    )
+    assert result["asset_type"] == "index"
+    assert result["rows"] == []
+    assert result["source"] == "none"
+
+
+def test_index_30m_uses_native_chart_source(monkeypatch):
+    from app.services.chart_data import ChartSnapshot
+    native = pl.DataFrame({
+        "symbol": ["000001.SH"], "datetime": [datetime(2026, 9, 4, 10)],
+        "open": [3000.], "high": [3020.], "low": [2990.], "close": [3010.], "volume": [100.],
+    })
+    seen = []
+    def snapshot(*args):
+        seen.append(args[2:4])
+        return ChartSnapshot(native, "test", adjustment="none")
+    monkeypatch.setattr(kline_api, "_chart_snapshot", snapshot)
+    result = kline_api.get_period_kline(
+        _request(_Repo(asset_type="index")), "000001.SH", "30m", "2026-09-01", "2026-09-05", 20,
+    )
+    assert seen == [("index", "30m")]
+    assert result["rows"][0]["date"] == "2026-09-04 10:00"
+    assert result["asset_type"] == "index"

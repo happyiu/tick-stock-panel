@@ -326,6 +326,7 @@ def list_strategies(
     asset_type: str | None = None,
     timeframe: str | None = None,
     include_research: bool = False,
+    chart: bool = False,
 ):
     engine = _get_engine(request)
     data_dir = _data_dir(request)
@@ -337,14 +338,20 @@ def list_strategies(
     for meta in engine.list_strategies(include_research=include_research):
         if meta.get("research_only") and not include_research:
             continue
-        if asset_type and asset_type not in meta.get("asset_types", ["stock"]):
+        supported_assets = meta.get("asset_types", ["stock"])
+        if chart:
+            supported_assets = list(dict.fromkeys([*supported_assets, *meta.get("chart_asset_types", [])]))
+        if asset_type and asset_type not in supported_assets:
             continue
         if timeframe and timeframe not in meta.get("timeframes", ["1d"]):
             continue
         sid = meta["id"]
         s = engine.get(sid)
         overrides = all_overrides.get(sid)
-        result.append(_strategy_detail(s, overrides, engine))
+        detail = _strategy_detail(s, overrides, engine)
+        if chart:
+            detail["asset_types"] = supported_assets
+        result.append(detail)
     return {"strategies": result, "load_errors": engine.load_errors()}
 
 
