@@ -87,7 +87,17 @@ def _with_chart_indicators(payload, request, indicator_ids, compare_days=1, hist
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-def _with_chanlun(payload: dict, enabled: bool, source: str, as_of: str | None, observation: bool = False) -> dict:
+def _with_chanlun(payload: dict, enabled: bool, source: str, as_of: str | None, observation: bool = False, include_dow=False, dow_as_of=None, include_wave=False, wave_as_of=None) -> dict:
+    if include_wave is True:
+        from app.services.wave import analyze_wave, confluence
+        from app.services.dow import analyze_dow
+        cutoff = wave_as_of if isinstance(wave_as_of, str) else None
+        payload['wave'] = analyze_wave(payload['rows'], payload.get('period', '1d'), cutoff)
+        payload['dow'] = analyze_dow(payload['rows'], payload.get('period', '1d'), cutoff)
+        payload['confluence'] = confluence(payload['dow'], payload['wave'])
+    if include_dow is True and include_wave is not True:
+        from app.services.dow import analyze_dow
+        payload["dow"] = analyze_dow(payload["rows"], payload.get("period", "1d"), dow_as_of if isinstance(dow_as_of, str) else None)
     if enabled is not True:
         return payload
     from app.services.chanlun import analyze_chanlun, analyze_daily_observation
@@ -571,6 +581,10 @@ def get_daily(
     end_date: Optional[str] = Query(None, description="截止日期 YYYY-MM-DD, 默认今天"),
     ext_columns: Optional[str] = Query(None, description="逗号分隔的 ext 列: config_id.field_name"),
     include_technical_scores: bool = Query(False, description="是否附带 technical-score-v10 评分序列"),
+    include_wave: bool = Query(False),
+    wave_as_of: str | None = Query(None),
+    include_dow: bool = Query(False),
+    dow_as_of: str | None = Query(None),
     include_chanlun: bool = Query(False, description="是否附带固定规则的缠论结构"),
     chanlun_observation: bool = Query(False),
     chanlun_source: Literal["stroke", "segment"] = Query("stroke"),
@@ -630,7 +644,7 @@ def get_daily(
             resp["technical_scores"] = score_payload
         return _gzip_payload(
             request,
-            _with_chanlun(_with_chart_indicators(_attach_ext(resp, repo, symbol, ext_columns), request, indicator_ids, indicator_compare_days, history_rows), include_chanlun, chanlun_source, chanlun_as_of, chanlun_observation),
+            _with_chanlun(_with_chart_indicators(_attach_ext(resp, repo, symbol, ext_columns), request, indicator_ids, indicator_compare_days, history_rows), include_chanlun, chanlun_source, chanlun_as_of, chanlun_observation, include_dow, dow_as_of, include_wave, wave_as_of),
             pref_key="daily_batch_compress",
         )
 
@@ -668,7 +682,7 @@ def get_daily(
             resp["technical_scores"] = {"version": TECHNICAL_SCORE_VERSION, "rows": []}
         return _gzip_payload(
             request,
-            _with_chanlun(_with_chart_indicators(_attach_ext(resp, repo, symbol, ext_columns), request, indicator_ids, indicator_compare_days, history_rows), include_chanlun, chanlun_source, chanlun_as_of, chanlun_observation),
+            _with_chanlun(_with_chart_indicators(_attach_ext(resp, repo, symbol, ext_columns), request, indicator_ids, indicator_compare_days, history_rows), include_chanlun, chanlun_source, chanlun_as_of, chanlun_observation, include_dow, dow_as_of, include_wave, wave_as_of),
             pref_key="daily_batch_compress",
         )
     # 追加/覆盖今日实时蜡烛. 仅评分路径需要重新构造 Polars 帧; 实时注入的
@@ -704,7 +718,7 @@ def get_daily(
         resp["technical_scores"] = score_payload
     return _gzip_payload(
         request,
-        _with_chanlun(_with_chart_indicators(_attach_ext(resp, repo, symbol, ext_columns), request, indicator_ids, indicator_compare_days, history_rows), include_chanlun, chanlun_source, chanlun_as_of, chanlun_observation),
+        _with_chanlun(_with_chart_indicators(_attach_ext(resp, repo, symbol, ext_columns), request, indicator_ids, indicator_compare_days, history_rows), include_chanlun, chanlun_source, chanlun_as_of, chanlun_observation, include_dow, dow_as_of, include_wave, wave_as_of),
         pref_key="daily_batch_compress",
     )
 
@@ -717,6 +731,8 @@ def get_period_kline(
     end_date: Optional[str] = Query(None, description="展示截止日期 YYYY-MM-DD,默认今天"),
     days: int = Query(20, ge=1, le=120, description="30分钟K最近交易日数量"),
     include_technical_scores: bool = Query(False, description="是否附带 technical-score-v10 评分序列"),
+    include_dow: bool = Query(False),
+    dow_as_of: str | None = Query(None),
     include_chanlun: bool = Query(False, description="是否附带固定规则的缠论结构"),
     chanlun_source: Literal["stroke", "segment"] = Query("stroke"),
     chanlun_as_of: str | None = Query(None, description="缠论最晚可用时间 (北京墙钟)"),
@@ -801,7 +817,7 @@ def get_period_kline(
                         "requested_days": days, "available_days": len(trade_dates)}
             if score_payload is not None:
                 response["technical_scores"] = score_payload
-            return _with_chanlun(_with_chart_indicators(response, request, indicator_ids, indicator_compare_days, history_rows), include_chanlun, chanlun_source, chanlun_as_of)
+            return _with_chanlun(_with_chart_indicators(response, request, indicator_ids, indicator_compare_days, history_rows), include_chanlun, chanlun_source, chanlun_as_of, include_dow=include_dow, dow_as_of=dow_as_of)
         # 多取自然日覆盖节假日，最终严格裁成最近 N 个实际交易日。
         scan_start = min(start, end - timedelta(days=days * 3 + 20))
         minute = repo.get_minute_range([symbol], scan_start, end, asset_type=asset_type)
@@ -827,7 +843,7 @@ def get_period_kline(
             response = {**base, "rows": [], "source": source, "requested_days": days, "available_days": 0}
             if include_technical_scores:
                 response["technical_scores"] = {"version": TECHNICAL_SCORE_VERSION, "rows": []}
-            return _with_chanlun(_with_chart_indicators(response, request, indicator_ids, indicator_compare_days, history_rows), include_chanlun, chanlun_source, chanlun_as_of)
+            return _with_chanlun(_with_chart_indicators(response, request, indicator_ids, indicator_compare_days, history_rows), include_chanlun, chanlun_source, chanlun_as_of, include_dow=include_dow, dow_as_of=dow_as_of)
         history_rows = aggregate_minute_30m(minute).to_dicts() if isinstance(indicator_ids, str) else []
         minute = minute.with_columns(pl.col("datetime").dt.date().alias("_trade_date"))
         trade_dates = sorted(minute["_trade_date"].unique().to_list())[-days:]
@@ -850,7 +866,7 @@ def get_period_kline(
         }
         if score_payload is not None:
             response["technical_scores"] = score_payload
-        return _with_chanlun(_with_chart_indicators(response, request, indicator_ids, indicator_compare_days, history_rows), include_chanlun, chanlun_source, chanlun_as_of)
+        return _with_chanlun(_with_chart_indicators(response, request, indicator_ids, indicator_compare_days, history_rows), include_chanlun, chanlun_source, chanlun_as_of, include_dow=include_dow, dow_as_of=dow_as_of)
 
     # 周/月聚合和技术评分需要额外读取预热数据; 只扫描单标的基础列。
     warmup_days = 500 if period == "1w" else 6 * 366
@@ -879,7 +895,7 @@ def get_period_kline(
             response = {**base, "rows": [], "source": "none"}
             if include_technical_scores:
                 response["technical_scores"] = {"version": TECHNICAL_SCORE_VERSION, "rows": []}
-            return _with_chanlun(_with_chart_indicators(response, request, indicator_ids, indicator_compare_days, history_rows), include_chanlun, chanlun_source, chanlun_as_of)
+            return _with_chanlun(_with_chart_indicators(response, request, indicator_ids, indicator_compare_days, history_rows), include_chanlun, chanlun_source, chanlun_as_of, include_dow=include_dow, dow_as_of=dow_as_of)
         daily = pl.DataFrame(fallback_rows, infer_schema_length=None)
         source = str(fallback.get("source") or "live")
     elif source != "chart":
@@ -904,7 +920,7 @@ def get_period_kline(
     response = {**base, "rows": rows, "source": source}
     if score_payload is not None:
         response["technical_scores"] = score_payload
-    return _with_chanlun(_with_chart_indicators(response, request, indicator_ids, indicator_compare_days, history_rows), include_chanlun, chanlun_source, chanlun_as_of)
+    return _with_chanlun(_with_chart_indicators(response, request, indicator_ids, indicator_compare_days, history_rows), include_chanlun, chanlun_source, chanlun_as_of, include_dow=include_dow, dow_as_of=dow_as_of)
 
 
 def _attach_ext(resp: dict, repo, symbol: str, ext_columns: Optional[str]) -> dict:

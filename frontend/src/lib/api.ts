@@ -666,6 +666,9 @@ const chartIndicatorParams = (value?: ChartIndicatorRequest) => value?.ids.lengt
   ? `&indicator_ids=${encodeURIComponent(value.ids.join(','))}&indicator_compare_days=${value.compareDays}` : ''
 
 export interface KlineResponse {
+  wave?: import("./wave").WaveAnalysis
+  confluence?: string
+  dow?: import("./dow").DowAnalysis
   indicator_results?: Record<string, ChartIndicatorResult>
   indicator_errors?: { id: string; message: string }[]
   data_status?: ChartDataStatus
@@ -3502,6 +3505,16 @@ export const api = {
   redetectCapabilities: () =>
     request<CapabilitiesResponse>('/api/capabilities/redetect', { method: 'POST' }),
 
+  waveHistory: (symbol: string, asset: string) => request<{id: string; asOf: string}[]>(`/api/stock-analysis/wave/history?symbol=${encodeURIComponent(symbol)}&asset_type=${asset}`),
+  waveSnapshot: (id: string) => request<import('./wave').WaveBundle>(`/api/stock-analysis/wave/history/${id}`),
+  waveAnalysis: (symbol: string, asOf: string, assetType = 'stock') =>
+    request<import('./wave').WaveBundle>('/api/stock-analysis/wave/analyze', { method: 'POST', body: JSON.stringify({symbol, asset_type: assetType, as_of: asOf}) }),
+  dowAnalysis: (symbol: string, period: '1d' | '1w' | '30m', asOf: string) => {
+    const end = asOf.slice(0, 10)
+    const start = new Date(`${end}T12:00:00Z`)
+    start.setUTCDate(start.getUTCDate() - (period === '1w' ? 1827 : period === '1d' ? 1096 : 120))
+    return request<KlineResponse>(`/api/kline/${period === '1d' ? 'daily' : 'period'}?symbol=${encodeURIComponent(symbol)}&period=${period}&start_date=${start.toISOString().slice(0, 10)}&end_date=${end}&days=120&include_dow=true&dow_as_of=${encodeURIComponent(asOf)}`)
+  },
   klineDaily: (symbol: string, days = 120, dateRange?: { start: string; end: string }, extColumns?: string, includeTechnicalScores = false, chanlun?: ChanlunRequest, chartIndicators?: ChartIndicatorRequest) =>
     request<KlineResponse>(
       (dateRange

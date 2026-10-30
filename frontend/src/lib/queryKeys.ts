@@ -13,6 +13,8 @@ const indicatorQuerySuffix = (value?: ChartIndicatorRequest) => value?.ids.lengt
 // ===== Query Key 工厂 =====
 
 export const QK = {
+  wave: (symbol: string, asset: string, asOf: string, revision: number) => ['wave', 'wave-v3-alpha-0.14.3-r1-comparison-v2', symbol, asset, asOf, revision] as const,
+  dow: (symbol: string, asset: string, period: string, asOf: string, revision: number) => ['dow', symbol, asset, period, asOf, revision] as const,
   indicatorMonitors: ['indicator-monitors'] as const,
   indicatorMonitorEvents: ['indicator-monitor-events'] as const,
   indicatorMonitorSnapshot: (id: string, eventId?: string) => ['indicator-monitor-snapshot', id, eventId ?? 'latest'] as const,

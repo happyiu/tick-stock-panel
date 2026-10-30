@@ -252,3 +252,113 @@ def delete_report(request: Request, report_id: str):
     """删除一条报告。"""
     ok = stock_reports.delete_report(report_id)
     return {"ok": ok}
+
+
+class WaveAnalyzeRequest(BaseModel):
+    symbol: str
+    asset_type: str
+    as_of: str
+
+
+@router.post('/wave/analyze')
+def wave_analyze(request: Request, body: WaveAnalyzeRequest):
+    import sqlite3
+    from datetime import datetime
+
+    from app.services import wave_history
+    from app.services.chart_candles import chart_snapshot
+    from app.services.kline_periods import prepare_native_30m
+    from app.services.wave import analyze_wave
+    try:
+        cutoff = datetime.fromisoformat(body.as_of)
+        if cutoff.tzinfo or body.asset_type not in ('stock','etf','index'):
+            raise ValueError('context')
+    except ValueError as exc:
+        raise HTTPException(422,'观察时间或资产类型错误') from exc
+    if request.app.state.repo.resolve_asset_type(body.symbol) != body.asset_type:
+        raise HTTPException(422,'资产类型与标的不一致')
+    periods = {}
+    for period,days in (('1d',1096),('30m',400)):
+        snap = chart_snapshot(request.app.state,body.symbol,body.asset_type,period,cutoff.date()-timedelta(days=days),cutoff.date())
+        rows = prepare_native_30m(snap.frame).to_dicts() if period=='30m' and not snap.frame.is_empty() else snap.frame.to_dicts()
+        from app.api.kline import _annotate_bar_closure, _maybe_inject_live_candle
+        if period == '1d' and hasattr(request.app.state.repo, 'get_enriched_latest_asset'):
+            rows = _maybe_inject_live_candle(request, body.symbol, rows, body.asset_type)
+        for row in rows:
+            row['date'] = str(row['date'])
+        rows = _annotate_bar_closure(rows, period, cutoff.date())
+        result = analyze_wave(rows,period,body.as_of)
+        result['source'] = snap.metadata()
+        if period == '1d':
+            from app.services.dow import analyze_dow
+            from app.services.wave import confluence
+            result['dowConfluence'] = confluence(analyze_dow(rows, '1d', body.as_of), result)
+        if snap.stale:
+            result['issues'].append('行情快照可能过期')
+        if snap.adjustment not in ('forward','none'):
+            result.update(status='invalid_data',counts=[],candidates=[],issues=['复权口径未知'])
+        periods[period] = result
+    a,b = periods['1d'].get('counts',[]),periods['30m'].get('counts',[])
+    from app.services.wave_comparison import compare_periods
+    comparison = compare_periods(periods)
+    compatible = comparison['status'] == 'available'
+    coherence = comparison['summary']
+    # Cross-period nesting is evidence only when child endpoints are inside a parent leg.
+    nesting = []
+    if compatible:
+        from datetime import time
+        for daily in a:
+            for minute in b:
+                first = datetime.fromisoformat(minute['points'][0]['date'])
+                last = datetime.fromisoformat(minute['points'][-1]['date'])
+                for left, right in zip(daily['points'], daily['points'][1:], strict=False):
+                    start = datetime.fromisoformat(left['date'])
+                    end = datetime.combine(datetime.fromisoformat(right['date']).date(), time(15))
+                    direction = 'up' if right['value'] > left['value'] else 'down'
+                    if start <= first < last <= end and minute['direction'] == direction:
+                        nesting.append(dict(daily=daily['id'], minute=minute['id'], parentLeg=right['label'], status='time_and_direction_only'))
+        supported = {n['minute'] for n in nesting}
+        b.sort(key=lambda c:(c['validation']['level']=='subdivision_validated', c['score']['total'], c['id'] in supported),reverse=True)
+        periods['30m']['candidates'] = b
+    payload = dict(version='wave-v3-alpha-0.14.3-r1',symbol=body.symbol,asset_type=body.asset_type,asOf=body.as_of,periods=periods,coherence=coherence,comparison=comparison,nesting=nesting,provenance='reconstructed')
+    try:
+        prior = wave_history.history(body.symbol, body.asset_type)
+        previous = wave_history.read(prior[0]['id']) if prior else None
+        payload['revisions'] = []
+        if previous:
+            for period, current in periods.items():
+                old = previous['periods'].get(period, {})
+                before, after = old.get('counts', []), current.get('counts', [])
+                reason = None
+                if previous.get('version') != payload['version']:
+                    reason = 'engine_version_changed'
+                elif previous.get('asOf') == payload['asOf'] and old.get('inputFingerprint') != current.get('inputFingerprint'):
+                    reason = 'data_revision'
+                elif before and after and before[0]['id'] != after[0]['id']:
+                    reason = 'primary_changed'
+                elif before and after and before[0]['points'] != after[0]['points']:
+                    reason = 'endpoint_changed'
+                if reason:
+                    payload['revisions'].append(dict(period=period, reason=reason, previous=prior[0]['id']))
+        payload['snapshotId'] = wave_history.save(payload)
+        payload['saved'] = True
+    except (OSError,sqlite3.Error):
+        payload['saved'] = False
+    return payload
+
+
+@router.get('/wave/history')
+def wave_history_list(symbol: str, asset_type: str):
+    from app.services.wave_history import history
+    return history(symbol,asset_type)
+
+
+@router.get('/wave/history/{snapshot_id}')
+def wave_history_read(snapshot_id: str):
+    from app.services.wave_history import read
+    result = read(snapshot_id)
+    if result is None:
+        raise HTTPException(404,'快照不存在')
+    from app.services.wave_comparison import compare_periods
+    comparison = compare_periods(result.get('periods', {}))
+    return dict(result,snapshotId=snapshot_id,saved=True,comparison=comparison,coherence=comparison['summary'])

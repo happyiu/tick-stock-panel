@@ -1,0 +1,134 @@
+[
+  {
+    "symbol": "159992.SZ",
+    "daily": {
+      "provenance": "reconstructed_from_current_data",
+      "period": "1d",
+      "bars": 90,
+      "changes": {
+        "1": {
+          "samples": 55,
+          "changes": 1,
+          "rate": 0.01818181818181818
+        },
+        "3": {
+          "samples": 53,
+          "changes": 3,
+          "rate": 0.05660377358490566
+        },
+        "5": {
+          "samples": 51,
+          "changes": 5,
+          "rate": 0.09803921568627451
+        }
+      },
+      "confirmationDelayBars": [
+        2,
+        2,
+        2,
+        4,
+        4,
+        4,
+        6,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "invalidationDelayBars": [
+        0,
+        0,
+        0
+      ],
+      "multiPeriodCoherence": "requires paired daily and 30m data; not measured by this single-period report",
+      "generatedAt": "2026-10-30T00:18:32.583985"
+    },
+    "minuteCoverage": "not evaluated: local minute adjustment vintage not established"
+  },
+  {
+    "symbol": "513180.SH",
+    "daily": {
+      "provenance": "reconstructed_from_current_data",
+      "period": "1d",
+      "bars": 90,
+      "changes": {
+        "1": {
+          "samples": 66,
+          "changes": 2,
+          "rate": 0.030303030303030304
+        },
+        "3": {
+          "samples": 64,
+          "changes": 6,
+          "rate": 0.09375
+        },
+        "5": {
+          "samples": 62,
+          "changes": 10,
+          "rate": 0.16129032258064516
+        }
+      },
+      "confirmationDelayBars": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        5,
+        2
+      ],
+      "invalidationDelayBars": [
+        0,
+        0
+      ],
+      "multiPeriodCoherence": "requires paired daily and 30m data; not measured by this single-period report",
+      "generatedAt": "2026-10-30T00:18:33.532582"
+    },
+    "minuteCoverage": "not evaluated: local minute adjustment vintage not established"
+  },
+  {
+    "symbol": "510300.SH",
+    "daily": {
+      "provenance": "reconstructed_from_current_data",
+      "period": "1d",
+      "bars": 90,
+      "changes": {
+        "1": {
+          "samples": 39,
+          "changes": 1,
+          "rate": 0.02564102564102564
+        },
+        "3": {
+          "samples": 37,
+          "changes": 3,
+          "rate": 0.08108108108108109
+        },
+        "5": {
+          "samples": 35,
+          "changes": 5,
+          "rate": 0.14285714285714285
+        }
+      },
+      "confirmationDelayBars": [
+        2,
+        2,
+        2,
+        2,
+        3,
+        2,
+        2,
+        2
+      ],
+      "invalidationDelayBars": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "multiPeriodCoherence": "requires paired daily and 30m data; not measured by this single-period report",
+      "generatedAt": "2026-10-30T00:18:35.487426"
+    },
+    "minuteCoverage": "not evaluated: local minute adjustment vintage not established"
+  }
+]

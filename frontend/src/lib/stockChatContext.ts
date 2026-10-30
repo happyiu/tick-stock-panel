@@ -15,6 +15,8 @@ export interface StockChatSnapshotInput {
   assetType?: KlineResponse['asset_type']
   selectedDate: string | null
   response: KlineResponse | undefined
+  wave?: import("./wave").WaveBundle
+  waveSelected?: string
   chanlun: ChanlunAnalysis
 }
 
@@ -158,6 +160,7 @@ export function buildStockChatSnapshot(input: StockChatSnapshotInput): StockChat
     technical_score: technicalScore ? clean(technicalScore) as Record<string, unknown> : null,
     structure: {
       chanlun: compactChanlun(input.chanlun),
+      ...(input.wave && input.wave.asOf.replace('T', ' ').slice(0, 16) === String(asOf).replace('T', ' ').slice(0, 16) ? { wave: { asOf: input.wave.asOf, version: input.wave.version, selected: input.waveSelected, coherence: input.wave.coherence, periods: Object.fromEntries(Object.entries(input.wave.periods).map(([key, value]) => [key, {status: value.status, counts: value.counts?.map(c => ({id: c.id, pattern: c.pattern, currentPosition: c.currentPosition, score: c.score, invalidation: c.invalidation, nextCondition: c.nextCondition}))}])) }} : {}),
     },
   }
 }

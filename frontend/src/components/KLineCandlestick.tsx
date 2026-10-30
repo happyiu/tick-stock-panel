@@ -1,3 +1,4 @@
+import { waveLegLabel, waveSegmentTemplate } from '@/lib/kline-chart-wave'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { dispose, init, registerIndicator, registerOverlay, type Chart, type Crosshair, type IndicatorFigure, type KLineData } from 'klinecharts'
@@ -26,6 +27,7 @@ chartIndicators.forEach(indicator => registerIndicator(indicator))
 formulaIndicators.forEach(indicator => registerIndicator(indicator))
 const registeredServerFormulas = new Set<string>()
 const legacyDefinitions = [...DEFAULT_SUB_CHARTS.map(i => ({ ...i, pane: 'sub' as const })), ...DEFAULT_MAIN_CHARTS.map(i => ({ ...i, height: 100, pane: 'main' as const }))].map(i => ({ ...i, id: i.key, name: i.label, source: i.key.startsWith('builtin-') ? 'builtin' : 'custom', revision: 1 }))
+registerOverlay(waveSegmentTemplate)
 registerOverlay(annotationTemplate)
 registerOverlay(chanlunTemplate)
 registerOverlay(levelTemplate)
@@ -39,7 +41,7 @@ export function KLineCandlestick({
   showMA: requestedMA = true, showInfoBar = true, showMarkers = true, stockInfo, symbol = '', linkedPrice,
   onDateClick, onPriceDoubleClick, visibleBars = 60, activeIndicators = EMPTY,
   volumeCompare = DEFAULT_COMPARE, volumeCompareControls, addedDate, assetType, period = '1d', selectedDate,
-  chanlunAnalysis, chanlunOverlay, chanlunError, hideCurrentDate = false, projectionEnabled = false, projectionBranchId = null, onProjectionBranchSelect,
+  waveCandidate, dowAnalysis, chanlunAnalysis, chanlunOverlay, chanlunError, hideCurrentDate = false, projectionEnabled = false, projectionBranchId = null, onProjectionBranchSelect,
   priceCurves = EMPTY, priceZones = EMPTY, priceLabelWidth = 0, highlightedKey, onHighlightChange, showRangeSelector = false,
 }: CandlestickProps) {
   const managed = indicatorDefinitions != null
@@ -451,6 +453,56 @@ export function KLineCandlestick({
     if (overlays.length) chart.createOverlay(overlays)
   }, [bars, markers, ranges, priceLines, priceCurves, showMarkers, addedDate, linkedPrice, theme, onDateClick, precision])
 
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    chart.removeOverlay({ groupId: 'tsp-wave' })
+    if (!waveCandidate || hideCurrentDate) return
+    const points = waveCandidate.points.map(p => ({ timestamp: new Date(`${p.date.length > 10 ? p.date.replace(' ', 'T') : p.date + 'T00:00:00'}+08:00`).getTime(), value: p.value }))
+    chart.createOverlay(points.slice(1).map((point, i) => ({ name: waveSegmentTemplate.name, groupId: 'tsp-wave', lock: true, points: [points[i], point], extendData: {textColor: ct.text, label: waveLegLabel(waveCandidate.points[i+1].label)} })))
+    chart.createOverlay(waveCandidate.points.map((p, i) => ({ name: annotationTemplate.name, groupId: 'tsp-wave', lock: true, points: [points[i]], extendData: { kind: 'marker', label: p.label, above: true, color: '#A78BFA' }, onMouseEnter: () => setStructureTooltip(`${p.label} · 发生 ${p.date} · 确认 ${p.confirmedAt}`), onMouseLeave: () => setStructureTooltip(null) })))
+    const toPoint = (p: {date: string; value: number}) => ({timestamp: new Date(`${p.date.length > 10 ? p.date.replace(' ', 'T') : p.date + 'T00:00:00'}+08:00`).getTime(), value: p.value})
+    if (waveCandidate.currentPosition?.active && bars.length) {
+      chart.createOverlay({name: waveSegmentTemplate.name, groupId: 'tsp-wave', lock: true, points: [points.at(-1)!, {timestamp: bars.at(-1)!.timestamp, value: bars.at(-1)!.close}], extendData: {textColor: ct.text, label: waveLegLabel(waveCandidate.currentPosition.active, undefined, true), dashed: true}})
+    }
+    for (const p of waveCandidate.projections ?? []) chart.createOverlay({name: levelTemplate.name, groupId: 'tsp-wave', lock: true, points: [{value: p.value}], extendData: {color: '#A78BFA', label: `情景 ${p.ratio}`, dashed: true, labelWidth: 0, highlighted: false, dimmed: false, curve: false, breaks: []}})
+    if (waveCandidate.invalidation.value != null) chart.createOverlay({name: levelTemplate.name, groupId: 'tsp-wave', lock: true, points: [{value: waveCandidate.invalidation.value}], extendData: {color: '#F87171', label: '后续假设失效', dashed: true, labelWidth: 0, highlighted: false, dimmed: false, curve: false, breaks: []}})
+    const drawChildren = (nodes: import('@/lib/wave').WaveNode[], depth: number, parent: string) => {
+      if (depth <= 0) return
+      for (const n of nodes) {
+        chart.createOverlay({name: waveSegmentTemplate.name, groupId: 'tsp-wave', lock: true, points: [toPoint(n.start), toPoint(n.end)], extendData: {textColor: ct.text, label: waveLegLabel(n.label, parent), child: true}})
+        drawChildren(n.children, depth - 1, `${parent}/${n.label}`)
+      }
+    }
+    for (const node of waveCandidate.waveTree ?? []) drawChildren(node.children, waveCandidate.displayDepth ?? 0, waveLegLabel(node.label))
+    return () => { chart.removeOverlay({ groupId: 'tsp-wave' }) }
+  }, [waveCandidate, bars, hideCurrentDate, theme])
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    chart.removeOverlay({ groupId: 'tsp-dow' })
+    if (!dowAnalysis || hideCurrentDate) return
+    const recentPivots = ['high', 'low'].flatMap(side => dowAnalysis.pivots.filter(p => p.side === side).slice(-2))
+    const overlays = recentPivots.map(p => ({
+      name: annotationTemplate.name, groupId: 'tsp-dow', paneId: 'candle_pane', lock: true,
+      points: [{ timestamp: new Date((p.date.length === 10 ? `${p.date}T00:00:00` : p.date.replace(' ', 'T')) + '+08:00').getTime(), value: p.value }],
+      extendData: { kind: 'marker', color: p.side === 'high' ? '#EF4444' : '#26A69A', label: ({ HH: '高点抬高', HL: '低点抬高', LH: '高点降低', LL: '低点降低' } as Record<string, string>)[p.label] ?? '拐点', above: p.side === 'high' },
+      onMouseEnter: () => setStructureTooltip(`${p.label} · 发生 ${p.date} · 确认 ${p.confirmedAt}`),
+      onMouseLeave: () => setStructureTooltip(null),
+    }))
+    if (overlays.length) chart.createOverlay(overlays)
+    const levels = new Map<number, string[]>()
+    Object.entries(dowAnalysis.levels).forEach(([key, point]) => {
+      if (!point) return
+      const labels = levels.get(point.value) ?? []
+      labels.push(key === 'protection' ? '保护位' : key === 'upper' ? '前高' : '前低')
+      levels.set(point.value, labels)
+    })
+    const events = dowAnalysis.events.filter(e => e.kind !== 'wick').slice(-1)
+    const extras = buildAnnotations(bars, events.map(e => ({ date: e.date, kind: 'neutral' as const, label: e.kind === 'damage' ? '趋势受损' : e.kind === 'reversal' ? '反转确认' : '趋势确认', above: true })), [], [...levels].map(([value, labels]) => ({ value, label: labels.join(' / '), color: '#A78BFA' })), null, null, '#A78BFA')
+    if (extras.length) chart.createOverlay(extras.map(item => ({ ...item, groupId: 'tsp-dow' })))
+    return () => { chart.removeOverlay({ groupId: 'tsp-dow' }) }
+  }, [dowAnalysis, bars, hideCurrentDate])
   useEffect(() => {
     const chart = chartRef.current
     if (!chart) return

@@ -110,6 +110,8 @@ export interface CandlestickProps {
   volumeCompareControls?: ReactNode
   addedDate?: string | null
   assetType?: string
+  waveCandidate?: import("@/lib/wave").WaveCandidate
+  dowAnalysis?: import("@/lib/dow").DowAnalysis
   chanlunAnalysis?: ChanlunAnalysis
   chanlunOverlay?: StockPreviewChanlunOverlayConfig
   projectionEnabled?: boolean

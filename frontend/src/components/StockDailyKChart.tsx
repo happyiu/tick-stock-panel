@@ -84,6 +84,8 @@ interface Props {
   /** 技术分析模式下附带后端统一评分序列。 */
   includeTechnicalScores?: boolean
   /** 当前周期、当前历史截面的缠论结构近似结果；未传入时不显示相关控件和覆盖层。 */
+  waveCandidate?: import("@/lib/wave").WaveCandidate
+  dowAnalysis?: import("@/lib/dow").DowAnalysis
   chanlunAnalysis?: ChanlunAnalysis
   chanlunError?: string
   projectionEnabled?: boolean
@@ -230,6 +232,8 @@ function StockDailyKChartView({
   period = '1d',
   periodDays = DEFAULT_30M_DAYS,
   includeTechnicalScores = false,
+  waveCandidate,
+  dowAnalysis,
   chanlunAnalysis,
   chanlunError,
   projectionEnabled = false,
@@ -641,6 +645,8 @@ function StockDailyKChartView({
             </div>
           }
           addedDate={showAddedMark ? addedDate : null}
+          dowAnalysis={dowAnalysis}
+          waveCandidate={waveCandidate}
           chanlunAnalysis={chanlunAnalysis}
           chanlunError={chanlunError}
           projectionEnabled={projectionEnabled}

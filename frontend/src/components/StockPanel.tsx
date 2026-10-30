@@ -1,3 +1,6 @@
+import { StockWavePanel } from './StockWavePanel'
+import { StockDowPanel } from './StockDowPanel'
+import { DOW_PERIODS } from '@/lib/dow'
 import { useChartIndicatorSelection } from '@/lib/useChartIndicators'
 import {
   useEffect, useState, useCallback, useRef, useMemo, useId,
@@ -214,6 +217,8 @@ type StockAnalysisTab = 'indicator' | 'structure' | 'levels' | 'ai'
 const STOCK_ANALYSIS_TABS: Array<{ id: StockAnalysisTab; label: string }> = [
   { id: 'indicator', label: '指标分析' },
   { id: 'structure', label: '缠论结构' },
+  { id: 'dow', label: '道氏趋势' },
+  { id: 'wave', label: '波浪分析' },
   { id: 'levels', label: '关键价位' },
   { id: 'ai', label: 'AI分析' },
 ]
@@ -541,6 +546,30 @@ export function StockPanel({
 
   const chanlunCutoff = [effectiveSelectedBarKey, visibleThrough, analysisRows.at(-1)?.date]
     .filter((value): value is string => !!value).sort()[0] ?? null
+  const [dowSelected, setDowSelected] = useState('1d')
+  const [dowOverlayContext, setDowOverlayContext] = useState<string | null>(null)
+  const dowContext = `${analysisContextKey}|${chanlunCutoff}`
+  const dowEnabled = dowOverlayContext === dowContext
+  const dowQueries = useQueries({ queries: DOW_PERIODS.map(p => ({
+    queryKey: QK.dow(symbol, analysisAssetType ?? 'stock', p, chanlunCutoff ?? '', analysisSnapshot?.calculatedAt ?? 0),
+    queryFn: () => api.dowAnalysis(symbol, p, chanlunCutoff!),
+    enabled: !!chanlunCutoff && !!displayAnalysisResponse && resolvedRightPaneMode === 'technical' && (analysisTab === 'dow' || dowEnabled),
+    staleTime: Infinity,
+  })) })
+  const dowItems = DOW_PERIODS.map((p, i) => ({ period: p, analysis: dowQueries[i].data?.dow, loading: dowQueries[i].isFetching, error: dowQueries[i].isError, retry: () => { void dowQueries[i].refetch() } }))
+  const activeDow = dowEnabled ? dowItems.find(i => i.period === period)?.analysis : undefined
+  const [waveChoice, setWaveChoice] = useState({ context: '', id: '' })
+  const [waveOverlay, setWaveOverlay] = useState<string | null>(null)
+  const waveQuery = useQuery({ queryKey: QK.wave(symbol, analysisAssetType ?? 'stock', chanlunCutoff ?? '', analysisSnapshot?.calculatedAt ?? 0),
+    queryFn: () => api.waveAnalysis(symbol, chanlunCutoff!, analysisAssetType ?? 'stock'), enabled: !!chanlunCutoff && !!displayAnalysisResponse && (analysisTab === 'wave' || analysisTab === 'ai' || waveOverlay === dowContext), staleTime: Infinity })
+  const [waveDepth, setWaveDepth] = useState(0)
+  const [wavePeriod, setWavePeriod] = useState<'1d' | '30m'>('1d')
+  const [waveHistorical, setWaveHistorical] = useState<{context: string; data: import('@/lib/wave').WaveBundle} | null>(null)
+  const waveBundle = waveHistorical?.context === dowContext ? waveHistorical.data : waveQuery.data
+  const waveAnalysis = waveBundle?.periods[wavePeriod]
+  const waveSelectionContext = `${dowContext}|${wavePeriod}|${waveBundle?.snapshotId ?? ''}`
+  const waveSelected = waveChoice.context === waveSelectionContext ? waveChoice.id : ''
+  const waveCandidate = waveAnalysis?.counts?.find(c => c.id === waveSelected) ?? waveAnalysis?.counts?.[0]
   const chanlunQuery = useQuery({
     ...chanlunQueryOptions(symbol, analysisAssetType ?? 'stock', period, chartDateRange, periodDays,
       chanlunSource, chanlunCutoff, analysisSnapshot?.contextKey === analysisContextKey ? analysisSnapshot.calculatedAt : 0, intradayObservation && period === '1d'),
@@ -583,8 +612,10 @@ export function StockPanel({
       selectedDate: effectiveSelectedBarKey,
       response: displayAnalysisResponse,
       chanlun: chanlunAnalysis,
+      wave: waveQuery.data,
+      waveSelected,
     }),
-    [chanlunAnalysis, displayAnalysisResponse, effectiveSelectedBarKey, period, symbol],
+    [chanlunAnalysis, displayAnalysisResponse, effectiveSelectedBarKey, period, symbol, waveQuery.data, waveSelected],
   )
   const recalculateAnalysis = useCallback(async () => {
     const requestId = analysisRefreshRequestRef.current + 1
@@ -930,6 +961,8 @@ export function StockPanel({
                 periodDays={periodDays}
                 addedDate={addedDate}
                 includeTechnicalScores={includeTechnicalScores}
+                dowAnalysis={activeDow}
+                waveCandidate={waveOverlay === dowContext && period === wavePeriod && waveCandidate ? {...waveCandidate, displayDepth: waveDepth} : undefined}
                 chanlunAnalysis={resolvedRightPaneMode === 'technical' ? chanlunAnalysis : undefined}
                 chanlunError={chanlunQuery.isError ? (chanlunQuery.error instanceof Error ? chanlunQuery.error.message : '缠论计算失败，请重试') : undefined}
                 projectionEnabled={projectionEnabled}
@@ -1076,6 +1109,8 @@ export function StockPanel({
                   onToggleCollapsed={() => toggleAnalysisSection('technicalCollapsed')}
                 />
                 </>}
+                {analysisTab === 'wave' && <StockWavePanel analysis={waveAnalysis} confluence={waveBundle?.comparison?.summary ?? waveBundle?.coherence} comparison={waveBundle?.comparison} period={wavePeriod} onPeriodChange={setWavePeriod} depth={waveDepth} onDepthChange={setWaveDepth} symbol={symbol} asset={analysisAssetType ?? 'stock'} onHistory={data => setWaveHistorical({context: dowContext, data})} onLatest={() => setWaveHistorical(null)} saved={waveBundle?.saved} selected={waveSelected} onSelect={id => { setWaveChoice({ context: waveSelectionContext, id }); if (period === wavePeriod) setWaveOverlay(dowContext) }} loading={waveQuery.isFetching} error={waveQuery.isError} retry={() => { void waveQuery.refetch() }} enabled={waveOverlay === dowContext} toggle={() => setWaveOverlay(waveOverlay === dowContext ? null : dowContext)} supported={period === wavePeriod} />}
+                {analysisTab === 'dow' && <StockDowPanel items={dowItems} selected={dowSelected} onSelect={setDowSelected} enabled={dowEnabled} onToggle={() => setDowOverlayContext(dowEnabled ? null : dowContext)} supported={period !== '1mo'} />}
                 {analysisTab === 'structure' && <StockChanlunPanel key={symbol} items={overviewItems} period={period} asOf={chanlunCutoff} hideDates={hideCurrentDate} assetType={analysisAssetType}
                   projectionEnabled={projectionEnabled} projectionAvailable={chanlunAnalysis.capabilities?.projection === true && !chanlunQuery.isError}
                   projection={chanlunAnalysis.projection} projectionSelection={activeProjectionSelection} onProjectionBranchSelect={selectProjectionBranch}
