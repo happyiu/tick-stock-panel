@@ -19,6 +19,7 @@ import polars as pl
 
 from app.indicators.pipeline import compute_indicators
 
+from .momentum_reversion import analyze_momentum_reversion
 from .recognize import recognize
 from .structure import levels, pivots, trend, verdict
 
@@ -118,6 +119,7 @@ def _indicators(cs, symbol):
             obv=[],
             volMa5=[],
             volMa20=[],
+            atr14=[],
         )
     frame = pl.DataFrame(
         [
@@ -149,6 +151,7 @@ def _indicators(cs, symbol):
         "boll_upper",
         "boll_lower",
         "vol_ma5",
+        "atr_14",
     }
     frame = compute_indicators(frame, needed=required, assume_sorted=True)
     frame = frame.with_columns(
@@ -164,10 +167,7 @@ def _indicators(cs, symbol):
     )
 
     def series(key):
-        return [
-            round(v, 6) if v is not None and math.isfinite(v) else None
-            for v in frame[key].to_list()
-        ]
+        return [v if v is not None and math.isfinite(v) else None for v in frame[key].to_list()]
 
     return dict(
         ma={f"ma{p}": series(f"ma{p}") for p in (5, 10, 20, 60)},
@@ -184,6 +184,7 @@ def _indicators(cs, symbol):
         obv=series("obv"),
         volMa5=series("vol_ma5"),
         volMa20=series("vol_ma20"),
+        atr14=series("atr_14"),
     )
 
 
@@ -199,9 +200,21 @@ def analyze(rows, *, symbol, name="", period="1d", as_of=None, n=250, tail=160):
         raise ValueError("K线根数超出范围")
     cs, forming = _normalize(rows, as_of)
     cs = cs[-n:]
-    ind = _indicators(cs, symbol)
+    raw_ind = _indicators(cs, symbol)
+    momentum_reversion = analyze_momentum_reversion(cs, raw_ind)
+
+    def rounded(values):
+        return [round(v, 6) if v is not None else None for v in values]
+
+    ind = {
+        k: {name: rounded(values) for name, values in value.items()}
+        if isinstance(value, dict)
+        else rounded(value)
+        for k, value in raw_ind.items()
+    }
     result = dict(
         version=VERSION,
+        momentumReversion=momentum_reversion,
         symbol=symbol,
         name=name,
         period=period,

@@ -205,6 +205,9 @@ def test_api_returns_contract_catalog_and_rejects_invalid_or_oversized_input():
         "/api/stock-analysis/trend-patterns", json=dict(symbol="TEST.SH", rows=bars())
     )
     assert response.status_code == 200
+    assert response.json()["momentumReversion"]["status"] == "ok"
+    assert response.json()["momentumReversion"]["opportunity"]["title"]
+    assert response.json()["momentumReversion"]["opportunity"]["pending"]
     assert response.json()["sampleCount"] == 250
     assert len(response.json()["candles"]) == 160
     assert len(client.get("/api/stock-analysis/pattern-catalog").json()["items"]) == 84

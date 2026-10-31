@@ -53,6 +53,7 @@ export interface PatternHit {
   adviceSource: 'structure'
 }
 export interface TrendPatternAnalysis {
+  momentumReversion?: MomentumReversionAnalysis
   version: string
   symbol: string
   name: string
@@ -123,3 +124,16 @@ export const PATTERN_TRENDS: Record<string, string> = {
   up: '上升', 'up-warn': '上升转弱', down: '下降', 'down-warn': '下降企稳', flat: '横盘', unknown: '样本不足',
 }
 export const plainPatternText = (text: string) => text.replace(/<[^>]*>/g, '')
+
+export interface MomentumReversionAnalysis {
+  opportunity?: null | { version: string; code: string; title: string; tone: 'neutral' | 'candidate' | 'warning'; reason: string; pending: string[] }
+  version: string
+  status: 'ok' | 'insufficient' | 'unavailable'
+  lastDate: string | null
+  environment: 'up' | 'down' | 'range' | 'unknown'
+  issues: string[]
+  interpretation: string
+  metrics: Record<string, number | null>
+  momentum: null | { score: number; delta: number; direction: 'strong' | 'weak' | 'neutral'; change: string; components: Record<string, number> }
+  reversion: null | { score: number; state: 'none' | 'completed' | 'recovering' | 'deviation'; side: 'none' | 'low' | 'high'; started: boolean; anchorDate: string | null; anchorZ: number | null; components: Record<string, number>; conditions: string[] }
+}

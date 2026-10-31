@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { MomentumReversionCard } from './MomentumReversionCard'
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, Download, RefreshCw } from 'lucide-react'
 import { api, type KlinePeriod, type KlineRow } from '@/lib/api'
@@ -150,6 +151,7 @@ function AnalysisResult({ data, assetType, onTeaching, selectedPattern, onPatter
       {data.forming && <p className="text-[11px] text-warning">未收盘K线已排除，当前诊断仅使用已收盘行情。</p>}
       <p className="text-[10px] leading-relaxed text-muted">形态匹配度是规则分值，不是胜率；形成中的形态不计入形态方向分。</p>
     </section>
+    <MomentumReversionCard data={data.momentumReversion} />
     <section className={card} aria-label="三级趋势">
       <h4 className="mb-2 text-xs font-medium text-foreground">三级趋势</h4>
       <div className="grid grid-cols-3 gap-1">{(['long', 'mid', 'short'] as const).map(key => <div key={key} className="min-w-0 rounded bg-base/30 p-1.5 text-[11px]">

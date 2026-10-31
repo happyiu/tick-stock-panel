@@ -18,6 +18,7 @@ afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi
 function Card() {
   const [open, setOpen] = useState(false)
   const [selfInterval, setSelfInterval] = useState(10)
+  const [poolEnabled, setPoolEnabled] = useState(false)
   return <QuoteConfigCard enabled={false} running={false} isTrading={false} loading={false} toggling={false}
     onToggle={() => {}} lastFetchMs={new Date('2026-10-22T10:00:01+08:00').getTime()}
     intervalS={6} intervalMin={1} intervalMax={60} onIntervalChange={v => save('stock', v)}
@@ -25,7 +26,7 @@ function Card() {
     etfWatchlist={{ intervalS: selfInterval, intervalMin: 1, intervalMax: 3600,
       lastFetchMs: new Date('2026-10-22T10:00:02+08:00').getTime(),
       onIntervalChange: async v => { await save('etf_watchlist', v); setSelfInterval(v) } }}
-    etfPool={{ intervalS: 60, intervalMin: 1, intervalMax: 3600, lastFetchMs: null,
+    etfPool={{ enabled: poolEnabled, toggling: false, onToggle: v => { save('realtime_pull_etf', v); setPoolEnabled(v) }, intervalS: 60, intervalMin: 1, intervalMax: 3600, lastFetchMs: null,
       onIntervalChange: v => save('etf_pool', v) }} />
 }
 async function render() { await act(async () => root.render(<Card />)) }
@@ -67,4 +68,16 @@ it('blocks empty or out of range input and keeps the old interval on save failur
   await fill('120'); await submit()
   expect(host.querySelector('[role="alert"]')?.textContent).toContain('保存失败')
   expect(host.querySelector('section[aria-label="ETF 池"]')?.textContent).toContain('60s')
+})
+
+it('toggles the ETF pool scope independently of the realtime master switch', async () => {
+  await render()
+  const toggle = host.querySelector<HTMLButtonElement>('[aria-label="ETF 池行情"]')!
+  expect(toggle.getAttribute('aria-checked')).toBe('false')
+  await act(async () => toggle.click())
+  expect(save).toHaveBeenCalledWith('realtime_pull_etf', true)
+  expect(toggle.getAttribute('aria-checked')).toBe('true')
+  expect(host.querySelector('[aria-label="实时行情"]')?.getAttribute('aria-checked')).toBe('false')
+  await act(async () => toggle.click())
+  expect(save).toHaveBeenCalledWith('realtime_pull_etf', false)
 })

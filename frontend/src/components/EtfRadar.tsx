@@ -2,7 +2,7 @@ import './EtfRadar.css'
 import { cnDateTimeFromUtc } from '@/lib/format'
 import { cnToday } from '@/lib/kline'
 import { DatePicker } from '@/components/DatePicker'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api, type EtfRadarSignal } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
@@ -16,47 +16,27 @@ export function EtfRadar({ onSelect }: { onSelect: (signal: EtfRadarSignal, rang
   const [side, setSide] = useState('')
   const [kind, setKind] = useState('')
   const [all, setAll] = useState(false)
-  const selectedDate = useRef(date)
-  selectedDate.current = date
   const [jobDate, setJobDate] = useState<string | null>(null)
   const [jobId, setJobId] = useState<string | null>(null)
   const [error, setError] = useState('')
-  const attempted = useRef('')
-  const starting = useRef<string | null>(null)
   const enabled = expanded && visible
   useEffect(() => {
     const change = () => setVisible(!document.hidden)
     document.addEventListener('visibilitychange', change)
     return () => document.removeEventListener('visibilitychange', change)
   }, [])
-  const query = useQuery({ queryKey: QK.etfRadar(date), queryFn: () => api.etfRadar(date), enabled, refetchInterval: enabled ? 60_000 : false, retry: false })
+  const query = useQuery({ queryKey: QK.etfRadar(date), queryFn: () => api.etfRadar(date), enabled, refetchInterval: false, retry: false })
   const job = useQuery({ queryKey: QK.etfRadarJob(jobId ?? ''), queryFn: () => api.etfRadarJob(jobId!), enabled: enabled && !!jobId, refetchInterval: enabled && jobId ? 2000 : false, retry: false })
   const data = query.data
   const snapshot = data?.snapshot && data.snapshot.date === (date || data?.date) ? data.snapshot : undefined
   const busy = !!jobId
-  async function scan(force = false) {
-    if (starting.current === date || jobId) return
-    starting.current = date
-    setError('')
-    try {
-      const result = await api.etfRadarScan(date, force)
-      if (selectedDate.current !== date) return
-      setJobDate(result.date ?? data?.date ?? null)
-      setJobId(result.job_id)
-    }
-    catch (e) { if (selectedDate.current === date) setError((e as Error).message) }
-    finally { if (starting.current === date) starting.current = null }
-  }
   useEffect(() => {
     if (!enabled || !data) return
-    if (snapshot) return
-    if (data.job_id) { setJobDate(data.job_date ?? null); setJobId(data.job_id); return }
-    const key = `${date}:${query.dataUpdatedAt}`
-    if (!snapshot && !jobId && attempted.current !== key) {
-      attempted.current = key
-      void scan()
+    if (data.job_id && data.job_date === (date || data.date)) {
+      setJobDate(data.job_date)
+      setJobId(data.job_id)
     }
-  }, [enabled, data, date, query.dataUpdatedAt]) // Scan initiation is deduplicated by the backend too.
+  }, [enabled, data, date])
   useEffect(() => {
     if (!job.data || !['succeeded', 'failed'].includes(job.data.status)) return
     if (job.data.status === 'failed' && jobDate === (date || data?.date)) setError(job.data.error || '扫描失败')
@@ -78,12 +58,13 @@ export function EtfRadar({ onSelect }: { onSelect: (signal: EtfRadarSignal, rang
       <h2 className="font-semibold">市场雷达</h2><span className="text-xs text-muted">全 ETF 池 · 日线 · {snapshot?.mode === 'intraday' ? '盘中候选 · ' : ''}<span title={snapshot ? `分析日期：${snapshot.date}` : undefined}>{cnDateTimeFromUtc(snapshot?.computed_at).slice(0, 16) || date || data?.date || '等待数据'}</span></span>
       <span role="status" className="text-xs text-muted">{busy && !snapshot ? (jobDate === (date || data?.date) ? job.data?.log.at(-1)?.msg ?? '扫描排队中' : '等待前一任务完成后计算所选日期…') : ''}</span>
       </div>
+      <button className={control} disabled={query.isFetching} onClick={() => void query.refetch()}>刷新快照</button>
       <div className="ml-auto flex shrink-0 items-center" aria-label="雷达日期"><DatePicker value={date || data?.date || ''} min={data?.dates.at(-1)} max={cnToday()} onChange={value => { setDate(value); setJobId(null); setJobDate(null); setError(''); setAll(false) }} align="right" /></div>
     </div>
     {expanded && <>
-      {(error || query.error || job.error) && <p role="alert" className="mt-3 text-sm text-down">{error || query.error?.message || job.error?.message}<button className="ml-2 underline" onClick={() => { setError(''); void query.refetch(); void scan(true) }}>重试</button></p>}
+      {(error || query.error || job.error) && <p role="alert" className="mt-3 text-sm text-down">{error || query.error?.message || job.error?.message}<button className="ml-2 underline" onClick={() => { setError(''); void query.refetch() }}>重试</button></p>}
       {query.isPending && <p role="status" className="py-4 text-sm text-muted">正在读取雷达快照…</p>}
-      {!snapshot && !query.isPending && <div className="grid min-h-[220px] place-items-center text-sm text-muted" aria-label="雷达空状态">{busy ? '所选日期暂无快照，正在等待计算完成…' : query.isError || error ? '所选日期快照不可用' : '所选日期暂无快照，准备计算…'}</div>}
+      {!snapshot && !query.isPending && <div className="grid min-h-[220px] place-items-center text-sm text-muted" aria-label="雷达空状态">{busy ? '所选日期暂无快照，正在等待计算完成…' : query.isError || error ? '所选日期快照不可用' : '所选日期暂无快照，等待定时扫描'}</div>}
       {snapshot && <>
         <div className="my-3 flex flex-wrap gap-2">
           <select aria-label="雷达分类" className={control} value={category} onChange={e => setCategory(e.target.value)}><option value="">全部分类</option>{[...new Set(snapshot.signals.map(s => s.category))].sort().map(c => <option key={c}>{c}</option>)}</select>

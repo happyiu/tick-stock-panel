@@ -296,6 +296,11 @@ export function Data() {
   const realtimeEnabled = prefs.data?.realtime_quotes_enabled ?? false
   const quoteStatus = useQuoteStatus()
   const toggleQuote = useToggleRealtimeQuotes()
+  const toggleEtfPool = useMutation({
+    mutationFn: (enabled: boolean) => api.updateRealtimeQuoteScope({ realtime_pull_etf: enabled }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: QK.preferences }),
+    onError: (error: Error) => toast(`ETF 池行情开关保存失败: ${error.message}`, 'error'),
+  })
 
   // 路由感知能力门控: 矩阵判定生效源可用性, 未加载回退套餐视角
   const hasAdjCap = usableOr('adj_factor', !!tfCaps?.['adj_factor'])
@@ -820,6 +825,9 @@ export function Data() {
               onIntervalChange: value => updateEtfWatchlistInterval.mutateAsync(value),
             }}
             etfPool={{
+              enabled: prefs.data?.realtime_pull_etf ?? false,
+              toggling: toggleEtfPool.isPending || prefs.isPending,
+              onToggle: enabled => toggleEtfPool.mutate(enabled),
               intervalS: etfPoolInterval.data?.interval ?? quoteStatus.data?.etf_pool_interval_s ?? 60,
               intervalMin: etfPoolInterval.data?.min_interval ?? 1,
               intervalMax: etfPoolInterval.data?.max_interval ?? 3600,

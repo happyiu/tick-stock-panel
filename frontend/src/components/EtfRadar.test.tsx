@@ -16,8 +16,9 @@ it('filters cached signals without rescanning and passes snapshot context to det
   const root = createRoot(host)
   const select = vi.fn()
   try {
+    vi.useFakeTimers()
     await act(async () => root.render(<QueryClientProvider client={client}><EtfRadar onSelect={select} /></QueryClientProvider>))
-    for (let i = 0; i < 5; i++) await act(async () => { await new Promise(r => setTimeout(r, 0)) })
+    for (let i = 0; i < 5; i++) await act(async () => { await vi.advanceTimersByTimeAsync(1) })
     await act(async () => (host.querySelector('[aria-label="沪深300ETF B1"]') as HTMLButtonElement).click())
     expect(host.textContent).toContain('2026-10-28 15:08')
     expect(host.textContent).not.toContain('收盘快照')
@@ -33,23 +34,27 @@ it('filters cached signals without rescanning and passes snapshot context to det
     await act(async () => { side.value = 'S'; side.dispatchEvent(new Event('change', { bubbles: true })) })
     expect(host.textContent).toContain('暂无有效候选信号')
     expect(mock.scan).not.toHaveBeenCalled()
+    const reads = mock.read.mock.calls.length
+    await act(async () => { await vi.advanceTimersByTimeAsync(120_000) })
+    expect(mock.read).toHaveBeenCalledTimes(reads)
+    await act(async () => [...host.querySelectorAll('button')].find(b => b.textContent === '刷新快照')!.click())
+    expect(mock.read).toHaveBeenCalledTimes(reads + 1)
     expect(host.textContent).not.toContain('全池1')
     expect([...host.querySelectorAll('button')].some(b => b.textContent === '折叠')).toBe(false)
   } finally {
+    vi.useRealTimers()
     await act(async () => root.unmount())
     client.clear()
   }
 })
 
 
-it('shows cached dates without scanning, clears missing dates and ignores stale scan responses', async () => {
+it('reads cached dates and leaves missing dates for scheduled scans', async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   mock.read.mockReset()
   mock.scan.mockReset()
   const cached = { date: '2026-10-28', dates: ['2026-10-28', '2026-10-27'], needs_update: true, job_id: 'other', job_date: '2026-10-27', snapshot: { date: '2026-10-28', range: { start: '2024-10-28', end: '2026-10-28' }, signals: [], failures: [] } }
   mock.read.mockImplementation((date: string) => Promise.resolve(date === '2026-10-27' ? { ...cached, date, snapshot: null, job_id: null } : cached))
-  let finish!: (value: { job_id: string; date: string }) => void
-  mock.scan.mockImplementation(() => new Promise(resolve => { finish = resolve }))
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const host = document.createElement('div')
   const root = createRoot(host)
@@ -70,14 +75,15 @@ it('shows cached dates without scanning, clears missing dates and ignores stale 
     expect(mock.scan).not.toHaveBeenCalled()
     expect(host.textContent).not.toContain('等待前一任务')
     await change('2026-10-27')
-    expect(mock.scan).toHaveBeenCalledWith('2026-10-27', false)
+    expect(mock.scan).not.toHaveBeenCalled()
+    expect(host.textContent).toContain('等待定时扫描')
     expect(host.querySelector('[aria-label="信号雷达气泡图"]')).toBeNull()
     await change('2026-10-28')
-    await act(async () => finish({ job_id: 'old-job', date: '2026-10-27' }))
     await settle()
     expect(host.querySelector('[aria-label="信号雷达气泡图"]')).not.toBeNull()
     expect(host.textContent).not.toContain('扫描排队中')
   } finally {
+    vi.useRealTimers()
     await act(async () => root.unmount())
     client.clear()
   }

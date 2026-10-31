@@ -125,34 +125,54 @@ def test_intraday_observation_does_not_change_standard_confirmation(monkeypatch)
     assert result['bars'][0]['isClosed'] is False
 
 
-def test_background_scheduler_respects_session_and_reuses_running_job(tmp_path, monkeypatch):
+def test_scheduler_registers_three_beijing_cron_jobs(tmp_path, monkeypatch):
     from datetime import datetime
 
     import app.services.etf_radar as module
     from app.market_time import CN_TZ
+
+    monkeypatch.setattr(module.BackgroundScheduler, 'start', lambda self: None)
+    radar = EtfRadar(SimpleNamespace(repo=SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))))
+    radar.start_scheduler()
+    scheduler = radar.scheduler
+    radar.start_scheduler()
+    assert radar.scheduler is scheduler
+    jobs = scheduler.get_jobs()
+    assert len(jobs) == 3
+    now = datetime(2026, 10, 29, 11, 0, tzinfo=CN_TZ)
+    assert sorted(job.trigger.get_next_fire_time(None, now).strftime('%H:%M') for job in jobs) == ['11:30', '14:30', '15:00']
+    weekend = datetime(2026, 10, 31, 11, 0, tzinfo=CN_TZ)
+    assert all(job.trigger.get_next_fire_time(None, weekend).date().isoformat() == '2026-11-02' for job in jobs)
+
+
+def test_scheduled_scan_checks_snapshot_and_reuses_running_job(tmp_path, monkeypatch):
+    from datetime import datetime
+
+    import app.services.etf_radar as module
+    from app.market_time import CN_TZ
+
     radar = EtfRadar(SimpleNamespace(repo=SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))))
     monkeypatch.setattr(module.preferences, 'get_realtime_quotes_enabled', lambda: True)
+    monkeypatch.setattr(module, 'cn_now', lambda: datetime(2026, 10, 29, 11, 30, tzinfo=CN_TZ))
+    current = dict(date='2026-10-29', needs_update=True)
+    monkeypatch.setattr(radar, 'read', lambda: current)
     calls = []
-    monkeypatch.setattr(radar, 'read', lambda: dict(date='2026-10-29', needs_update=True))
     def start():
         calls.append('scan')
         radar.active = 'job'
     monkeypatch.setattr(radar, 'start', start)
-    class Stop:
-        def __init__(self):
-            self.steps = iter([False, False, True])
-        def wait(self, seconds):
-            return next(self.steps)
-    monkeypatch.setattr(module, 'cn_now', lambda: datetime(2026, 10, 29, 11, 30, tzinfo=CN_TZ))
-    radar.stopping = Stop()
-    radar._schedule()
+    radar._scheduled_scan()
+    radar._scheduled_scan()
     assert calls == ['scan']
     radar.active = None
-    calls.clear()
-    radar.stopping = Stop()
-    monkeypatch.setattr(module, 'cn_now', lambda: datetime(2026, 10, 29, 10, 30, tzinfo=CN_TZ))
-    radar._schedule()
-    assert calls == []
+    current['needs_update'] = False
+    radar._scheduled_scan()
+    current.update(date='2026-10-28', needs_update=True)
+    radar._scheduled_scan()
+    current['date'] = '2026-10-29'
+    monkeypatch.setattr(module.preferences, 'get_realtime_quotes_enabled', lambda: False)
+    radar._scheduled_scan()
+    assert calls == ['scan']
 
 
 def test_three_scan_phases_have_stable_boundaries_and_no_historical_rollover():

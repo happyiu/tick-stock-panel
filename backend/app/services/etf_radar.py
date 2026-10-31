@@ -11,6 +11,9 @@ import threading
 import time
 from datetime import date, timedelta
 
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+
 from app.market_time import cn_now
 from app.services import preferences, trading_day
 from app.services.chanlun import (
@@ -68,32 +71,39 @@ class EtfRadar:
         self.active = None
         self.active_day = None
         self.stopping = threading.Event()
-        self.scheduler_thread = None
+        self.scheduler = None
 
     def start_scheduler(self):
-        if self.scheduler_thread:
+        if self.scheduler:
             return
-        self.scheduler_thread = threading.Thread(target=self._schedule, daemon=True, name='etf-radar-scheduler')
-        self.scheduler_thread.start()
+        scheduler = BackgroundScheduler(timezone='Asia/Shanghai')
+        for hour, minute in ((11, 30), (14, 30), (15, 0)):
+            scheduler.add_job(
+                self._scheduled_scan,
+                trigger=CronTrigger(day_of_week='mon-fri', hour=hour, minute=minute,
+                                    timezone='Asia/Shanghai'),
+                id=f'etf-radar-{hour:02d}{minute:02d}',
+                coalesce=True, max_instances=1, misfire_grace_time=300,
+            )
+        scheduler.start()
+        self.scheduler = scheduler
 
     def stop(self):
         self.stopping.set()
-        if self.scheduler_thread:
-            self.scheduler_thread.join(timeout=2)
+        if self.scheduler:
+            self.scheduler.shutdown(wait=False)
+            self.scheduler = None
 
-    def _schedule(self):
-        while not self.stopping.wait(60):
-            try:
-                now = cn_now()
-                if not preferences.get_realtime_quotes_enabled() or self.active:
-                    continue
-                if not (now.weekday() < 5 and (now.hour, now.minute) >= (11, 30)):
-                    continue
-                current = self.read()
-                if current['date'] == now.date().isoformat() and current['needs_update']:
-                    self.start()
-            except Exception:
-                logging.getLogger(__name__).warning('ETF radar scheduled check failed', exc_info=False)
+    def _scheduled_scan(self):
+        try:
+            now = cn_now()
+            if self.stopping.is_set() or not preferences.get_realtime_quotes_enabled() or self.active:
+                return
+            current = self.read()
+            if current['date'] == now.date().isoformat() and current['needs_update']:
+                self.start()
+        except Exception:
+            logging.getLogger(__name__).warning('ETF radar scheduled scan failed', exc_info=False)
 
     def candles(self, symbol, asset, start, end, force=False):
         snapshot = chart_snapshot(self.state, symbol, asset, '1d', start, end,

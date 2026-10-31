@@ -21,7 +21,7 @@ interface QuoteConfigProps extends ScopeConfig {
   showIntervalEdit: boolean
   onShowIntervalEdit: () => void
   etfWatchlist: ScopeConfig
-  etfPool: ScopeConfig
+  etfPool: ScopeConfig & { enabled: boolean; toggling: boolean; onToggle: (enabled: boolean) => void }
 }
 
 export function QuoteConfigCard(props: QuoteConfigProps) {
@@ -72,7 +72,17 @@ export function QuoteConfigCard(props: QuoteConfigProps) {
             }) : '—'
             return (
               <section key={group.id} aria-label={group.label} className="space-y-1.5 border-t border-border/50 pt-2.5 mt-2.5">
-                <div className="text-xs font-medium text-foreground">{group.label}</div>
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-medium text-foreground">{group.label}</div>
+                  {group.id === 'etf_pool' && <button
+                    aria-label="ETF 池行情" role="switch" aria-checked={props.etfPool.enabled}
+                    disabled={props.etfPool.toggling}
+                    onClick={() => props.etfPool.onToggle(!props.etfPool.enabled)}
+                    className={'relative inline-flex h-4 w-7 items-center rounded-full shrink-0 transition-colors ' + (props.etfPool.enabled ? 'bg-accent' : 'bg-elevated') + (props.etfPool.toggling ? ' opacity-50' : '')}
+                  >
+                    <span className={'inline-block h-3 w-3 rounded-full bg-white shadow-sm transition-transform ' + (props.etfPool.enabled ? 'translate-x-[14px]' : 'translate-x-0.5')} />
+                  </button>}
+                </div>
                 <div className="flex items-center justify-between text-[11px]">
                   <div className="flex items-center gap-1">
                     <span className="text-muted">轮询间隔</span>

@@ -136,3 +136,33 @@ it('点击形态标题选择和取消，教学入口独立', async () => {
   await click('查看教学图解')
   expect(select).not.toHaveBeenCalled()
 })
+
+it('在原综合研判与三级趋势之间展示双评分，详情与导出共享响应', async () => {
+  const score: NonNullable<TrendPatternAnalysis['momentumReversion']> = {
+    version: 'ammr-v1', status: 'ok', lastDate: '2026-10-29', environment: 'down', issues: [],
+    opportunity: { version: 'opportunity-v1', code: 'weak_rebound', title: '弱势反弹观察，低吸条件不足', tone: 'warning', reason: '下跌环境仍未扭转', pending: ['仍需核对支撑和上方空间'] },
+    interpretation: '下跌环境，偏离较大不代表已经止跌。', metrics: { z20: -1.8, roc5: -.02 },
+    momentum: { score: -45.5, delta: 6, direction: 'weak', change: '增强', components: { roc5: -10 } },
+    reversion: { score: 55, state: 'recovering', side: 'low', started: true, anchorDate: '2026-10-28', anchorZ: -2.5,
+      components: { deviation: 40, recovery: 10, turn: 5 }, conditions: ['价格与Z均向均值移动'] },
+  }
+  mocks.analyze.mockResolvedValue(result({ momentumReversion: score }))
+  await render()
+  const text = host.textContent!
+  for (const expected of ['机会判断', '弱势反弹观察，低吸条件不足', '下跌环境仍未扭转', '仍需核对支撑和上方空间', '动量分', '-45.5', '回归成熟度', '55.0', '低位回升', '开始改善', '价格与Z均向均值移动']) expect(text).toContain(expected)
+  expect(text.indexOf('动量与均值回归')).toBeGreaterThan(text.indexOf('综合研判'))
+  expect(text.indexOf('动量与均值回归')).toBeLessThan(text.indexOf('三级趋势'))
+  const details = host.querySelector('section[aria-label="动量与均值回归"] details') as HTMLDetailsElement
+  expect(details.open).toBe(false)
+  await act(async () => (details.querySelector('summary') as HTMLElement).click())
+  expect(details.open).toBe(true)
+})
+
+it('新模块兼容旧响应并独立提示65根门槛', async () => {
+  await render()
+  expect(host.textContent).toContain('模块暂不可用')
+  mocks.analyze.mockResolvedValue(result({ momentumReversion: { version: 'ammr-v1', status: 'insufficient', lastDate: null, environment: 'unknown', issues: ['至少需要65根已收盘K线'], interpretation: '', metrics: {}, momentum: null, reversion: null } }))
+  await render({ selectedDate: '2026-10-28' })
+  expect(host.textContent).toContain('至少需要65根已收盘K线')
+  expect(host.textContent).toContain('综合分 -3.2')
+})
