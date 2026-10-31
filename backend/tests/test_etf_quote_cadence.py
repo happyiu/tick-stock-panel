@@ -33,12 +33,14 @@ def polling(monkeypatch, request):
     requests: list[list[str]] = []
     captured: list[list[dict]] = []
     state.stock_calls = []
+    state.etf_calls = []
 
     def records(symbols):
         symbols = list(symbols)
         if "600519.SH" in symbols:
             state.stock_calls.append(state.now)
         if set(symbols) & ETFS:
+            state.etf_calls.append(state.now)
             requests.append(sorted(set(symbols) & ETFS))
             if state.fail == "exception":
                 raise RuntimeError("ETF endpoint unavailable")
@@ -151,7 +153,19 @@ def test_configured_intervals_schedule_each_scope_independently(polling):
         service._fetch_full_market_quotes()
     assert state.stock_calls == [0, 30, 60]
     assert requests == [sorted(ETFS), ["159992.SZ"], ["159992.SZ"], ["159992.SZ"],
-                        ["159992.SZ"], sorted(ETFS), ["159992.SZ"]]
+                        ["159992.SZ"], sorted(ETFS), ["159992.SZ"], ["159992.SZ"]]
+    assert state.etf_calls == [0, 10, 20, 30, 40, 45, 50, 60]
+
+
+def test_faster_pool_refresh_does_not_postpone_watchlist_clock(polling):
+    service, state, requests, _ = polling
+    state.watchlist_interval, state.pool_interval = 30, 10
+    for elapsed in (0, 10, 20, 30, 40):
+        state.now = elapsed
+        service._fetch_full_market_quotes()
+        assert service._poll_attempts["etf_watchlist"][2] == (0 if elapsed < 30 else 30)
+    # Simultaneous deadlines use the full-pool response once.
+    assert requests == [sorted(ETFS)] * 5
 
 
 def test_interval_change_takes_effect_without_restart(polling):

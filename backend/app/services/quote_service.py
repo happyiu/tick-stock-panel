@@ -729,7 +729,9 @@ class QuoteService:
         return force or last is None or last[:2] != (provider, cn_today()) or now_ts - last[2] >= self.get_interval(scope)
 
     def _record_poll_attempt(self, provider, now_ts, stock_due, wanted_etfs, full_etf_refresh):
-        for scope, attempted in (("stock", stock_due), ("etf_watchlist", bool(wanted_etfs)), ("etf_pool", full_etf_refresh)):
+        # Full-pool responses include watchlist ETFs, but must not postpone their next tick.
+        watchlist_due = bool(wanted_etfs) and self._scope_due("etf_watchlist", provider, now_ts)
+        for scope, attempted in (("stock", stock_due), ("etf_watchlist", watchlist_due), ("etf_pool", full_etf_refresh)):
             if attempted:
                 self._poll_attempts[scope] = (provider, cn_today(), now_ts)
 

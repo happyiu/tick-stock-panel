@@ -138,7 +138,7 @@ datasets:
 股票、自选 ETF、ETF 池分别使用持久化的 `realtime_quote_interval`、
 `realtime_etf_watchlist_interval`、`realtime_etf_pool_interval`（默认 6 / 10 / 60 秒）。
 数据页实时行情卡片按组设置间隔，保存后生效，不需要重启；旧的股票间隔设置保持兼容。
-`realtime_pull_etf` 开启时按 ETF 池间隔查询本地 ETF 目录全部标的，全量轮次包含自选，不重复补拉。
+`realtime_pull_etf` 开启时按 ETF 池间隔查询本地 ETF 目录全部标的，全量轮次包含自选，不重复补拉。自选 ETF 仍按独立间隔到期，未到期的全池拉取不会重置自选计时；两组同时到期时只请求一次全池。
 关闭该开关时仅查询自选 ETF。首次启用、跨日、切换源及午休/收盘最终同步立即拉全量。
 该补充依赖 `astockdata` 的 `realtime` 能力；缺少能力或请求失败不会阻止股票更新。
 TickFlow 与直接选用 `astockdata` 实时源时也使用上述分频策略；其他自定义全市场接口
