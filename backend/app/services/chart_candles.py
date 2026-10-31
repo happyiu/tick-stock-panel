@@ -22,6 +22,25 @@ def chart_snapshot(state, symbol, asset_type, period, start, end, *, max_age_sec
     return service.get(provider, provider, symbol, asset_type, period, start, end, **options)
 
 
+def wave_daily_snapshot(state, symbol, asset_type, start, end):
+    """Use the chart provider first, matching the daily chart's repository fallback."""
+    snapshot = chart_snapshot(state, symbol, asset_type, '1d', start, end)
+    if not snapshot.frame.is_empty():
+        return snapshot
+
+    repo = getattr(state, 'repo', None)
+    get_daily = getattr(repo, 'get_daily_asset', None)
+    if not callable(get_daily):
+        return snapshot
+    frame = get_daily(asset_type, symbol, start, end)
+    if frame.is_empty():
+        return snapshot
+
+    # Stock and ETF enriched daily bars are forward adjusted; index bars are stored raw.
+    adjustment = 'none' if asset_type == 'index' else 'forward'
+    return ChartSnapshot(frame, 'repository', adjustment=adjustment)
+
+
 def monitor_capability(state, rule):
     from app.data_providers.capabilities import build_capability_matrix
     from app.tickflow.policy import base_tier_name

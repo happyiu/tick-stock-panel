@@ -311,7 +311,7 @@ def wave_analyze(request: Request, body: WaveAnalyzeRequest):
     from datetime import datetime
 
     from app.services import wave_history
-    from app.services.chart_candles import chart_snapshot
+    from app.services.chart_candles import chart_snapshot, wave_daily_snapshot
     from app.services.kline_periods import prepare_native_30m
     from app.services.wave import analyze_wave
     try:
@@ -324,7 +324,9 @@ def wave_analyze(request: Request, body: WaveAnalyzeRequest):
         raise HTTPException(422,'资产类型与标的不一致')
     periods = {}
     for period,days in (('1d',1096),('30m',400)):
-        snap = chart_snapshot(request.app.state,body.symbol,body.asset_type,period,cutoff.date()-timedelta(days=days),cutoff.date())
+        start, end = cutoff.date()-timedelta(days=days), cutoff.date()
+        snap = (wave_daily_snapshot(request.app.state, body.symbol, body.asset_type, start, end)
+                if period == '1d' else chart_snapshot(request.app.state, body.symbol, body.asset_type, period, start, end))
         rows = prepare_native_30m(snap.frame).to_dicts() if period=='30m' and not snap.frame.is_empty() else snap.frame.to_dicts()
         from app.api.kline import _annotate_bar_closure, _maybe_inject_live_candle
         if period == '1d' and hasattr(request.app.state.repo, 'get_enriched_latest_asset'):
