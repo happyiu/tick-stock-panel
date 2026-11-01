@@ -36,7 +36,7 @@ import polars as pl
 from app.market_time import CN_TZ, cn_now, cn_today
 from app.parquet import scan_daily_parquet
 from app.polars_guard import guarded_collect
-from app.services.index_const import CORE_INDEX_SYMBOLS
+from app.services.index_const import CORE_INDEX_SYMBOLS, INDEX_PAGE_SYMBOLS
 from app.strategy.intraday_signals import IntradaySignalEvaluator
 from app.strategy.monitor import format_alert_quote
 
@@ -47,6 +47,14 @@ SOURCE_LABELS = {
     "volume_delta": "放量", "abnormal": "异动", "date": "日期提醒",
     "paper": "模拟盘",
 }
+
+# 扶摇指数快照遇到未知代码会导致整批失败；这些详情页新增代码已逐一确认可拉实时行情。
+_FUYAO_INDEX_PAGE_REALTIME_SYMBOLS = frozenset({
+    "000300.SH",
+    "000016.SH",
+    "000905.SH",
+    "000852.SH",
+})
 
 # final 定版确认容差: 快照时间戳允许早于边界 5s 内 (供应商时间戳精度不一)
 _FINAL_CONFIRM_SLACK_MS = 5_000
@@ -784,7 +792,8 @@ class QuoteService:
                     if provider_name == "astockdata" and self._repo:
                         instruments = self._repo.get_instruments()
                         stock_symbols = set(instruments["symbol"]) if "symbol" in instruments.columns else set()
-                        symbols = (stock_symbols | self._repo.get_index_symbol_set() if stock_due else set()) | wanted_etfs
+                        index_symbols = self._repo.get_index_symbol_set() | set(INDEX_PAGE_SYMBOLS)
+                        symbols = (stock_symbols | index_symbols if stock_due else set()) | wanted_etfs
                         records = provider.get_realtime(symbols=sorted(symbols)) if symbols else []
                     else:
                         # 通用全市场接口可能同时提供 ETF; 扶摇则只需股票轮取数。
@@ -820,8 +829,12 @@ class QuoteService:
                         # attach_deviation_columns_today 实时外推; 展示层仍按核心
                         # 四只过滤, 多拉的指数不进侧栏。
                         from app.indicators.pipeline import BENCHMARK_INDEX_SYMBOLS
+                        page_index_symbols = set(INDEX_PAGE_SYMBOLS)
+                        if provider_name == "fuyao":
+                            page_index_symbols &= _FUYAO_INDEX_PAGE_REALTIME_SYMBOLS
                         wanted = sorted(
                             set(CORE_INDEX_SYMBOLS)
+                            | page_index_symbols
                             | BENCHMARK_INDEX_SYMBOLS
                             | self._collect_monitor_index_symbols()
                         )
@@ -863,7 +876,7 @@ class QuoteService:
             from app.services import preferences
             all_index_symbols = set(self._repo.get_index_symbol_set()) if self._repo else set()
             core_index_symbols = set(CORE_INDEX_SYMBOLS)
-            all_index_symbols.update(core_index_symbols)
+            all_index_symbols.update(core_index_symbols | set(INDEX_PAGE_SYMBOLS))
             # 指数监控规则标的并入显式拉取 (quotes.get 按码覆盖)
             monitor_index_symbols = self._collect_monitor_index_symbols()
             all_index_symbols.update(monitor_index_symbols)
@@ -903,7 +916,7 @@ class QuoteService:
             # 指数: 固定核心四只 + 偏离值基准指数 + 监控规则标的, 按码显式拉取
             from app.indicators.pipeline import BENCHMARK_INDEX_SYMBOLS
             _core_syms = sorted(
-                core_index_symbols | BENCHMARK_INDEX_SYMBOLS | monitor_index_symbols
+                core_index_symbols | set(INDEX_PAGE_SYMBOLS) | BENCHMARK_INDEX_SYMBOLS | monitor_index_symbols
             )
             if stock_due and _core_syms:
                 _i0 = time.perf_counter()
@@ -976,7 +989,7 @@ class QuoteService:
         from app.services import preferences
         all_index_symbols = set(self._repo.get_index_symbol_set()) if self._repo else set()
         core_index_symbols = set(CORE_INDEX_SYMBOLS)
-        all_index_symbols.update(core_index_symbols)
+        all_index_symbols.update(core_index_symbols | set(INDEX_PAGE_SYMBOLS))
         all_etf_symbols = set()
         if self._repo:
             etf_inst = self._repo.get_etf_instruments()

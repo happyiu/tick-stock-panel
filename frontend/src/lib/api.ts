@@ -6,6 +6,18 @@ import type { PaperTradingStepMinutes } from '@/lib/paper-trading-time'
 
 import { toast } from '@/components/Toast'
 
+export interface VolumeTrend {
+  symbol: string
+  name: string
+  unit: 'CNY'
+  as_of: string | null
+  data_time: string | null
+  source: 'stored' | 'live' | 'none'
+  provisional: boolean
+  points: { date: string; amount: number | null; open: number | null; high: number | null; low: number | null; close: number | null; ma5: number | null; ma13: number | null; ma28: number | null; provisional: boolean }[]
+  crosses: { date: string; fast: 'ma5' | 'ma13'; slow: 'ma13' | 'ma28'; kind: 'golden' | 'death'; value: number; provisional: boolean }[]
+}
+
 const BASE = ''
 
 export interface EtfRadarSignal {
@@ -3628,6 +3640,8 @@ export const api = {
         ? `/api/index/daily?symbol=${encodeURIComponent(symbol)}&start_date=${dateRange.start}&end_date=${dateRange.end}`
         : `/api/index/daily?symbol=${encodeURIComponent(symbol)}&days=${days}`,
     ),
+  volumeTrend: (symbol: string) =>
+    request<VolumeTrend>(`/api/custom/volume-analysis/trend?symbol=${encodeURIComponent(symbol)}`),
   indexMinute: (symbol: string, date?: string) =>
     request<{
       symbol: string

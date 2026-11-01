@@ -132,6 +132,7 @@ export const QK = {
                              ['index-daily', symbol, start, end] as const,
   indexMinute:          (symbol: string, date: string) =>
                              ['index-minute', symbol, date] as const,
+  volumeAnalysis:       (symbol: string) => ['volume-analysis', symbol] as const,
 
   // Schema
   extDataSchemaAll:     ['ext-data-schema-all'] as const,

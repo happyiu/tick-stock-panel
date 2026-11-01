@@ -16,3 +16,15 @@ CORE_INDEX_NAMES: dict[str, str] = {
 }
 
 CORE_INDEX_SYMBOLS: tuple[str, ...] = tuple(CORE_INDEX_NAMES.keys())
+
+# 指数详情页额外展示的常用指数。与 CORE_INDEX_SYMBOLS 分开，避免改变
+# 侧栏、市场总览和情绪雷达沿用的四只核心指数口径。
+INDEX_PAGE_SYMBOLS: tuple[str, ...] = (
+    "000300.SH",
+    "000510.SH",
+    "000016.SH",
+    "000905.SH",
+    "000852.SH",
+    "932000.SH",
+    "000985.SH",
+)

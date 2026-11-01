@@ -149,7 +149,7 @@ function AnalysisResult({ data, assetType, onTeaching, selectedPattern, onPatter
       <p className="text-xs leading-relaxed text-secondary">{v.advice}</p>
       <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-border/50 pt-2 text-[11px] text-muted"><span>现价 {price(data.price)}</span><span>{v.maAlign}</span><span>量比(5/20) {valueText(v.volRatio)}</span><span>盈亏比 {valueText(v.rr)}</span></div>
       {data.forming && <p className="text-[11px] text-warning">未收盘K线已排除，当前诊断仅使用已收盘行情。</p>}
-      <p className="text-[10px] leading-relaxed text-muted">形态匹配度是规则分值，不是胜率；形成中的形态不计入形态方向分。</p>
+      {assetType !== 'index' && <p className="text-[10px] leading-relaxed text-muted">形态匹配度是规则分值，不是胜率；形成中的形态不计入形态方向分。</p>}
     </section>
     <MomentumReversionCard data={data.momentumReversion} />
     <section className={card} aria-label="三级趋势">

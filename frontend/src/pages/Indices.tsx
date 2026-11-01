@@ -12,6 +12,7 @@ import { StrategyPickerDialog } from '@/components/screener/StrategyPickerDialog
 import { ChartSignalPickerDialog } from '@/components/screener/ChartSignalPickerDialog'
 import { cnToday, defaultKlineRange, KLINE_PERIOD_OPTIONS, PERIOD_30M_DAY_OPTIONS, DEFAULT_30M_DAYS } from '@/lib/kline'
 import { EChartsIntraday } from '@/components/EChartsIntraday'
+import { INDEX_PAGE_ITEMS } from '@/lib/indexSymbols'
 
 function fmtPct(v: number | null | undefined) {
   if (v == null || Number.isNaN(Number(v))) return '--'
@@ -23,12 +24,8 @@ function fmtNum(v: number | null | undefined, digits = 2) {
   return Number(v).toFixed(digits)
 }
 
-const PINNED_INDEXES = [
-  { symbol: '000001.SH', name: '上证指数' },
-  { symbol: '399001.SZ', name: '深证成指' },
-  { symbol: '399006.SZ', name: '创业板指' },
-  { symbol: '000680.SH', name: '科创综指' },
-]
+const PINNED_INDEXES = INDEX_PAGE_ITEMS
+const PINNED_INDEX_SYMBOLS = PINNED_INDEXES.map(item => item.symbol)
 
 export function Indices() {
   const qc = useQueryClient()
@@ -69,7 +66,7 @@ export function Indices() {
 
   const quotes = useQuery({
     queryKey: QK.indexQuotes,
-    queryFn: () => api.indexQuotes(),
+    queryFn: () => api.indexQuotes(PINNED_INDEX_SYMBOLS),
     placeholderData: (prev) => prev,
   })
 
@@ -184,9 +181,9 @@ export function Indices() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[15rem_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[12rem_minmax(0,1fr)]">
         <aside className="rounded-card border border-border bg-surface p-3">
-          <div className="mb-2 px-1 text-[11px] uppercase tracking-wider text-muted">核心指数</div>
+          <div className="mb-2 px-1 text-[11px] uppercase tracking-wider text-muted">指数列表</div>
           <div className="space-y-1">
             {topRows.map(renderIndexItem)}
           </div>

@@ -99,7 +99,7 @@ def index_quotes(
     request: Request,
     symbols: str | None = Query(None, description="逗号分隔的指数 symbol 列表"),
 ):
-    """返回实时指数行情缓存，不触发 TickFlow 请求。"""
+    """返回实时指数行情缓存；指定代码缺少实时快照时用最近日K补齐。"""
     symbol_list = [s.strip() for s in symbols.split(",") if s.strip()] if symbols else None
     qs = _get_quote_service(request)
     if not qs:
@@ -107,6 +107,16 @@ def index_quotes(
         return {"rows": rows, "count": len(rows), "source": "index_daily"}
     df = qs.get_index_quotes(symbol_list)
     rows = df.to_dicts() if not df.is_empty() else []
+    if symbol_list:
+        live_symbols = {row.get("symbol") for row in rows}
+        fallback_rows = _fallback_index_quotes_from_daily(
+            request,
+            [symbol for symbol in symbol_list if symbol not in live_symbols],
+        )
+        rows.extend(fallback_rows)
+        rows.sort(key=lambda row: str(row.get("symbol") or ""))
+        source = "mixed" if live_symbols and fallback_rows else "realtime" if live_symbols else "index_daily"
+        return {"rows": rows, "count": len(rows), "source": source}
     if not rows:
         rows = _fallback_index_quotes_from_daily(request, symbol_list)
         return {"rows": rows, "count": len(rows), "source": "index_daily"}
