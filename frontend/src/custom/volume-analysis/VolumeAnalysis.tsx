@@ -54,6 +54,12 @@ function money(value: number | null | undefined) {
   return `${(value / 1e8).toFixed(2)} 亿`
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+}
+
 function TrendChart({ data, symbol, selectedPairs, showKline, onActiveDate }: { data: VolumeTrend; symbol: string; selectedPairs: Set<string>; showKline: boolean; onActiveDate: (date: string | null) => void }) {
   const node = useRef<HTMLDivElement>(null)
   const chart = useRef<echarts.ECharts | null>(null)
@@ -68,8 +74,9 @@ function TrendChart({ data, symbol, selectedPairs, showKline, onActiveDate }: { 
   useEffect(() => {
     if (!node.current) return
     chart.current = echarts.init(node.current)
-    chart.current.on('updateAxisPointer', (event: { axesInfo?: Array<{ value?: unknown }> }) => {
-      const value = event.axesInfo?.[0]?.value
+    chart.current.on('updateAxisPointer', (...args: unknown[]) => {
+      const axesInfo = asRecord(args[0])?.axesInfo
+      const value = Array.isArray(axesInfo) ? asRecord(axesInfo[0])?.value : undefined
       const point = pointsRef.current.find(row => row.date === String(value))
         ?? (Number.isInteger(Number(value)) ? pointsRef.current[Number(value)] : undefined)
       if (point && activeDateRef.current !== point.date) {
@@ -83,8 +90,10 @@ function TrendChart({ data, symbol, selectedPairs, showKline, onActiveDate }: { 
         onActiveDateRef.current(null)
       }
     })
-    chart.current.on('datazoom', (event: { start?: unknown; end?: unknown; batch?: Array<{ start?: unknown; end?: unknown }> }) => {
-      const payload = event.batch?.[0] ?? event
+    chart.current.on('datazoom', (...args: unknown[]) => {
+      const event = asRecord(args[0]) ?? {}
+      const batch = Array.isArray(event.batch) ? asRecord(event.batch[0]) : undefined
+      const payload = batch ?? event
       const zoomOptions = chart.current?.getOption().dataZoom
       const currentZoom = (Array.isArray(zoomOptions) ? zoomOptions[0] : zoomOptions) as { start?: unknown; end?: unknown } | undefined
       const start = Number(payload.start ?? event.start ?? currentZoom?.start)
@@ -107,22 +116,24 @@ function TrendChart({ data, symbol, selectedPairs, showKline, onActiveDate }: { 
   const option = useMemo<echarts.EChartsOption>(() => {
     const dates = data.points.map(point => point.date)
     const zoom = readZoomRange(symbol) ?? { start: 0, end: 100 }
-    const series: echarts.SeriesOption[] = [
-      { name: '成交额', type: 'bar', data: data.points.map(point => point.amount == null ? null : point.amount / 1e8),
-        itemStyle: { color: '#64748b', opacity: 0.38 }, barMaxWidth: 12 },
-      ...(['ma5', 'ma13', 'ma28'] as const).map((key, index) => ({
-        name: key.toUpperCase(), type: 'line' as const, showSymbol: false, connectNulls: false,
-        data: data.points.map(point => point[key] == null ? null : point[key]! / 1e8),
-        lineStyle: { width: 2 }, itemStyle: { color: ['#8b5cf6', '#f59e0b', '#06b6d4'][index] },
-      })),
-      ...(showKline ? [{
-        name: '指数K线', type: 'candlestick' as const, yAxisIndex: 1,
-        data: data.points.map(point => point.open != null && point.close != null && point.low != null && point.high != null
-          ? [point.open, point.close, point.low, point.high] : null),
-        itemStyle: { color: '#ef4444', color0: '#22c55e', borderColor: '#ef4444', borderColor0: '#22c55e' },
-        barMaxWidth: 8,
-      }] : []),
-      ...PAIRS.filter(pair => selectedPairs.has(pair.key)).flatMap(pair => (['golden', 'death'] as const).map(kind => ({
+    const amountSeries: echarts.BarSeriesOption = {
+      name: '成交额', type: 'bar', data: data.points.map(point => point.amount == null ? null : point.amount / 1e8),
+      itemStyle: { color: '#64748b', opacity: 0.38 }, barMaxWidth: 12,
+    }
+    const averageSeries: echarts.LineSeriesOption[] = (['ma5', 'ma13', 'ma28'] as const).map((key, index) => ({
+      name: key.toUpperCase(), type: 'line' as const, showSymbol: false, connectNulls: false,
+      data: data.points.map(point => point[key] == null ? null : point[key]! / 1e8),
+      lineStyle: { width: 2 }, itemStyle: { color: ['#8b5cf6', '#f59e0b', '#06b6d4'][index] },
+    }))
+    const candleSeries: echarts.CandlestickSeriesOption[] = showKline ? [{
+      name: '指数K线', type: 'candlestick' as const, yAxisIndex: 1,
+      data: data.points.map(point => point.open != null && point.close != null && point.low != null && point.high != null
+        ? [point.open, point.close, point.low, point.high] : [null, null, null, null]),
+      itemStyle: { color: '#ef4444', color0: '#22c55e', borderColor: '#ef4444', borderColor0: '#22c55e' },
+      barMaxWidth: 8,
+    }] : []
+    const crossSeries: echarts.ScatterSeriesOption[] = PAIRS.filter(pair => selectedPairs.has(pair.key))
+      .flatMap(pair => (['golden', 'death'] as const).map(kind => ({
         name: `${pair.label} ${kind === 'golden' ? '金叉' : '死叉'}`,
         type: 'scatter' as const, symbol: kind === 'golden' ? 'triangle' : 'triangle',
         symbolRotate: kind === 'death' ? 180 : 0, symbolSize: 10,
@@ -130,8 +141,8 @@ function TrendChart({ data, symbol, selectedPairs, showKline, onActiveDate }: { 
           borderColor: '#fff', borderWidth: 1 },
         data: data.crosses.filter(event => event.fast === pair.fast && event.slow === pair.slow && event.kind === kind)
           .map(event => ({ value: [event.date, event.value / 1e8], provisional: event.provisional })),
-      }))),
-    ]
+      })))
+    const series: echarts.SeriesOption[] = [amountSeries, ...averageSeries, ...candleSeries, ...crossSeries]
     return {
       animation: false,
       grid: { left: 62, right: 20, top: 32, bottom: 65 },
