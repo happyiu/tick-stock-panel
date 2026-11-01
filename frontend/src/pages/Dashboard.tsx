@@ -450,6 +450,73 @@ function ExchangeRateWidget({
   )
 }
 
+function AmountTrendSparkline({ trend }: { trend: OverviewMarket['amount']['trend_90d'] }) {
+  const values = trend.flatMap(point => [point.avg_5d, point.avg_13d].filter((value): value is number => value != null && Number.isFinite(value)))
+  if (values.length < 2) return null
+
+  const width = 240
+  const height = 72
+  const padding = 6
+  const minValue = Math.min(...values)
+  const maxValue = Math.max(...values)
+  const spread = maxValue - minValue || Math.max(Math.abs(maxValue) * 0.02, 1)
+  const yMin = minValue - spread * 0.08
+  const yMax = maxValue + spread * 0.08
+  const buildLine = (field: 'avg_5d' | 'avg_13d') => {
+    const paths: string[] = []
+    let segment: string[] = []
+    let latest: { x: number; y: number; date: string; value: number } | null = null
+    for (const [index, point] of trend.entries()) {
+      const value = point[field]
+      if (value == null || !Number.isFinite(value)) {
+        if (segment.length > 1) paths.push(segment.join(' '))
+        segment = []
+        continue
+      }
+      const x = padding + index / Math.max(trend.length - 1, 1) * (width - padding * 2)
+      const y = padding + (yMax - value) / (yMax - yMin || 1) * (height - padding * 2)
+      segment.push(`${segment.length ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`)
+      latest = { x, y, date: point.date, value }
+    }
+    if (segment.length > 1) paths.push(segment.join(' '))
+    return { d: paths.join(' '), latest }
+  }
+  const lines = [
+    { key: 'avg_5d' as const, color: 'text-accent', ...buildLine('avg_5d') },
+    { key: 'avg_13d' as const, color: 'text-amber-400', ...buildLine('avg_13d') },
+  ]
+  const latest = trend[trend.length - 1]
+
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" className="h-9 w-full text-accent" role="img" aria-label="近90个交易日的MA5与MA13趋势">
+      <title>{latest ? `${latest.date} · MA5 ${fmtBigNum(latest.avg_5d)} / MA13 ${fmtBigNum(latest.avg_13d)}` : '近90个交易日MA5与MA13趋势'}</title>
+      {lines.map(line => line.d && (
+        <g key={line.key} className={line.color}>
+          <path d={line.d} fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinejoin="round" strokeLinecap="round" />
+          {line.latest && <circle cx={line.latest.x} cy={line.latest.y} r="3" fill="currentColor" />}
+        </g>
+      ))}
+    </svg>
+  )
+}
+
+function AmountKpiCell({ amount }: { amount: OverviewMarket['amount'] }) {
+  return (
+    <div className="min-w-0 overflow-hidden rounded-lg border border-border bg-surface/80 px-2 py-1 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-all hover:border-accent/30 hover:shadow-[0_2px_8px_hsl(var(--accent)/0.15)]">
+      <div className="grid grid-cols-[minmax(0,1fr)_minmax(5rem,1fr)] items-center gap-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1 text-[11px] text-muted">成交额</div>
+          <div className="mt-1 truncate font-mono text-lg font-semibold leading-none tabular-nums">{fmtBigNum(amount.total)}</div>
+        </div>
+        <AmountTrendSparkline trend={amount.trend_90d ?? []} />
+      </div>
+      <div className="mt-1 truncate text-[10px] text-muted">
+        <span className="text-accent">MA5</span> {fmtBigNum(amount.avg_5d)} / <span className="text-amber-400">MA13</span> {fmtBigNum(amount.avg_13d)}
+      </div>
+    </div>
+  )
+}
+
 export function Dashboard() {
   const qc = useQueryClient()
   const [selectedDate, setSelectedDate] = useState<string | undefined>()
@@ -704,7 +771,7 @@ export function Dashboard() {
           if (stocks.length > 0 && stocks.length <= 3) return stocks.map(s => s.name || s.symbol).join(' · ')
           return `梯队 ${data.limit.tiers.length}`
         })()} tone="accent" />
-        <KpiCell label="成交额" value={fmtBigNum(data.amount.total)} sub={`均额 ${fmtBigNum(data.amount.avg)}`} />
+        <AmountKpiCell amount={data.amount} />
         <KpiCell label="换手 / 量比" value={`${fmtPrice(data.activity.avg_turnover, 1)}% / ${fmtPrice(data.activity.vol_ratio, 2)}`} sub={`高换手 ${data.activity.high_turnover} · 放量占比 ${fmtPrice(data.activity.high_vol_ratio, 1)}%`} tone="accent" />
       </div>
 

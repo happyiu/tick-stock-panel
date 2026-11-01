@@ -934,7 +934,13 @@ export interface OverviewMarket {
     strong_up?: number
     strong_down?: number
   }
-  amount: { total: number; avg: number }
+  amount: {
+    total: number
+    avg: number
+    avg_5d: number | null
+    avg_13d: number | null
+    trend_90d: { date: string; avg_5d: number | null; avg_13d: number | null }[]
+  }
   boards: { board: string; count: number; up: number; down: number; up_pct: number; amount: number }[]
   limit: { limit_up: number; broken: number; failed: number; limit_down: number; max_boards: number; seal_rate?: number; tiers: { boards: number; count: number; stocks?: { symbol: string; name?: string; amount?: number }[] }[]; sealed_ready?: boolean; fake_up?: number; fake_down?: number }
   distribution: { label: string; count: number; pct: number }[]

@@ -13,17 +13,22 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import math
 import os
 import re
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import polars as pl
 
+from app.parquet import scan_enriched_parquet
+from app.polars_guard import guarded_collect
 from app.services.ext_data import ExtConfig, ExtConfigStore
 from app.services.index_const import CORE_INDEX_NAMES, CORE_INDEX_SYMBOLS
 from app.services.screener import ScreenerService
+
+logger = logging.getLogger(__name__)
 
 # ================================================================
 # 常量(核心指数清单单一权威: app.services.index_const)
@@ -74,6 +79,100 @@ def _score(value: float, low: float, high: float) -> int:
     if high <= low:
         return 50
     return max(0, min(100, round((value - low) / (high - low) * 100)))
+
+
+def _market_amount_trend(
+    repo,
+    as_of: date,
+    *,
+    latest_amount: float | None,
+    replace_as_of: bool,
+) -> tuple[float | None, float | None, list[dict]]:
+    """Return current 5/13-session market amount means and 90 daily values."""
+    window_5d = 5
+    window_13d = 13
+    point_count = 90
+    start = as_of - timedelta(days=(point_count + window_13d - 1) * 2)
+    history = None
+
+    # Reuse the warmed enriched history for recent dates. Older selected dates fall
+    # back to their date partitions below, without forcing a full cache rebuild.
+    span_getter = getattr(repo, "get_enriched_history_span", None)
+    range_getter = getattr(repo, "get_enriched_range", None)
+    try:
+        span = span_getter() if callable(span_getter) else None
+        if span and span[0] <= start and span[1] >= as_of and callable(range_getter):
+            history = range_getter(start, as_of, columns=["date", "amount"])
+    except Exception:  # noqa: BLE001
+        history = None
+
+    if history is None or history.is_empty():
+        try:
+            data_dir = getattr(getattr(repo, "store", None), "data_dir", None)
+            if data_dir is None:
+                return None, None, []
+            enriched_dir = data_dir / "kline_daily_enriched"
+            paths = []
+            for path in enriched_dir.glob("date=*/part.parquet"):
+                try:
+                    day = date.fromisoformat(path.parent.name[5:])
+                except ValueError:
+                    continue
+                if start <= day <= as_of:
+                    paths.append(str(path))
+            if paths:
+                history = guarded_collect(
+                    scan_enriched_parquet(paths).select("date", "amount"),
+                    priority="interactive",
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("市场成交额趋势读取失败 (%s): %s", as_of, type(exc).__name__)
+            return None, None, []
+
+    if history is None or history.is_empty() or not {"date", "amount"}.issubset(history.columns):
+        return None, None, []
+
+    try:
+        daily_rows = (
+            history.select(
+                pl.col("date").cast(pl.Date, strict=False),
+                pl.col("amount").cast(pl.Float64, strict=False),
+            )
+            .filter(pl.col("date").is_not_null())
+            .group_by("date")
+            .agg(
+                pl.when(pl.col("amount").is_finite())
+                .then(pl.col("amount"))
+                .otherwise(0.0)
+                .sum()
+                .alias("total"),
+                pl.col("amount").is_finite().fill_null(False).sum().alias("valid_count"),
+            )
+            .sort("date")
+            .to_dicts()
+        )
+        daily_amounts = {
+            row["date"]: (float(row["total"]) if row["valid_count"] else None)
+            for row in daily_rows
+        }
+        if replace_as_of:
+            daily_amounts[as_of] = latest_amount
+
+        dates = sorted(day for day in daily_amounts if day <= as_of)
+        rolling = []
+        for index, day in enumerate(dates):
+            values_5d = [daily_amounts[d] for d in dates[max(0, index - window_5d + 1):index + 1]]
+            values_13d = [daily_amounts[d] for d in dates[max(0, index - window_13d + 1):index + 1]]
+            avg_5d = sum(values_5d) / window_5d if len(values_5d) == window_5d and all(v is not None for v in values_5d) else None
+            avg_13d = sum(values_13d) / window_13d if len(values_13d) == window_13d and all(v is not None for v in values_13d) else None
+            rolling.append({"date": day.isoformat(), "avg_5d": avg_5d, "avg_13d": avg_13d})
+
+        trend = rolling[-point_count:]
+        current = next((point for point in reversed(rolling) if point["date"] == as_of.isoformat()), {})
+        return current.get("avg_5d"), current.get("avg_13d"), trend
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("市场成交额趋势计算失败 (%s): %s", as_of, type(exc).__name__)
+        return None, None, []
 
 
 # ================================================================
@@ -419,7 +518,7 @@ def build_market_overview(
             "quote_status": status,
             "indices": indices,
             "breadth": {"total": 0, "up": 0, "down": 0, "flat": 0, "up_pct": 0, "down_pct": 0},
-            "amount": {"total": 0, "avg": 0},
+            "amount": {"total": 0, "avg": 0, "avg_5d": None, "avg_13d": None, "trend_90d": []},
             "boards": [],
             "limit": {"limit_up": 0, "broken": 0, "failed": 0, "limit_down": 0, "max_boards": 0, "tiers": []},
             "distribution": [],
@@ -463,6 +562,13 @@ def build_market_overview(
     amounts = [_finite(r.get("amount")) or 0 for r in rows]
     total_amount = sum(amounts)
     avg_amount = total_amount / total if total else 0
+    has_amount_values = any(_finite(r.get("amount")) is not None for r in rows)
+    avg_amount_5d, avg_amount_13d, amount_trend_90d = _market_amount_trend(
+        repo,
+        as_of,
+        latest_amount=total_amount if has_amount_values else None,
+        replace_as_of=bool(rows),
+    )
 
     pct_values = [_finite(r.get("change_pct")) for r in rows]
     pct_values = [v for v in pct_values if v is not None]
@@ -602,7 +708,13 @@ def build_market_overview(
             "strong_up": strong_up,
             "strong_down": strong_down,
         },
-        "amount": {"total": total_amount, "avg": avg_amount},
+        "amount": {
+            "total": total_amount,
+            "avg": avg_amount,
+            "avg_5d": avg_amount_5d,
+            "avg_13d": avg_amount_13d,
+            "trend_90d": amount_trend_90d,
+        },
         "boards": boards,
         "limit": {"limit_up": limit_up, "broken": broken, "failed": 0, "limit_down": limit_down, "max_boards": max_boards, "seal_rate": seal_rate, "tiers": tiers, "sealed_ready": sealed_ready, "fake_up": fake_up, "fake_down": fake_down},
         "distribution": _pct_band_rows(pct_values),
