@@ -7,7 +7,7 @@ import { StockPanel } from './StockPanel'
 import type { CandlestickProps } from '@/lib/kline-chart'
 import type { StockLevels } from '@/lib/api'
 import { emptyChanlunAnalysis } from '@/lib/chanlun'
-const state = vi.hoisted(() => ({ technical: {} as import('./StockTechnicalPanel').StockTechnicalPanelProps, chart: {} as CandlestickProps, levels: vi.fn(), chanlun: vi.fn(), daily: vi.fn(), catalog: vi.fn(), wave: vi.fn(), asset: 'etf' }))
+const state = vi.hoisted(() => ({ technical: {} as import('./StockTechnicalPanel').StockTechnicalPanelProps, chart: {} as CandlestickProps, levels: vi.fn(), chanlun: vi.fn(), daily: vi.fn(), period: vi.fn(), catalog: vi.fn(), wave: vi.fn(), asset: 'etf' }))
 vi.mock('@/lib/api', async importOriginal => ({
   ...await importOriginal<typeof import('@/lib/api')>(),
   api: {
@@ -16,7 +16,7 @@ vi.mock('@/lib/api', async importOriginal => ({
       { date: '2026-10-14', open: 0.49, high: 0.5, low: 0.48, close: 0.49 },
       { date: '2026-10-15', open: 0.49, high: 0.5, low: 0.48, close: 0.497 },
     ] }) },
-    klinePeriod: async (symbol: string, period: string, _range: unknown, _days: unknown, _scores: unknown, chanlun: unknown) => ({ asset_type: state.asset, chanlun: chanlun ? await state.chanlun(symbol, period, chanlun) : undefined, rows: [{ date: '2026-10-15', open: 0.49, high: 0.5, low: 0.48, close: 0.497 }] }),
+    klinePeriod: async (symbol: string, period: string, _range: unknown, _days: unknown, _scores: unknown, chanlun: unknown) => { state.period(symbol, period); return ({ asset_type: state.asset, chanlun: chanlun ? await state.chanlun(symbol, period, chanlun) : undefined, rows: [{ date: '2026-10-15', open: 0.49, high: 0.5, low: 0.48, close: 0.497 }] }) },
     stockAnalysisLevels: state.levels,
     waveAnalysis: state.wave,
   },
@@ -67,7 +67,7 @@ async function click(label: string, role = 'button') {
 }
 it('关键价位位于缠论结构右边，按需加载，点击画线和曲线，再点移除，保留原有标线', async () => {
   await render({ priceLines: [{ value: 0.48, label: '自定义' }] })
-  expect([...host.querySelectorAll('[role="tab"]')].map(tab => tab.textContent)).toEqual(['指标分析', '缠论结构', '道氏趋势', '波浪分析', '关键价位', 'AI分析'])
+  expect([...host.querySelectorAll('[role="tab"]')].map(tab => tab.textContent)).toEqual(['指标分析', '缠论结构', '道氏趋势', '市场趋势', '波浪分析', '关键价位', 'AI分析'])
   expect(state.levels).not.toHaveBeenCalled()
   await click('关键价位', 'tab')
   expect(state.levels).toHaveBeenCalledWith('512000.SH', 250, '2026-10-15')
@@ -86,6 +86,17 @@ it('关键价位位于缠论结构右边，按需加载，点击画线和曲线�
   await click('关键价位', 'tab'); await click('压力支撑'); await click('布林带')
   expect(state.chart.priceLines?.some(line => line.label === '支撑')).toBe(false)
   expect(state.chart.priceCurves).toEqual([])
+})
+it('市场趋势按周线、日线和30F查询最近的天使魔鬼信号', async () => {
+  await render()
+  await click('市场趋势', 'tab')
+
+  expect(state.period.mock.calls.map(call => call[1])).toEqual(expect.arrayContaining(['1w', '30m']))
+  expect(host.textContent).toContain('周线')
+  expect(host.textContent).toContain('日线')
+  expect(host.textContent).toContain('30F')
+  expect(host.textContent).toContain('市场环境')
+  expect(host.textContent).toContain('样本不足')
 })
 it('历史截面隔离查询，切股加载中清除旧价位，非日K提示口径并移除覆盖物', async () => {
   await render(); await click('关键价位', 'tab'); await click('压力支撑')
@@ -241,7 +252,7 @@ it('切换波浪候选同步主图，关闭后再次选择会显示标注，切�
 it('指数复用全部分析页签、指标菜单与缠论覆盖层', async () => {
   state.asset = 'index'
   await render({ symbol: '000001.SH' })
-  expect([...host.querySelectorAll('[role="tab"]')].map(tab => tab.textContent)).toEqual(['指标分析', '缠论结构', '道氏趋势', '波浪分析', '关键价位', 'AI分析'])
+  expect([...host.querySelectorAll('[role="tab"]')].map(tab => tab.textContent)).toEqual(['指标分析', '缠论结构', '道氏趋势', '市场趋势', '波浪分析', '关键价位', 'AI分析'])
   expect(host.textContent).toContain('指标')
   expect(host.textContent).toContain('缠论')
   await click('缠论结构', 'tab')

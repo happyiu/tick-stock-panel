@@ -5,10 +5,12 @@ import { calculateKdDivergence } from './kdDivergence'
 import { calculateKdEnhanced } from './kdEnhanced'
 import { calculateEtfSwingV2 } from './etfSwingV2'
 import { calculateBullBearTrendV2 } from './bullBearTrendV2'
+import { calculateMarketTrendScoreSeries, type MarketTrendHistory } from './marketTrend'
+import type { KlinePeriod } from './api'
 import { chartTheme, getTheme } from './theme'
 
 export type FormulaRow = Record<string, number | null>
-interface FormulaContext { period: string }
+interface FormulaContext { period: string; marketTrendHistory?: MarketTrendHistory }
 type FormulaIndicator = IndicatorTemplate<FormulaRow, number, FormulaContext>
 type Draw = IndicatorDrawCallback<FormulaRow, number, FormulaContext>
 type PaletteKey = keyof ReturnType<typeof palette>
@@ -34,6 +36,9 @@ const numeric = (rows: object[]): FormulaRow[] => rows.map(row => Object.fromEnt
 ))
 const line = (key: string, color: () => string, size = 1): IndicatorFigure<FormulaRow> => ({
   key, type: 'line', styles: () => ({ color: color(), size }),
+})
+const dashedReference = (key: string): IndicatorFigure<FormulaRow> => ({
+  key, type: 'line', styles: () => ({ color: palette().gray, size: 1, style: 'dashed', dashedValue: [4, 3] }),
 })
 
 interface Signal {
@@ -251,6 +256,32 @@ export const formulaIndicators: FormulaIndicator[] = [
     // 默认更新检测只因 calcParams 变化重算，不会因 extendData.period 变化重算。
     shouldUpdate: (previous, current) => ({ calc: previous.extendData?.period !== current.extendData?.period, draw: true }),
     draw: subDraw('bull'), createTooltipDataSource: subTooltip('多空趋势V2', bullInfo, true),
+  },
+  {
+    name: 'TSP_MULTI_PERIOD_SCORE', shortName: '多周期评分', series: 'normal', precision: 0, minValue: 0, maxValue: 100,
+    figures: [
+      line('score', () => themeColor('#60A5FA', '#2563EB'), 2),
+      dashedReference('level20'), dashedReference('level50'), dashedReference('level80'),
+    ],
+    calc: (data, indicator) => {
+      const period = indicator.extendData?.period ?? '1d'
+      if (!['30m', '1d', '1w', '1mo'].includes(period)) return data.map(() => ({ score: null, level20: 20, level50: 50, level80: 80 }))
+      const chartRows = data.map(bar => {
+        const date = new Date(bar.timestamp + 8 * 60 * 60 * 1000).toISOString().slice(0, 16).replace('T', ' ')
+        return { date: period === '30m' ? date : date.slice(0, 10) }
+      })
+      const scores = calculateMarketTrendScoreSeries(chartRows, period as KlinePeriod, indicator.extendData?.marketTrendHistory)
+      return scores.map(score => ({ score, level20: 20, level50: 50, level80: 80 }))
+    },
+    shouldUpdate: (previous, current) => ({
+      calc: previous.extendData?.period !== current.extendData?.period
+        || previous.extendData?.marketTrendHistory !== current.extendData?.marketTrendHistory,
+      draw: true,
+    }),
+    createTooltipDataSource: subTooltip('多周期评分', [
+      ['score', '综合得分', 'white', 0], ['level20', '20分线', 'gray', 0],
+      ['level50', '50分线', 'gray', 0], ['level80', '80分线', 'gray', 0],
+    ]),
   },
 ]
 

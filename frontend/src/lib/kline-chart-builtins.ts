@@ -15,6 +15,11 @@ export const BUILTIN_SUB_INDICATORS = [
   { name: 'EMV', label: '简易波动' }, { name: 'AO', label: '动量震荡' },
   { name: 'ROC', label: '变动率' }, { name: 'PVT', label: '价量趋势' },
 ].map(({ name, label }) => ({ key: `builtin-${name.toLowerCase()}`, name, label: `${name} ${label}`, height: 100 }))
+export const MULTI_PERIOD_SCORE_KEY = 'builtin-multi-period-score'
+export const LOCAL_SUB_INDICATORS = [
+  { key: MULTI_PERIOD_SCORE_KEY, name: 'TSP_MULTI_PERIOD_SCORE', label: '多周期评分', height: 120 },
+]
 // AVP 需要成交额与价格、成交量使用相同复权和数量单位，当前行情契约不能直接满足。
 export const BUILTIN_INDICATORS = [...BUILTIN_MAIN_INDICATORS, ...BUILTIN_SUB_INDICATORS]
 export const builtinIndicator = (key: string) => BUILTIN_INDICATORS.find(indicator => indicator.key === key)
+  ?? LOCAL_SUB_INDICATORS.find(indicator => indicator.key === key)

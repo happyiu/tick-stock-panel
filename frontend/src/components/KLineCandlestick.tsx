@@ -15,7 +15,7 @@ import { ANGEL_DEVIL_MA, calculateAngelDevil } from '@/lib/angelDevil'
 import { BOLL2_LINES, calculateBoll2 } from '@/lib/boll2'
 import { storage } from '@/lib/storage'
 import { formulaColor, formulaContext, serverFormulaFigures, serverFormulaTemplate } from '@/lib/chart-formula-renderer'
-import { builtinIndicator } from '@/lib/kline-chart-builtins'
+import { builtinIndicator, MULTI_PERIOD_SCORE_KEY } from '@/lib/kline-chart-builtins'
 import { ChartDrawingToolbar, DRAWING_GROUP } from './ChartDrawingToolbar'
 import { buildChanlunOverlays, CHANLUN_GROUP, chanlunTemplate } from '@/lib/kline-chart-chanlun'
 import { buildLevelOverlays, LEVEL_GROUP, levelTemplate } from '@/lib/kline-chart-levels'
@@ -39,7 +39,7 @@ const EMPTY: never[] = []
 const DEFAULT_COMPARE = { enabled: true, days: 1 }
 
 export function KLineCandlestick({
-  data, indicatorResults, indicatorDefinitions, toolbarControls, markers = EMPTY, ranges = EMPTY, priceLines = EMPTY, height = 480,
+  data, indicatorResults, indicatorDefinitions, marketTrendHistory, toolbarControls, markers = EMPTY, ranges = EMPTY, priceLines = EMPTY, height = 480,
   showMA: requestedMA = true, showInfoBar = true, showMarkers = true, stockInfo, symbol = '', linkedPrice,
   onDateClick, onPriceDoubleClick, visibleBars = 60, activeIndicators = EMPTY,
   volumeCompare = DEFAULT_COMPARE, volumeCompareControls, addedDate, assetType, period = '1d', selectedDate,
@@ -397,13 +397,14 @@ export function KLineCandlestick({
       const existing = chart.getIndicators({ name })[0]
       const inputs = [packet, theme, precision, definition?.name, definition?.pane,
         key === 'vol' ? volumeCompare.enabled : undefined, key === 'vol' ? volumeCompare.days : undefined,
-        key === 'ma' ? hiddenMaLines : undefined]
+        key === 'ma' ? hiddenMaLines : undefined, key === MULTI_PERIOD_SCORE_KEY ? marketTrendHistory : undefined]
       const previousInputs = appliedFormulaInputs.current.get(key)
       if (packet && existing && previousInputs?.every((value, index) => value === inputs[index])) continue
       const options = {
         name, ...(packet ? { shortName: definition?.name ?? name } : {}),
         paneId: definition?.pane === 'main' || key === 'ma' && !definition ? 'candle_pane' : `tsp_${key.replaceAll('-', '_')}`,
         ...(!managed && !builtin ? { extendData: key === 'vol' ? volumeCompare.enabled : { period }, ...(key === 'vol' ? { calcParams: [volumeCompare.days] } : {}) } : {}),
+        ...(key === MULTI_PERIOD_SCORE_KEY ? { extendData: { period, marketTrendHistory } } : {}),
         ...(packet ? { precision: packet.precision ?? (packet.pane === 'main' ? precision : 2), series: packet.pane === 'main' ? 'price' as const : key === 'vol' ? 'volume' as const : 'normal' as const,
           figures: serverFormulaFigures(packet).filter(f => key !== 'ma' || !hiddenMaLines.includes(f.key)) as IndicatorFigure[],
           minValue: packet.min_value ?? undefined, maxValue: packet.max_value ?? undefined,
@@ -422,7 +423,7 @@ export function KLineCandlestick({
     setVolumePane(activeIndicators.includes('vol') && hasVolumeControls ? chart.getDom('tsp_vol', 'main') : null)
     fitPaneHeights()
     chart.resize()
-  }, [showMA, activeIndicators, volumeCompare.enabled, volumeCompare.days, period, theme, hasVolumeControls, indicatorResults, catalog.data, hiddenMaLines, managed])
+  }, [showMA, activeIndicators, volumeCompare.enabled, volumeCompare.days, period, theme, hasVolumeControls, indicatorResults, catalog.data, hiddenMaLines, managed, marketTrendHistory])
 
 
   useEffect(() => {

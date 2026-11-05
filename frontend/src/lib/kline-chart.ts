@@ -1,8 +1,9 @@
 import type { IndicatorTemplate, KLineData } from 'klinecharts'
 import type { ReactNode } from 'react'
-import { BUILTIN_MAIN_INDICATORS, BUILTIN_SUB_INDICATORS } from './kline-chart-builtins'
+import { BUILTIN_MAIN_INDICATORS, BUILTIN_SUB_INDICATORS, LOCAL_SUB_INDICATORS } from './kline-chart-builtins'
 import type { KlinePeriod, ChartIndicatorResult, ChartIndicatorDefinition } from './api'
 import type { ChanlunAnalysis } from './chanlun'
+import type { MarketTrendHistory } from './marketTrend'
 import type { StockPreviewChanlunOverlayConfig } from './storage'
 
 export interface OHLC {
@@ -81,6 +82,7 @@ export interface ChartPriceZone {
 export interface CandlestickProps {
   indicatorDefinitions?: ChartIndicatorDefinition[]
   indicatorResults?: Record<string, ChartIndicatorResult>
+  marketTrendHistory?: MarketTrendHistory
   data: OHLC[]
   toolbarControls?: ReactNode
   period?: KlinePeriod
@@ -151,6 +153,7 @@ export const SUB_CHARTS = [
   { key: 'etf-swing-v2', label: 'ETF波段操盘V2', height: 200 },
   { key: 'bull-bear-trend-v2', label: '多空趋势V2', height: 200 },
   ...BUILTIN_SUB_INDICATORS,
+  ...LOCAL_SUB_INDICATORS.map(({ key, label, height }) => ({ key, label, height })),
 ]
 export const OVERLAY_INDICATORS = [
   { key: 'ma', label: 'MA 均线' },

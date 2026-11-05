@@ -2,13 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api, type ChartIndicatorDefinition } from './api'
 import { QK } from './queryKeys'
-import { BUILTIN_MAIN_INDICATORS, BUILTIN_SUB_INDICATORS } from './kline-chart-builtins'
+import { BUILTIN_MAIN_INDICATORS, BUILTIN_SUB_INDICATORS, LOCAL_SUB_INDICATORS } from './kline-chart-builtins'
 import { storage } from './storage'
 import type { VolumeCompareConfig } from './kline-chart'
 
 export const builtinChartDefinitions: ChartIndicatorDefinition[] = [
   ...BUILTIN_MAIN_INDICATORS.map(item => ({ ...item, pane: 'main' as const })),
   ...BUILTIN_SUB_INDICATORS.map(item => ({ ...item, pane: 'sub' as const })),
+  ...LOCAL_SUB_INDICATORS.map(item => ({ ...item, pane: 'sub' as const })),
 ].map(item => ({ id: item.key, name: item.label, source: 'builtin', pane: item.pane,
   formula: '', description: 'KLineChart 内置指标', revision: 1, height: 'height' in item ? item.height : 100 }))
 

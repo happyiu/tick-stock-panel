@@ -5,6 +5,8 @@ import { api, type KlinePeriod, type KlineRow } from '@/lib/api'
 import type { ChanlunAnalysis } from '@/lib/chanlun'
 import { DEFAULT_30M_DAYS, defaultKlineRange, filterKlineRowsThrough, klinePeriodQueryOptions, normalizeKlineBarKey } from '@/lib/kline'
 import { useChartIndicatorSelection } from '@/lib/useChartIndicators'
+import { type MarketTrendHistory, type MarketTrendPeriod } from '@/lib/marketTrend'
+import { MULTI_PERIOD_SCORE_KEY } from '@/lib/kline-chart-builtins'
 import { QK } from '@/lib/queryKeys'
 import type { ChartSignalSelection as ChartSignalSelectionModel } from '@/lib/signals'
 import { storage, type StockPreviewChanlunOverlayConfig } from '@/lib/storage'
@@ -276,6 +278,35 @@ function StockDailyKChartView({
   const chartAssetType = kline.data?.asset_type === 'stock' || kline.data?.asset_type === 'etf' || kline.data?.asset_type === 'index'
     ? kline.data.asset_type
     : undefined
+  const multiPeriodScoreEnabled = activeIndicators.includes(MULTI_PERIOD_SCORE_KEY)
+  const scoreHistoryQueryOptions = (candidatePeriod: MarketTrendPeriod) => {
+    const defaultRange = defaultKlineRange(candidatePeriod, new Date(`${dateRange.end}T12:00:00`), 120, chartAssetType)
+    const queryRange = candidatePeriod === '30m'
+      ? defaultRange
+      : { start: dateRange.start < defaultRange.start ? dateRange.start : defaultRange.start, end: dateRange.end }
+    return {
+      ...klinePeriodQueryOptions(symbol, candidatePeriod, queryRange, 120),
+      enabled: !!symbol && indicatorSelection.ready && multiPeriodScoreEnabled,
+      staleTime: 30_000,
+      refetchInterval: refetchIntervalMs,
+    }
+  }
+  const weeklyScoreQuery = useQuery(scoreHistoryQueryOptions('1w'))
+  const dailyScoreQuery = useQuery(scoreHistoryQueryOptions('1d'))
+  const thirtyMinuteScoreQuery = useQuery(scoreHistoryQueryOptions('30m'))
+  const scoreHistoryQueries = [weeklyScoreQuery, dailyScoreQuery, thirtyMinuteScoreQuery]
+  const weeklyScoreRows = scoreHistoryQueries[0]?.data?.rows
+  const dailyScoreRows = scoreHistoryQueries[1]?.data?.rows
+  const thirtyMinuteScoreRows = scoreHistoryQueries[2]?.data?.rows
+  const scoreHistoryReady = scoreHistoryQueries.every(query => query.data !== undefined || query.isError)
+  const marketTrendHistory = useMemo<MarketTrendHistory | undefined>(() => {
+    if (!multiPeriodScoreEnabled || !scoreHistoryReady) return undefined
+    return {
+      '1w': weeklyScoreRows ?? [],
+      '1d': dailyScoreRows ?? [],
+      '30m': thirtyMinuteScoreRows ?? [],
+    }
+  }, [multiPeriodScoreEnabled, scoreHistoryReady, weeklyScoreRows, dailyScoreRows, thirtyMinuteScoreRows])
   const strategyTimeframe: '1d' | '1w' | '30m' | null = period === '1mo' ? null : period
   const signalTimeframe = period
   const strategySignalsQuery = useQuery({
@@ -603,6 +634,7 @@ function StockDailyKChartView({
           height={chartHeight - 22}
           showMA={effectiveMA}
           indicatorResults={kline.data?.indicator_results}
+          marketTrendHistory={marketTrendHistory}
           indicatorDefinitions={catalog.items}
           showInfoBar={showInfoBar}
           showMarkers={showMarkers}
