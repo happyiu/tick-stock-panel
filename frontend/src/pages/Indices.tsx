@@ -145,15 +145,16 @@ export function Indices() {
     const pct = q?.change_pct ?? q?.pct
     const current = q?.last_price ?? q?.price ?? q?.close
     const active = item.symbol === selectedSymbol
+    const realtimeUnavailable = !q || q.source === 'index_daily'
     return (
       <button
         key={item.symbol}
         onClick={() => selectIndex(item.symbol)}
-        className={`w-full rounded-btn px-2 py-2 text-left transition-colors ${active ? 'bg-accent/15 text-foreground' : 'hover:bg-elevated text-secondary'}`}
+        className={`w-full rounded-btn px-2 py-2 text-left transition-colors ${active ? 'bg-accent/15' : 'hover:bg-elevated'} ${realtimeUnavailable ? 'text-muted' : active ? 'text-foreground' : 'text-secondary'}`}
       >
         <div className="flex items-center justify-between gap-2">
           <span className="truncate text-xs font-medium">{item.name || item.symbol}</span>
-          <span className={`text-[10px] font-mono ${Number(pct ?? 0) >= 0 ? 'text-bull' : 'text-bear'}`}>{fmtPct(pct)}</span>
+          <span className={`text-[10px] font-mono ${realtimeUnavailable ? 'text-muted' : Number(pct ?? 0) >= 0 ? 'text-bull' : 'text-bear'}`}>{realtimeUnavailable ? '-' : fmtPct(pct)}</span>
         </div>
         <div className="mt-0.5 flex items-center justify-between text-[10px] font-mono text-muted">
           <span>{item.symbol}</span>
