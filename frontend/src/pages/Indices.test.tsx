@@ -15,6 +15,8 @@ const fixtures = vi.hoisted(() => ({
   pending: [] as { symbol: string; day: string; resolve: (value: MinuteResponse) => void; reject: (error: Error) => void }[],
   mounts: 0,
   minuteCap: true,
+  tradingHours: false,
+  quotes: [] as { symbol: string; source: string; date: string; last_price: number; change_pct: number }[],
   panelProps: {} as Record<string, any>,
 }))
 
@@ -22,7 +24,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     watchlistList: async () => ({ symbols: [{ symbol: '000001.SH', added_at: '2026-09-10T02:00:00Z' }] }),
     chartIndicators: async () => ({ items: [], errors: [] }),
-    indexQuotes: async () => ({ rows: [] }),
+    indexQuotes: async () => ({ rows: fixtures.quotes }),
     indexDaily: async (symbol: string) => ({
       symbol,
       rows: ['2026-09-09', '2026-09-10', '2026-09-11'].map(date => ({
@@ -36,6 +38,7 @@ vi.mock('@/lib/api', () => ({
 }))
 vi.mock('@/lib/useSharedQueries', () => ({
   useCapabilities: () => ({ data: { capabilities: { 'kline.minute.batch': fixtures.minuteCap } } }),
+  useQuoteStatus: () => ({ data: { is_trading_hours: fixtures.tradingHours } }),
 }))
 vi.mock('@/components/StockPanel', () => ({
   StockPanel: (props: Record<string, any>) => {
@@ -73,6 +76,8 @@ beforeEach(() => {
   fixtures.pending.length = 0
   fixtures.mounts = 0
   fixtures.minuteCap = true
+  fixtures.tradingHours = false
+  fixtures.quotes = []
   host = document.createElement('div')
   document.body.append(host)
   root = createRoot(host)
@@ -127,6 +132,19 @@ async function renderPage() {
   ))
   await settle()
 }
+
+it.each([
+  [true, '-', true],
+  [false, '1.25%', false],
+] as const)('shows daily fallback quote during market hours=%s', async (tradingHours, expectedPct, muted) => {
+  fixtures.tradingHours = tradingHours
+  fixtures.quotes = [{ symbol: '000001.SH', source: 'index_daily', date: '2026-11-06', last_price: 3500, change_pct: 1.25 }]
+  await renderPage()
+  const row = [...host.querySelectorAll<HTMLButtonElement>('aside button')].find(button => button.textContent?.includes('上证指数'))!
+  expect(row.textContent).toContain(expectedPct)
+  expect(row.className.includes('text-muted')).toBe(muted)
+  expect(host.textContent?.includes('1.25%')).toBe(!tradingHours)
+})
 
 it('defaults to full-width K line and requests minutes only while the intraday tab is open', async () => {
   await renderPage()

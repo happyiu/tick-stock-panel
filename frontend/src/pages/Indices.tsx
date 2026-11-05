@@ -5,7 +5,7 @@ import { Activity, Clock, LineChart, Loader2, Lock, RefreshCw } from 'lucide-rea
 import { api, type IndexInstrument, type KlinePeriod, type MinuteKlineRow, type StrategyDetail } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { cnDateFromUtc } from '@/lib/format'
-import { useCapabilities } from '@/lib/useSharedQueries'
+import { useCapabilities, useQuoteStatus } from '@/lib/useSharedQueries'
 import { StockPanel } from '@/components/StockPanel'
 import { toOHLC, type ChartSignalSelection } from '@/components/StockDailyKChart'
 import { StrategyPickerDialog } from '@/components/screener/StrategyPickerDialog'
@@ -47,6 +47,8 @@ export function Indices() {
   // 分时数据依赖分钟K批量数据 (kline.minute.batch)
   const caps = useCapabilities()
   const hasMinuteCap = !!caps.data?.capabilities?.['kline.minute.batch']
+  const quoteStatus = useQuoteStatus()
+  const isTradingHours = quoteStatus.data?.is_trading_hours ?? true
 
   // 指数标的固定核心四只 (产品契约, 不再提供全指数搜索/浏览)
   const topRows: IndexInstrument[] = PINNED_INDEXES.map(p => ({
@@ -114,6 +116,7 @@ export function Indices() {
   const selectedQuote = selectedSymbol ? quoteBySymbol.get(selectedSymbol) : null
   const selectedQuoteValue = selectedQuote?.last_price ?? selectedQuote?.price ?? selectedQuote?.close
   const selectedQuotePct = selectedQuote?.change_pct ?? selectedQuote?.pct
+  const selectedQuoteMuted = !selectedQuote || (isTradingHours && selectedQuote.source === 'index_daily')
 
   const chartRows = useMemo(() => toOHLC(daily.data?.rows ?? []), [daily.data?.rows])
   const selectedInfo = topRows.find(r => r.symbol === selectedSymbol) || daily.data?.index_info
@@ -145,7 +148,7 @@ export function Indices() {
     const pct = q?.change_pct ?? q?.pct
     const current = q?.last_price ?? q?.price ?? q?.close
     const active = item.symbol === selectedSymbol
-    const realtimeUnavailable = !q || q.source === 'index_daily'
+    const realtimeUnavailable = !q || (isTradingHours && q.source === 'index_daily')
     return (
       <button
         key={item.symbol}
@@ -200,7 +203,7 @@ export function Indices() {
                 </h2>
                 {selectedSymbol && <span className="font-mono text-xs text-muted">{selectedSymbol}</span>}
                 {selectedSymbol && <span className="font-mono text-xs text-foreground">{fmtNum(selectedQuoteValue)}</span>}
-                {selectedSymbol && <span className={`font-mono text-xs ${Number(selectedQuotePct ?? 0) >= 0 ? 'text-bull' : 'text-bear'}`}>{fmtPct(selectedQuotePct)}</span>}
+                {selectedSymbol && <span className={`font-mono text-xs ${selectedQuoteMuted ? 'text-muted' : Number(selectedQuotePct ?? 0) >= 0 ? 'text-bull' : 'text-bear'}`}>{selectedQuoteMuted ? '-' : fmtPct(selectedQuotePct)}</span>}
               </div>
               <div className="mt-1 text-xs text-muted">
                 {selectedInfo?.name}行情与技术分析
