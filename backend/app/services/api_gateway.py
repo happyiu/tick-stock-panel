@@ -21,6 +21,7 @@ from app.services import api_tokens
 _RULES: list[tuple[str, str, str]] = [
     # read:market — 行情读取
     ("GET", "/api/kline/instruments/search", "read:market"),
+    ("GET", "/api/kline/etf-pool/radar", "read:market"),
     ("GET", "/api/kline/daily", "read:market"),
     ("GET", "/api/kline/minute", "read:market"),
     ("GET", "/api/kline/minute-range", "read:market"),

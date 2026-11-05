@@ -40,9 +40,12 @@ EXPECTED_OPEN_ENDPOINTS: set[str] = {
     "GET /api/intraday/status",
     "GET /api/kline/daily",
     "GET /api/kline/daily/latest",
+    "GET /api/kline/etf-pool/radar",
+    "GET /api/kline/etf-pool/radar/jobs/{job_id}",
     "GET /api/kline/instruments/search",
     "GET /api/kline/minute",
     "GET /api/kline/minute-range",
+    "GET /api/kline/period",
     "GET /api/overview/market",
     "GET /api/paper/account",
     "POST /api/paper/account",
@@ -81,6 +84,9 @@ EXPECTED_OPEN_ENDPOINTS: set[str] = {
     "GET /api/strategies/ai/status",
     "GET /api/strategies/{strategy_id}",
     "GET /api/strategies/{strategy_id}/source",
+    "GET /api/watchlist",
+    "GET /api/watchlist/enriched",
+    "POST /api/watchlist",
 }
 
 

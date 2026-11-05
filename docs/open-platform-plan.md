@@ -103,6 +103,8 @@
 |---|---|
 | `GET /api/kline/instruments/search` | 标的搜索（代码/名称/拼音首字母, 含 ETF/指数） |
 | `GET /api/kline/daily?symbol=&start=&end=` | 日K（前复权/不复权口径参数） |
+| `GET /api/kline/period` | 周/月/30分钟K线 |
+| `GET /api/kline/etf-pool/radar` / `GET /api/kline/etf-pool/radar/jobs/{job_id}` | ETF雷达结果与任务状态 |
 | `GET /api/intraday/...` | 分时/多日分时 |
 | `GET /api/index/...` | 指数行情与估值截面 |
 | `GET /api/overview/market-snapshot` | 全市场当日快照（一次拉取, 二开图表直供） |
@@ -153,6 +155,10 @@
 | `GET /api/health` | 探活（无鉴权, 白名单已有） |
 | `GET /api/auth/api-tokens`（UI 会话） | Token 管理: 列表/创建/吊销（管理页, 不属于开放面） |
 | `GET /api/openapi.json?tier=a` | Tier A 契约视图（机器可读） |
+
+### 契约更新记录（2026-11-06）
+
+Tier A 快照补齐 `GET /api/kline/period`、ETF雷达读取与任务状态，以及已由网关精确开放的 `GET /api/watchlist`、`GET /api/watchlist/enriched`、`POST /api/watchlist`。ETF雷达读取需要 `read:market`；自选读取、写入分别需要 `read:watchlist`、`write:watchlist`。
 
 ### 5.7 通用约定
 
