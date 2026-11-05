@@ -2975,8 +2975,42 @@ export interface TimelineExecutionsResponse {
   items: TimelineExecution[]
 }
 
+export interface RotationConfig {
+  name: string
+  strategy: 'composite_momentum' | 'gold_safe_haven' | 'cross_border' | 'composite_momentum_enhanced'
+  symbols: string[]
+  haven_symbol: string
+  reference_symbol: string
+  parameters: Record<string, number | boolean | string>
+  fees: { commission: number; slippage: number; minimum: number }
+}
+export interface RotationSaved { id: string; revision: number; config: RotationConfig; updated_at: string }
+export interface RotationRun { config: RotationConfig; start: string; end: string; initial_cash: number }
+export interface RotationJob { id: string; kind: 'backtest' | 'prepare'; name: string; status: string; progress: number; error: string | null; created_at: string; data_check?: RotationCheck }
+export interface RotationCheck { incomplete_days?: number; missing_index_dates?: string[]; index_source?: string; index_source_note?: string; ready: boolean; proposed_start: string | null; reason: string; warmup_bars: number; data_digest: string; coverage: { symbol: string; first: string | null; last: string | null; rows: number }[] }
+export interface RotationOrder { target: string | null; steps: number; reason: string; risk?: boolean }
+export interface RotationEnvironment { symbol: string; close: number; ma: number; ma_period: number; deviation: number; band: number; regime: string; score_multiplier: number; controls_exposure: boolean; target_exposure: number; market_context: { date: string; state: string; score?: number | null } | null }
+export interface RotationSignal { environment?: RotationEnvironment; date: string; valid: boolean; regime?: string; reason?: string; panic_triggered?: boolean; panic?: Record<string, number>; ranking: { symbol: string; score: number; factors: Record<string, { raw: number; zscore: number }> }[]; decision?: RotationOrder | null }
+export interface RotationDaily { exposure?: number; exposure_target?: number; date: string; cash: number; total_value: number; return: number; drawdown: number; positions: { symbol: string; shares: number; close: number; cost: number }[]; stale_marks: string[]; reason: string; pending: RotationOrder | null }
+export interface RotationFill { date: string; symbol: string; side: string; shares: number; price: number; amount: number; fee: number; profit: number | null; days_held: number | null; reason: string }
+export interface RotationResult { comparison?: { label: string; stats: Record<string, number>; daily: RotationDaily[] }; algorithm_version: string; stats: Record<string, number>; daily: RotationDaily[]; signals: RotationSignal[]; fills: RotationFill[]; monthly: { month: string; return: number }[]; benchmarks: { date: string; hs300: number; equal_weight: number }[]; metadata: { request: RotationRun; data_digest: string; source_revision: string; algorithm_version: string } }
+export interface RotationPreview { as_of: string; context: string; signal: RotationSignal; pending: RotationOrder | null; state: unknown }
+
 // ===== API surface =====
 export const api = {
+  rotationStrategies: () => request<{ templates: RotationConfig[]; parameters: { properties: Record<string, { type?: string; enum?: string[]; minimum?: number; maximum?: number; exclusiveMinimum?: number }> }; closed_date: string }>('/api/etf-rotation/strategies'),
+  rotationConfigs: () => request<{ items: RotationSaved[] }>('/api/etf-rotation/configs'),
+  rotationSave: (config: RotationConfig, saved?: RotationSaved) => request<RotationSaved>(`/api/etf-rotation/configs${saved ? `/${saved.id}` : ''}`, { method: saved ? 'PUT' : 'POST', body: JSON.stringify({ config, revision: saved?.revision }), quiet: true }),
+  rotationDelete: (saved: RotationSaved) => request(`/api/etf-rotation/configs/${saved.id}?revision=${saved.revision}`, { method: 'DELETE', quiet: true }),
+  rotationCheck: (value: RotationRun) => request<RotationCheck>('/api/etf-rotation/data-check', { method: 'POST', body: JSON.stringify(value), quiet: true, timeoutMs: COMPUTE_REQUEST_TIMEOUT_MS }),
+  rotationPrepare: (value: RotationRun) => request<RotationJob>('/api/etf-rotation/data-prepare', { method: 'POST', body: JSON.stringify(value), quiet: true }),
+  rotationStart: (value: RotationRun) => request<RotationJob>('/api/etf-rotation/backtests', { method: 'POST', body: JSON.stringify(value), quiet: true }),
+  rotationJobs: () => request<{ items: RotationJob[] }>('/api/etf-rotation/backtests'),
+  rotationCancel: (id: string) => request<RotationJob>(`/api/etf-rotation/backtests/${id}/cancel`, { method: 'POST', quiet: true }),
+  rotationResult: (id: string) => request<RotationResult>(`/api/etf-rotation/backtests/${id}/result`, { timeoutMs: COMPUTE_REQUEST_TIMEOUT_MS }),
+  rotationPreview: (config: RotationConfig, backtestId?: string) => request<RotationPreview>('/api/etf-rotation/preview', { method: 'POST', body: JSON.stringify({ config, backtest_id: backtestId }), quiet: true, timeoutMs: COMPUTE_REQUEST_TIMEOUT_MS }),
+  rotationExportUrl: (id: string, kind: string) => `${BASE}/api/etf-rotation/backtests/${encodeURIComponent(id)}/export/${encodeURIComponent(kind)}`,
+
   evaluateChartIndicators: (ids: string[], rows: unknown[], symbol: string, period: KlinePeriod) => request<Pick<KlineResponse, 'indicator_results' | 'indicator_errors'>>('/api/indicators/evaluate', { method: 'POST', body: JSON.stringify({ ids, rows, symbol, period }), quiet: true }),
   chartIndicators: () => request<{ items: ChartIndicatorDefinition[]; errors: { id: string; message: string }[] }>('/api/indicators'),
   chartIndicatorLanguage: () => request<{ help: string; functions: Record<string, number[]>; drawings: Record<string, number[]> }>('/api/indicators/language'),
