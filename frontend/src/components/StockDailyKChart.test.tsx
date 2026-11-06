@@ -8,27 +8,32 @@ import { StockDailyKChart } from './StockDailyKChart'
 import type { CandlestickProps } from '@/lib/kline-chart'
 import { emptyChanlunAnalysis } from '@/lib/chanlun'
 
+const scoreState = vi.hoisted(() => ({ queries: [] as string[] } ))
+
 const directory = resolve(import.meta.dirname, '../../../backend/app/indicators/chart_defaults')
 const definitions = readdirSync(directory).filter(name => name.endsWith('.json')).map(name => JSON.parse(readFileSync(resolve(directory, name), 'utf8')))
 
 vi.mock('@tanstack/react-query', () => ({
-  useQuery: ({ queryKey }: { queryKey: string[] }) => ({
+  useQuery: ({ queryKey }: { queryKey: string[] }) => {
+    scoreState.queries.push(queryKey[0])
+    return ({
     isLoading: false, isError: false, isSuccess: true,
     data: queryKey[0] === 'chart-indicators' ? { items: definitions, errors: [] } : queryKey[0].startsWith('kline') ? {
       asset_type: 'etf', rows: [{ date: '2026-10-08', open: 3, high: 4, low: 2, close: 3 }],
     } : undefined,
-  }),
+  }) },
 }))
 vi.mock('./KLineCandlestick', async importOriginal => ({
   ...await importOriginal<typeof import('./KLineCandlestick')>(),
-  KLineCandlestick: ({ activeIndicators = [], period, showMA, toolbarControls, volumeCompareControls, projectionEnabled }: CandlestickProps) =>
-    <div data-indicators={activeIndicators.join(',')} data-period={period} data-show-ma={String(showMA)} data-projection={String(projectionEnabled)}>{toolbarControls}{activeIndicators.includes('vol') && volumeCompareControls}</div>,
+  KLineCandlestick: ({ activeIndicators = [], period, showMA, toolbarControls, volumeCompareControls, projectionEnabled, marketTrendHistory }: CandlestickProps) =>
+    <div data-market-history={String(!!marketTrendHistory)} data-indicators={activeIndicators.join(',')} data-period={period} data-show-ma={String(showMA)} data-projection={String(projectionEnabled)}>{toolbarControls}{activeIndicators.includes('vol') && volumeCompareControls}</div>,
 }))
 
 let host: HTMLDivElement
 let root: ReturnType<typeof createRoot>
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  scoreState.queries.length = 0
   localStorage.clear()
   host = document.createElement('div')
   document.body.append(host)
@@ -284,4 +289,12 @@ it('推演由父组件控制，图表工具栏不再提供重复入口', async (
   expect(host.querySelector('[data-projection]')?.getAttribute('data-projection')).toBe('false')
   await act(async () => root.render(<StockDailyKChart symbol="B" chanlunAnalysis={emptyChanlunAnalysis()} />))
   expect(host.querySelector('[aria-label="条件推演"]')).toBeNull()
+})
+
+
+it('多周期评分无需道氏响应即可向副图提供历史数据', async () => {
+  localStorage.setItem('stock_preview_sub_charts', JSON.stringify(['builtin-multi-period-score']))
+  await render()
+  expect(host.querySelector('[data-market-history]')?.getAttribute('data-market-history')).toBe('true')
+  expect(scoreState.queries.some(key => key === 'dow')).toBe(false)
 })

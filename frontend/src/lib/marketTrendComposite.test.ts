@@ -19,13 +19,18 @@ function sample() {
 it('combines contributions without intermediate rounding', () => {
   const { daily, dow } = sample()
   const result = assess(85, daily, dow, date)
-  expect(result.factors.map(f => f.score)).toEqual([85, 80, 50, 76, 60])
-  expect(result.score).toBe(74) // 34 + 16 + 7.5 + 7.6 + 9
+  expect(result.factors.map(f => f.score)).toEqual([85, 50, 76, 60])
+  expect(result.score).toBe(71) // 34 + 10 + 15.2 + 12
   expect(result.available).toBe(true)
 })
-it.each([['up', false, 80], ['up', true, 40], ['down', false, 20], ['down', true, 60], ['unknown', false, 50]] as const)('maps %s damaged=%s', (trend, damaged, score) => {
+it('uses four factors with 40/20/20/20 weights and ignores missing or changed Dow structure', () => {
   const { daily, dow } = sample()
-  expect(assess(50, daily, { ...dow, trend, damaged }, date).factors[1].score).toBe(score)
+  const result = assess(85, daily, undefined, date)
+  expect(result.score).toBe(71)
+  expect(result.factors.map(f => [f.name, f.weight])).toEqual([
+    ['市场趋势', 40], ['日线MACD', 20], ['日线RSI', 20], ['日线量价', 20],
+  ])
+  expect(assess(85, daily, { ...dow, trend: 'down', damaged: true }, date).score).toBe(result.score)
 })
 it('fails closed for missing, partial, nonfinite or mismatched inputs', () => {
   const { daily, dow } = sample()
@@ -34,7 +39,7 @@ it('fails closed for missing, partial, nonfinite or mismatched inputs', () => {
   daily.categories![1].coverage = 99
   expect(assess(50, daily, dow, date).score).toBeNull()
   daily.categories![0].indicators[0].raw_values.hist = NaN
-  expect(assess(50, daily, dow, date).factors[2].score).toBeNull()
+  expect(assess(50, daily, dow, date).factors[1].score).toBeNull()
 })
 it('requires active ordinary divergence, deduplicates evidence, and allows conflicting warnings', () => {
   const { daily, dow } = sample()
@@ -49,9 +54,9 @@ it('requires active ordinary divergence, deduplicates evidence, and allows confl
   rsi.divergence = 'BOTTOM_DIVERGENCE'
   const result = assess(100, daily, dow, date)
   expect(result.topWarning && result.bottomWarning).toBe(true)
-  expect(result.factors[3].score).toBe(100)
+  expect(result.factors[2].score).toBe(100)
   rsi.direction = 'FALLING'; rsi.raw_values.rsi14 = 0; rsi.divergence = 'TOP_DIVERGENCE'
-  expect(assess(0, daily, dow, date).factors[3].score).toBe(0)
+  expect(assess(0, daily, dow, date).factors[2].score).toBe(0)
 })
 it('distinguishes damage from confirmation and uses authoritative levels and dates', () => {
   const { daily, dow } = sample()
@@ -83,6 +88,7 @@ it('replays composite factors causally instead of applying the final Dow state t
   const originals = calculateMarketTrendScoreSeries(chartRows, '1d', history)
   const expected = scores.map((score, i) => assess(originals[i], score, { ...dow, dataThrough: score.as_of, trend: i === 2 ? 'down' : 'up', damaged: i === 1 }, score.as_of).score)
   expect(calculateCompositeTrendSeries(chartRows, '1d', history)).toEqual(expected)
+  expect(calculateCompositeTrendSeries(chartRows, '1d', { ...history, dailyDow: undefined })).toEqual(expected)
   const truncated = { ...history, dailyScores: scores.slice(0, 1), dailyDow: { ...historicalDow, events: historicalDow.events.slice(0, 1) } }
   expect(calculateCompositeTrendSeries(chartRows.slice(0, 1), '1d', truncated)).toEqual(expected.slice(0, 1))
   expect(calculateCompositeTrendSeries([{ date: day(32) + ' 14:30' }], '30m', history)).toEqual([null])

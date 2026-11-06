@@ -62,14 +62,11 @@ export function assessMarketTrendComposite(original: number | null, daily?: Tech
       + (rsi?.direction === 'RISING' ? 10 : rsi?.direction === 'FALLING' ? -10 : 0)
       + (rsi?.divergence === 'BOTTOM_DIVERGENCE' ? 10 : rsi?.divergence === 'TOP_DIVERGENCE' ? -10 : 0)))
   }
-  const structureScore = !alignedDow ? null : alignedDow.trend === 'up' ? (alignedDow.damaged ? 40 : 80)
-    : alignedDow.trend === 'down' ? (alignedDow.damaged ? 60 : 20) : 50
   const factors = [
-    { name: '原市场趋势', weight: 40, score: valid(original) ? original : null },
-    { name: '日线价格结构', weight: 20, score: structureScore },
-    { name: '日线MACD', weight: 15, score: macdScore },
-    { name: '日线RSI', weight: 10, score: rsiScore },
-    { name: '日线量价', weight: 15, score: volumeScore },
+    { name: '市场趋势', weight: 40, score: valid(original) ? original : null },
+    { name: '日线MACD', weight: 20, score: macdScore },
+    { name: '日线RSI', weight: 20, score: rsiScore },
+    { name: '日线量价', weight: 20, score: volumeScore },
   ].map(factor => ({ ...factor, contribution: factor.score == null ? null : factor.score * factor.weight / 100 }))
   const topDivergence = [macd, rsi].some(indicator => indicator?.divergence === 'TOP_DIVERGENCE')
   const bottomDivergence = [macd, rsi].some(indicator => indicator?.divergence === 'BOTTOM_DIVERGENCE')
@@ -95,37 +92,16 @@ export function assessMarketTrendComposite(original: number | null, daily?: Tech
     eventDate: (alignedDow?.damaged ? damage?.date : confirmation?.date) ?? null, levels }
 }
 
-/** Replay only published pivots/events; the final Dow trend must never be copied into history. */
+/** Align each score to the daily close available at that chart candle. */
 export function calculateCompositeTrendSeries(rows: readonly { date: string }[], period: KlinePeriod, history?: MarketTrendHistory): (number | null)[] {
   const originals = calculateMarketTrendScoreSeries(rows, period, history)
-  if (!history?.dailyScores || !history.dailyDow) return rows.map(() => null)
-  const dow = history.dailyDow
+  if (!history?.dailyScores) return rows.map(() => null)
   const daily = history.dailyScores
   let cursor = -1
-  let eventCursor = 0
-  let pivotCursor = 0
-  let highs = 0
-  let lows = 0
-  let trend = 'unknown'
-  let damaged = false
   return rows.map((bar, index) => {
     while (cursor + 1 < daily.length && signalAvailableAt(daily[cursor + 1].as_of, '1d', bar.date, period)) cursor++
     if (cursor < 0) return null
-    const asOf = daily[cursor].as_of
-    while (pivotCursor < dow.pivots.length && dow.pivots[pivotCursor].confirmedAt.slice(0, 10) <= asOf) {
-      if (dow.pivots[pivotCursor].side === 'high') highs++
-      else lows++
-      pivotCursor++
-    }
-    while (eventCursor < dow.events.length && dow.events[eventCursor].date.slice(0, 10) <= asOf) {
-      const event = dow.events[eventCursor++]
-      if (event.kind === 'confirm' || event.kind === 'reversal') { trend = event.direction; damaged = false }
-      else if (event.kind === 'damage') damaged = true
-    }
-    const snapshot: DowAnalysis = { ...dow, dataThrough: asOf,
-      status: dow.status === 'ok' && highs >= 2 && lows >= 2 ? 'ok' : 'insufficient',
-      trend, damaged, basis: undefined, events: [], paths: [] }
-    return assessMarketTrendComposite(originals[index], daily[cursor], snapshot, asOf).score
+    return assessMarketTrendComposite(originals[index], daily[cursor], undefined, daily[cursor].as_of).score
   })
 }
 

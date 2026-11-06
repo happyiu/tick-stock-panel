@@ -295,29 +295,21 @@ function StockDailyKChartView({
   const weeklyScoreQuery = useQuery(scoreHistoryQueryOptions('1w'))
   const dailyScoreQuery = useQuery(scoreHistoryQueryOptions('1d'))
   const thirtyMinuteScoreQuery = useQuery(scoreHistoryQueryOptions('30m'))
-  const scoreDowQuery = useQuery({
-    queryKey: QK.dow(symbol, chartAssetType ?? 'stock', '1d', dateRange.end, 0),
-    queryFn: () => api.dowAnalysis(symbol, '1d', dateRange.end),
-    enabled: !!symbol && indicatorSelection.ready && multiPeriodScoreEnabled,
-    staleTime: 30_000,
-    refetchInterval: refetchIntervalMs,
-  })
   const scoreHistoryQueries = [weeklyScoreQuery, dailyScoreQuery, thirtyMinuteScoreQuery]
   const weeklyScoreRows = scoreHistoryQueries[0]?.data?.rows
   const dailyScoreRows = scoreHistoryQueries[1]?.data?.rows
   const thirtyMinuteScoreRows = scoreHistoryQueries[2]?.data?.rows
   const scoreHistoryReady = scoreHistoryQueries.every(query => query.data !== undefined || query.isError)
   const marketTrendHistory = useMemo<MarketTrendHistory | undefined>(() => {
-    if (!multiPeriodScoreEnabled || !scoreHistoryReady || !scoreDowQuery.data) return undefined
+    if (!multiPeriodScoreEnabled || !scoreHistoryReady) return undefined
     const closedDailyDates = new Set((dailyScoreRows ?? []).filter(row => row.is_closed === true).map(row => row.date.slice(0, 10)))
     return {
       '1w': (weeklyScoreRows ?? []).filter(row => row.is_closed === true),
       '1d': (dailyScoreRows ?? []).filter(row => row.is_closed === true),
       '30m': (thirtyMinuteScoreRows ?? []).filter(row => row.is_closed === true),
       dailyScores: dailyScoreQuery.data?.technical_scores?.rows.filter(score => closedDailyDates.has(score.as_of)),
-      dailyDow: scoreDowQuery.data.dow,
     }
-  }, [multiPeriodScoreEnabled, scoreHistoryReady, weeklyScoreRows, dailyScoreRows, thirtyMinuteScoreRows, dailyScoreQuery.data?.technical_scores, scoreDowQuery.data])
+  }, [multiPeriodScoreEnabled, scoreHistoryReady, weeklyScoreRows, dailyScoreRows, thirtyMinuteScoreRows, dailyScoreQuery.data?.technical_scores])
   const strategyTimeframe: '1d' | '1w' | '30m' | null = period === '1mo' ? null : period
   const signalTimeframe = period
   const strategySignalsQuery = useQuery({
