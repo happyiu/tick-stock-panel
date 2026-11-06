@@ -26,6 +26,67 @@ def test_h_analysis_job_runs_daily_at_eight() -> None:
     assert str(scheduler.kwargs["trigger"].fields[4]) == "*"
 
 
+def test_h_analysis_schedule_preference_defaults_on_and_persists(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(daily_pipeline._prefs, "_path", lambda: tmp_path / "preferences.json")
+    daily_pipeline._prefs._invalidate_cache()
+    try:
+        assert daily_pipeline._prefs.get_seekhub_daily_start_enabled() is True
+        assert daily_pipeline._prefs.set_seekhub_daily_start_enabled(False) is False
+        assert daily_pipeline._prefs.get_seekhub_daily_start_enabled() is False
+        assert daily_pipeline._prefs.set_seekhub_daily_start_enabled(True) is True
+        assert daily_pipeline._prefs.get_seekhub_daily_start_enabled() is True
+    finally:
+        daily_pipeline._prefs._invalidate_cache()
+
+
+def test_h_analysis_schedule_api_updates_live_job(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from apscheduler.jobstores.base import JobLookupError
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.settings import router
+
+    class MutableScheduler(_Scheduler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.jobs = {}
+
+        def add_job(self, func, **kwargs):
+            super().add_job(func, **kwargs)
+            self.jobs[kwargs["id"]] = kwargs
+
+        def remove_job(self, job_id):
+            if job_id not in self.jobs:
+                raise JobLookupError(job_id)
+            del self.jobs[job_id]
+
+    monkeypatch.setattr(daily_pipeline._prefs, "_path", lambda: tmp_path / "preferences.json")
+    daily_pipeline._prefs._invalidate_cache()
+    app = FastAPI()
+    app.include_router(router)
+    scheduler = MutableScheduler()
+    app.state.scheduler = scheduler
+    daily_pipeline._register_h_analysis_job(scheduler)
+    client = TestClient(app)
+    try:
+        response = client.put("/api/settings/preferences/seekhub-daily-start-schedule", json={"enabled": False})
+        assert response.status_code == 200
+        assert response.json() == {"enabled": False}
+        assert daily_pipeline.SEEKHUB_DAILY_JOB_ID not in scheduler.jobs
+        assert daily_pipeline._prefs.get_seekhub_daily_start_enabled() is False
+        assert client.put("/api/settings/preferences/seekhub-daily-start-schedule", json={"enabled": False}).status_code == 200
+
+        response = client.put("/api/settings/preferences/seekhub-daily-start-schedule", json={"enabled": True})
+        assert response.status_code == 200
+        assert response.json() == {"enabled": True}
+        trigger = scheduler.jobs[daily_pipeline.SEEKHUB_DAILY_JOB_ID]["trigger"]
+        assert str(trigger.fields[5]) == "8"
+        assert str(trigger.fields[6]) == "0"
+        assert daily_pipeline._prefs.get_seekhub_daily_start_enabled() is True
+    finally:
+        daily_pipeline._prefs._invalidate_cache()
+
+
 @pytest.mark.asyncio
 async def test_seekhub_daily_methods_share_session(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     session = {"date": "2026-09-22", "id": "session-old"}

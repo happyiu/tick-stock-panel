@@ -56,9 +56,13 @@ export function SettingsSchedulesPanel() {
   const initialized = useRef(false)
   const reviewSchedule = preferences.data?.review_schedule
   const systemTimelinePoints = useMemo(
-    () => getPaperTradingSystemTimelinePoints(reviewSchedule),
-    [reviewSchedule?.enabled, reviewSchedule?.hour, reviewSchedule?.minute],
+    () => getPaperTradingSystemTimelinePoints(
+      reviewSchedule,
+      preferences.data?.seekhub_daily_start_enabled ?? true,
+    ),
+    [preferences.data?.seekhub_daily_start_enabled, reviewSchedule?.enabled, reviewSchedule?.hour, reviewSchedule?.minute],
   )
+  const dailyStartEnabled = preferences.data?.seekhub_daily_start_enabled ?? true
   useEffect(() => {
     if (!preferences.data || initialized.current) return
     initialized.current = true
@@ -111,6 +115,14 @@ export function SettingsSchedulesPanel() {
       toast('定时任务设置已保存', 'success')
     },
     onError: (error: Error) => toast(error.message || '定时任务设置保存失败', 'error'),
+  })
+  const toggleDailyStart = useMutation({
+    mutationFn: (enabled: boolean) => api.updateSeekhubDailyStartSchedule(enabled),
+    onSuccess: result => {
+      void queryClient.invalidateQueries({ queryKey: QK.preferences })
+      toast(result.enabled ? '每日 08:00 AI 追踪分析自动启动已开启' : '每日 08:00 AI 追踪分析自动启动已关闭', 'success')
+    },
+    onError: (error: Error) => toast(error.message || 'AI 追踪分析调度更新失败', 'error'),
   })
   const saveTimelineSettings = () => {
     const prompts = Object.fromEntries(TIMER_METHODS.map(timer => [timer.method, (promptDrafts[timer.method] ?? '').trim()]))
@@ -219,11 +231,27 @@ export function SettingsSchedulesPanel() {
           <section className="rounded-card border border-border bg-surface p-4 lg:col-span-2">
             <div className="flex items-center gap-2">
               <h2 className="text-sm font-semibold">系统时间点</h2>
-              <span className="rounded border border-yellow-400/30 px-1.5 py-0.5 text-[10px] text-yellow-400">只读</span>
+              <span className="rounded border border-accent/30 bg-accent/10 px-1.5 py-0.5 text-[10px] text-accent">可启停</span>
             </div>
-            <p className="mt-1 text-xs text-muted">每日复盘时间来自“复盘”页面的“定时复盘”设置。</p>
+            <p className="mt-1 text-xs text-muted">AI 追踪分析每天北京时间 08:00 自动启动，可在此启停。关闭只影响 08:00 启动，已运行中的分析会继续，盘中和自定义时间点照常按配置执行。每日复盘时间来自“复盘”页面的“定时复盘”设置。</p>
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
-              {systemTimelinePoints.map(point => (
+              <div className="flex items-center gap-3 rounded-btn border border-border/70 bg-base px-3 py-2">
+                <span className="shrink-0 font-medium tabular-nums text-yellow-400">08:00</span>
+                <span className="min-w-0 flex-1 truncate text-xs text-secondary">ai追踪分析启动</span>
+                <span className="shrink-0 text-[11px] text-muted">{dailyStartEnabled ? '自动启动已开启' : '自动启动已关闭'}</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={dailyStartEnabled}
+                  aria-label="每日 08:00 AI 追踪分析自动启动"
+                  disabled={!preferences.data || toggleDailyStart.isPending}
+                  onClick={() => toggleDailyStart.mutate(!dailyStartEnabled)}
+                  className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-50 ${dailyStartEnabled ? 'bg-accent' : 'bg-border'}`}
+                >
+                  <span className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${dailyStartEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                </button>
+              </div>
+              {systemTimelinePoints.filter(point => point.method !== 'seekhub_daily_start').map(point => (
                 <div key={`${point.time}-${point.description}`} className="flex items-center gap-3 rounded-btn border border-border/70 bg-base px-3 py-2">
                   <span className="shrink-0 font-medium tabular-nums text-yellow-400">{point.time}</span>
                   <span className="min-w-0 truncate text-xs text-secondary">{point.description}</span>

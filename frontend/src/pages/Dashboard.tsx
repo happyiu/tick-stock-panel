@@ -552,7 +552,10 @@ export function Dashboard() {
   const prefs = usePreferences()
   const paperTimelineSettings = prefs.data?.timeline_schedule ?? localTimelineSettings
   const paperClock = getBeijingPaperClock(paperNow)
-  const paperSystemTimelinePoints = getPaperTradingSystemTimelinePoints(prefs.data?.review_schedule)
+  const paperSystemTimelinePoints = getPaperTradingSystemTimelinePoints(
+    prefs.data?.review_schedule,
+    prefs.data?.seekhub_daily_start_enabled ?? true,
+  )
   useEffect(() => {
     const timer = window.setInterval(() => setPaperNow(new Date()), 1000)
     return () => window.clearInterval(timer)

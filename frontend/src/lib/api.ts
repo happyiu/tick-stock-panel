@@ -2632,6 +2632,7 @@ export interface Preferences {
   depth_polling_interval: number
   depth_finalize_time: { hour: number; minute: number }
   timeline_schedule: PaperTradingTimelineSettings | null
+  seekhub_daily_start_enabled: boolean
   seekhub_daily_prompt: string
   seekhub_daily_prompts: Record<string, string>
   review_schedule: { enabled: boolean; hour: number; minute: number }
@@ -3497,6 +3498,11 @@ export const api = {
   updateTimelineSchedule: (config: PaperTradingTimelineSettings, prompts: Record<string, string>) =>
     request<PaperTradingTimelineSettings>('/api/settings/preferences/timeline-schedule', {
       method: 'PUT', body: JSON.stringify({ ...config, prompts }),
+    }),
+  updateSeekhubDailyStartSchedule: (enabled: boolean) =>
+    request<{ enabled: boolean }>('/api/settings/preferences/seekhub-daily-start-schedule', {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
     }),
   updateSeekhubDailyPrompt: (method: string, prompt: string) =>
     request<{ method: string; prompt: string }>('/api/settings/preferences/seekhub-daily-prompt', {

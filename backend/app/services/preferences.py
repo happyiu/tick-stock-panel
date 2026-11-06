@@ -610,6 +610,18 @@ def get_seekhub_daily_prompts() -> dict[str, str]:
     return prompts
 
 
+def get_seekhub_daily_start_enabled() -> bool:
+    """Whether the daily 08:00 AI tracking auto-start is enabled; old configs default on."""
+    value = load().get("seekhub_daily_start_enabled", True)
+    return value if isinstance(value, bool) else True
+
+
+def set_seekhub_daily_start_enabled(enabled: bool) -> bool:
+    value = bool(enabled)
+    save({"seekhub_daily_start_enabled": value})
+    return value
+
+
 def get_seekhub_daily_prompt(method: str = "seekhub_daily_start") -> str:
     """返回指定 SeekHub 每日方法的提示词模板。"""
     return get_seekhub_daily_prompts().get(method, "")

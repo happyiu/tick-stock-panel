@@ -1609,7 +1609,7 @@ def _register_commodity_job(scheduler, repo) -> None:
 def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOScheduler:
     """启动调度器。
 
-    每日 08:00 — Hermes 连续分析
+    每日 08:00 — Hermes 连续分析 (由设置开关控制)
     工作日 09:10 — 同步个股维表
     工作日 HH:MM — 盘后管道（时间由用户偏好决定，默认 15:35）
     """
@@ -1618,7 +1618,9 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
     inst_sched = preferences.get_instruments_schedule()
 
     scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
-    _register_h_analysis_job(scheduler)
+    h_analysis_enabled = preferences.get_seekhub_daily_start_enabled()
+    if h_analysis_enabled:
+        _register_h_analysis_job(scheduler)
     from app.services.timeline_schedule import register as register_timeline
     register_timeline(scheduler)
 
@@ -1747,7 +1749,8 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
                     review_sched["hour"], review_sched["minute"])
 
     scheduler.start()
-    logger.info("scheduler started; seekhub_daily_start@08:00, instruments@%02d:%02d, pipeline@%02d:%02d, depth@%02d:%02d, exchange_rate@every %dh, commodity@daily",
+    logger.info("scheduler started; seekhub_daily_start=%s, instruments@%02d:%02d, pipeline@%02d:%02d, depth@%02d:%02d, exchange_rate@every %dh, commodity@daily",
+                "08:00" if h_analysis_enabled else "disabled",
                 inst_sched["hour"], inst_sched["minute"], sched["hour"], sched["minute"],
                 depth_sched["hour"], depth_sched["minute"], exchange_rate_interval)
     return scheduler

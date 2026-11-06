@@ -833,6 +833,7 @@ def get_preferences() -> dict:
         "depth_polling_interval": preferences.get_depth_polling_interval(),
         "depth_finalize_time": preferences.get_depth_finalize_time(),
         "timeline_schedule": timeline_schedule.get_settings(),
+        "seekhub_daily_start_enabled": preferences.get_seekhub_daily_start_enabled(),
         "seekhub_daily_prompt": preferences.get_seekhub_daily_prompt(),
         "seekhub_daily_prompts": preferences.get_seekhub_daily_prompts(),
         "review_schedule": preferences.get_review_schedule(),
@@ -2054,6 +2055,32 @@ def update_timeline_schedule(req: TimelineScheduleIn) -> dict:
         raise HTTPException(status_code=400, detail="提示词不能为空且不能超过 2000 字")
     config = TimelineSettings.model_validate(req.model_dump(exclude={"prompts"}))
     return timeline_schedule.save_settings(config, prompts)
+
+
+class SeekhubDailyStartScheduleIn(BaseModel):
+    enabled: bool
+
+
+@router.put("/preferences/seekhub-daily-start-schedule")
+def update_seekhub_daily_start_schedule(req: SeekhubDailyStartScheduleIn, request: Request) -> dict:
+    """启停每天 08:00 的 AI 追踪分析启动任务。"""
+    from contextlib import suppress
+
+    from apscheduler.jobstores.base import JobLookupError
+
+    from app.jobs import daily_pipeline
+    from app.services import preferences
+
+    enabled = preferences.set_seekhub_daily_start_enabled(req.enabled)
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler:
+        if enabled:
+            daily_pipeline._register_h_analysis_job(scheduler)
+        else:
+            with suppress(JobLookupError):
+                scheduler.remove_job(daily_pipeline.SEEKHUB_DAILY_JOB_ID)
+    logger.info("seekhub_daily_start %s", "enabled@08:00" if enabled else "disabled")
+    return {"enabled": enabled}
 
 
 class ExchangeRateScheduleIn(BaseModel):

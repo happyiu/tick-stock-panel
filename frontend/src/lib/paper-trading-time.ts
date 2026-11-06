@@ -60,8 +60,9 @@ const SYSTEM_TIMELINE_POINTS: readonly PaperTradingSystemTimelinePoint[] = [
 /** 系统时间点只展示真实启用的后台工作, 未启用的调度保持不可见。 */
 export function getPaperTradingSystemTimelinePoints(
   reviewSchedule?: Partial<PaperTradingReviewSchedule>,
+  dailyStartEnabled = true,
 ): PaperTradingSystemTimelinePoint[] {
-  const points = [...SYSTEM_TIMELINE_POINTS]
+  const points = dailyStartEnabled ? [...SYSTEM_TIMELINE_POINTS] : []
   const { enabled, hour, minute } = reviewSchedule ?? {}
   if (
     enabled

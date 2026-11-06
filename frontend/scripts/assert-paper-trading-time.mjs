@@ -58,5 +58,7 @@ const enabledReviewPoints = getPaperTradingSystemTimelinePoints({ enabled: true,
 assert.deepEqual(enabledReviewPoints.map(point => point.time), ['08:00', '15:40'])
 assert.equal(enabledReviewPoints.at(-1).description, '每日复盘 · 生成并归档 AI 复盘报告')
 assert.deepEqual(getPaperTradingSystemTimelinePoints({ enabled: true, hour: 15, minute: 0 }).map(point => point.time), ['08:00', '15:00'])
+assert.deepEqual(getPaperTradingSystemTimelinePoints({ enabled: true, hour: 15, minute: 0 }, false).map(point => point.time), ['15:00'])
+assert.deepEqual(getPaperTradingSystemTimelinePoints({ enabled: false }, false), [])
 
 console.log('paper trading time assertions passed')

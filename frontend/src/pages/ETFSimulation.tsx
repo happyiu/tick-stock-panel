@@ -420,9 +420,10 @@ export function ETFSimulation() {
   const positionClickTimer = useRef<number | null>(null)
   const [liveNow, setLiveNow] = useState(() => new Date())
   const reviewSchedule = preferences.data?.review_schedule
+  const dailyStartEnabled = preferences.data?.seekhub_daily_start_enabled ?? true
   const systemTimelinePoints = useMemo(
-    () => getPaperTradingSystemTimelinePoints(reviewSchedule),
-    [reviewSchedule?.enabled, reviewSchedule?.hour, reviewSchedule?.minute],
+    () => getPaperTradingSystemTimelinePoints(reviewSchedule, dailyStartEnabled),
+    [dailyStartEnabled, reviewSchedule?.enabled, reviewSchedule?.hour, reviewSchedule?.minute],
   )
   const accountKey = mode === 'live' ? 'live' : replayId
   const snapshot = useQuery({ queryKey: QK.paperSnapshot(accountKey), queryFn: () => api.paperSnapshot(mode === 'replay' ? replayId : undefined), enabled: mode === 'live' || Boolean(replayId) })
