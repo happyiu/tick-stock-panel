@@ -43,55 +43,122 @@ def test_invalid_constraints_precede_data_access():
         service.prepare(service.Calculation(symbols=["a", "b"]), Mock(), "optimize")
 
 
-def test_worker_income_fees_and_no_future():
-    # riskfolio is optional in the application environment; test through the isolated runtime below.
+def run_signal_worker(payload, targets=None):
     import json
     import subprocess
 
     python = Path(__file__).parents[1] / "allocation-engine/.venv/bin/python"
-    if not python.exists():
-        pytest.skip("install allocation-engine first")
-    dates = pd.bdate_range("2026-01-01", "2026-04-10")
-    prices = [100.0] * len(dates)
-    dividend = [0.0] * len(dates)
-    event = list(dates).index(pd.Timestamp("2026-02-02"))
-    for i in range(event, len(dates)):
-        prices[i] = 99.0
-    dividend[event] = 1.0
-    payload = dict(
-        symbols=["ONE"],
-        dates=[str(x.date()) for x in dates],
-        close=[[p] for p in prices],
-        open=[[p] for p in prices],
-        dividend=[[x] for x in dividend],
-        split=[[1] for _ in dates],
-        lookback=3,
+    script = """
+import importlib.util,json,sys
+spec=importlib.util.spec_from_file_location("allocation",sys.argv[1])
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+p=json.load(sys.stdin)
+targets=p.pop("_targets",None)
+if targets:
+    m.weights=lambda r,cap:m.np.array(targets[str(r.index[-1].date())])
+print(json.dumps(m.calculate(p)))
+"""
+    if targets:
+        payload = {**payload, "_targets": targets}
+    return json.loads(
+        subprocess.check_output(
+            [
+                str(python),
+                "-c",
+                script,
+                str(Path(service.__file__).with_name("_allocation_worker.py")),
+            ],
+            input=json.dumps(payload),
+            text=True,
+        )
+    )
+
+
+def signal_payload():
+    dates = pd.bdate_range("2026-01-01", periods=8)
+    return dict(
+        symbols=["A", "B"],
+        dates=[str(d.date()) for d in dates],
+        close=[[100.0, 100.0]] * 8,
+        open=[[90.0, 90.0]] * 8,
+        dividend=[[0.0, 0.0]] * 8,
+        split=[[1.0, 1.0]] * 8,
+        signals=[[None, None] for _ in dates],
+        lookback=2,
         max_weight=1.0,
         mode="backtest",
-        start="2026-02-02",
-        end="2026-04-10",
+        start=str(dates[2].date()),
+        end=str(dates[-1].date()),
+        threshold=0.05,
         fee=0.0,
         slippage=0.0,
     )
 
-    def run(p):
-        output = subprocess.check_output(
-            [str(python), str(Path(service.__file__).with_name("_allocation_worker.py"))],
-            input=json.dumps(p) + "\n",
-            text=True,
-        )
-        return json.loads(output)["result"]
 
-    original = run(payload)
-    # Initial buyers on the ex-dividend date must not receive the prior owners' cash.
-    assert original["history"]["hrp"]["return"] == pytest.approx(0.0)
-    assert len(original["trades"]) == 6
-    payload["fee"] = 0.001
-    assert run(payload)["history"]["hrp"]["return"] < 0
-    payload["fee"] = 0
-    payload["close"][-1] = [120.0]
-    changed = run(payload)
-    assert changed["trades"][0] == original["trades"][0]
+def test_no_initial_position_or_carried_attack():
+    p = signal_payload()
+    p["signals"][1] = ["attack", "attack"]  # before the formal period
+    targets = {d: [0.5, 0.5] for d in p["dates"]}
+    result = run_signal_worker(p, targets)
+    assert result["trades"] == []
+    assert all(
+        row["cash"] == 1.0 and row["weights"] == [0.0, 0.0] for row in result["accounts"]["hrp"]
+    )
+
+
+def test_attack_retreat_close_fills_and_one_sided_rebalance():
+    p = signal_payload()
+    p["signals"][3] = ["attack", "attack"]
+    p["signals"][6] = [None, "attack"]
+    p["signals"][7] = ["retreat", None]
+    targets = {d: ([0.5, 0.5] if i < 4 else [0.2, 0.8]) for i, d in enumerate(p["dates"])}
+    result = run_signal_worker(p, targets)
+    trades = [t for t in result["trades"] if t["model"] == "hrp"]
+    assert [(t["date"], t["symbol"], t["side"], t["reason"]) for t in trades] == [
+        (p["dates"][3], "A", "buy", "attack"),
+        (p["dates"][3], "B", "buy", "attack"),
+        (p["dates"][4], "A", "sell", "threshold_reduce"),
+        (p["dates"][6], "B", "buy", "attack"),
+        (p["dates"][7], "A", "sell", "retreat"),
+    ]
+    assert all(t["price"] == 100.0 for t in trades)  # opens are deliberately 90
+    rows = result["accounts"]["hrp"]
+    assert rows[2]["weights"] == pytest.approx([0.2, 0.5])
+    assert rows[2]["cash"] == pytest.approx(0.3)
+    assert rows[4]["weights"] == pytest.approx([0.2, 0.8])
+    assert rows[-1]["weights"] == pytest.approx([0.0, 0.8])
+
+
+def test_threshold_boundary_and_same_day_attack_after_reduction():
+    p = signal_payload()
+    p["signals"][2] = ["attack", "attack"]
+    p["signals"][3] = [None, "attack"]
+    targets = {d: ([0.5, 0.5] if i < 3 else [0.45, 0.55]) for i, d in enumerate(p["dates"])}
+    result = run_signal_worker(p, targets)
+    rows = result["accounts"]["hrp"]
+    assert rows[1]["weights"] == pytest.approx([0.45, 0.55])
+    # threshold is inclusive, and a fresh same-day attack may consume sale proceeds
+    assert any(t["reason"] == "threshold_reduce" for t in result["trades"] if t["model"] == "hrp")
+
+
+def test_signal_costs_and_dividend_split_accounting():
+    p = signal_payload()
+    p["signals"][2] = ["attack", None]
+    p["split"][3] = [2.0, 1.0]
+    p["close"] = [[100.0, 100.0] for _ in p["dates"]]
+    for i in range(3, 8):
+        p["close"][i] = [49.0, 100.0]
+    p["dividend"][3] = [2.0, 0.0]  # per pre-split share
+    targets = {d: [0.5, 0.5] for d in p["dates"]}
+    no_cost = run_signal_worker(p, targets)
+    assert no_cost["history"]["hrp"]["return"] == pytest.approx(0.0)
+    p["fee"] = 0.01
+    cost = run_signal_worker(p, targets)
+    assert cost["history"]["hrp"]["return"] < 0
+    assert all(a["cash"] >= 0 for a in cost["accounts"]["hrp"])
+    buys = [t for t in cost["trades"] if t["model"] == "hrp"]
+    assert buys[0]["amount"] + buys[0]["cost"] <= 1.0
+    assert buys[0]["cost"] == pytest.approx(buys[0]["amount"] * 0.01)
 
 
 def test_api_and_data_validation(tmp_path, monkeypatch):
@@ -130,9 +197,14 @@ def test_api_and_data_validation(tmp_path, monkeypatch):
         recommendation = client.post(route + "/refresh").json()
         assert recommendation["status"] == "initial"
         assert client.post(route + "/confirm", json={"checked_at": "stale"}).status_code == 409
-        assert client.post(route + "/confirm", json={"checked_at": recommendation["checked_at"]}).status_code == 200
+        assert (
+            client.post(
+                route + "/confirm", json={"checked_at": recommendation["checked_at"]}
+            ).status_code
+            == 200
+        )
         stored = client.get("/api/asset-allocation/tracking").json()
-        assert next(iter(stored.values()))["basis"]["weights"] == [1.]
+        assert next(iter(stored.values()))["basis"]["weights"] == [1.0]
 
         body["symbols"] = ["unknown"]
         assert client.post("/api/asset-allocation/optimize", json=body).status_code == 422
@@ -178,47 +250,6 @@ def test_worker_timeout_recycles_process(monkeypatch):
         service.run_engine({})
     assert service._process is None
     process.kill.assert_called_once()
-
-
-def test_hrp_rebalance_uses_only_preceding_prices():
-    import json
-    import subprocess
-
-    import numpy as np
-
-    python = Path(__file__).parents[1] / "allocation-engine/.venv/bin/python"
-    dates = pd.bdate_range("2026-01-01", "2026-04-10")
-    rng = np.random.default_rng(17)
-    prices = 100 * np.cumprod(1 + rng.normal(0, 0.01, (len(dates), 3)), axis=0)
-    payload = dict(
-        symbols=["A", "B", "C"],
-        dates=[str(d.date()) for d in dates],
-        close=prices.tolist(),
-        open=prices.tolist(),
-        dividend=np.zeros_like(prices).tolist(),
-        split=np.ones_like(prices).tolist(),
-        lookback=10,
-        max_weight=0.5,
-        mode="backtest",
-        start="2026-02-02",
-        end="2026-04-10",
-        fee=0.0,
-        slippage=0.0,
-    )
-
-    def run():
-        output = subprocess.check_output(
-            [str(python), str(Path(service.__file__).with_name("_allocation_worker.py"))],
-            input=json.dumps(payload) + "\n",
-            text=True,
-        )
-        return json.loads(output)["result"]
-
-    original = run()
-    payload["close"][-1][0] *= 2
-    changed = run()
-    assert changed["trades"] == original["trades"]
-    assert changed["history"]["hrp"]["return"] != original["history"]["hrp"]["return"]
 
 
 def test_tracking_drifts_with_price_and_keeps_ex_dividend_cash():
@@ -273,53 +304,26 @@ def test_tracking_confirm_and_legacy_defaults(tmp_path, monkeypatch):
         )
 
 
-def test_daily_threshold_backtest_and_no_future():
-    import json
-    import subprocess
-
+def test_same_day_weights_are_causal_and_missing_signals_fail_closed():
     import numpy as np
 
-    python = Path(__file__).parents[1] / "allocation-engine/.venv/bin/python"
-    dates = pd.bdate_range("2026-01-01", "2026-03-10")
-    prices = 100 * np.cumprod(
-        1 + np.random.default_rng(33).normal(0, 0.02, (len(dates), 3)), axis=0
-    )
-    p = dict(
-        symbols=["A", "B", "C"],
-        dates=[str(d.date()) for d in dates],
-        close=prices.tolist(),
-        open=prices.tolist(),
-        split=np.ones_like(prices).tolist(),
-        dividend=np.zeros_like(prices).tolist(),
-        lookback=10,
-        max_weight=0.5,
-        mode="backtest",
-        rebalance="daily_threshold",
-        threshold=1.0,
-        start="2026-02-03",
-        end="2026-03-10",
-        fee=0.0,
-        slippage=0.0,
-    )
-
-    def run():
-        output = subprocess.check_output(
-            [str(python), str(Path(service.__file__).with_name("_allocation_worker.py"))],
-            input=json.dumps(p) + "\n",
-            text=True,
-        )
-        return json.loads(output)["result"]
-
-    passive = run()
-    assert len(passive["trades"]) == 2
-    assert passive["trades"][0]["date"] == "2026-02-03"
-    p["threshold"] = 0.001
-    active = run()
-    assert len(active["trades"]) > 2
-    assert all(t["reason"] in ("initial", "threshold") for t in active["trades"])
+    p = signal_payload()
+    values = 100 * np.cumprod(1 + np.random.default_rng(17).normal(0, 0.01, (8, 2)), axis=0)
+    p["close"] = values.tolist()
+    p["signals"][3] = ["attack", "attack"]
+    original = run_signal_worker(p)
     p["close"][-1][0] *= 2
-    changed = run()
-    assert changed["trades"] == active["trades"]
+    changed = run_signal_worker(p)
+    assert original["schedule"][:-1] == changed["schedule"][:-1]
+    assert original["schedule"][-1]["weights"] != changed["schedule"][-1]["weights"]
+    assert [t for t in original["trades"] if t["date"] < p["dates"][-1]] == [
+        t for t in changed["trades"] if t["date"] < p["dates"][-1]
+    ]
+    del p["signals"]
+    import subprocess
+
+    with pytest.raises(subprocess.CalledProcessError):
+        run_signal_worker(p)
 
 
 def test_scheduler_only_visits_enabled_portfolios_after_close(tmp_path, monkeypatch):
@@ -362,3 +366,89 @@ def test_automatic_refresh_rejects_stale_data_and_keeps_baseline(tmp_path, monke
     result = service.refresh_portfolio(str(key), request, require_today=True)
     assert result["status"] == "error"
     assert "尚未就绪" in result["error"]
+
+
+def test_prepare_reuses_angel_devil_and_adjusts_split_once(tmp_path, monkeypatch):
+    import polars as pl
+
+    dates = [d.date() for d in pd.bdate_range("2026-01-01", periods=40)]
+    raw = [100.0] * 30 + [50.0] * 10
+    repo = Mock()
+    repo.store.data_dir = tmp_path
+    repo.get_etf_symbol_set.return_value = {"512000.SH"}
+    repo.get_index_daily.return_value = pl.DataFrame({"date": dates})
+    # Existing adjusted close must not be adjusted twice in the signal calculation.
+    repo.get_etf_daily.return_value = pl.DataFrame(
+        {"date": dates, "raw_close": raw, "open": [50.0] * 40, "close": [50.0] * 40}
+    )
+    monkeypatch.setattr(
+        service,
+        "get_provider",
+        lambda _: Mock(
+            get_etf_actions=lambda _: [{"date": str(dates[30]), "split": 2.0, "dividend": 0.0}]
+        ),
+    )
+    service._events.clear()
+    payload = service.prepare(
+        service.Calculation(
+            symbols=["512000.SH"], lookback=3, max_weight=1, start=dates[25], end=dates[-1]
+        ),
+        repo,
+        "backtest",
+    )
+    assert payload["rule_version"] == "angel_devil_close_v1"
+    assert all(row == [None] for row in payload["signals"])
+    assert payload["split"][payload["dates"].index(str(dates[30]))] == [2.0]
+    assert payload["close"][-1] == [50.0]
+    # Missing bars in the signal prehistory also fail closed.
+    repo.get_etf_daily.return_value = repo.get_etf_daily.return_value.filter(
+        pl.col("date") != dates[10]
+    )
+    with pytest.raises(ValueError, match="信号历史存在"):
+        service.prepare(
+            service.Calculation(
+                symbols=["512000.SH"], lookback=3, max_weight=1, start=dates[25], end=dates[-1]
+            ),
+            repo,
+            "backtest",
+        )
+
+
+def test_backtest_api_forces_signal_rule_and_starts_in_cash(tmp_path, monkeypatch):
+    import polars as pl
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    days = [d.date() for d in pd.bdate_range("2026-01-01", periods=45)]
+    repo = Mock()
+    repo.store.data_dir = tmp_path
+    repo.get_etf_symbol_set.return_value = {"510300.SH"}
+    repo.get_name_map.return_value = {"510300.SH": "ETF"}
+    repo.get_index_daily.return_value = pl.DataFrame({"date": days})
+    repo.get_etf_daily.return_value = pl.DataFrame(
+        {"date": days, "raw_close": [100.0] * 45, "close": [100.0] * 45, "open": [99.0] * 45}
+    )
+    monkeypatch.setattr(service, "get_provider", lambda _: Mock(get_etf_actions=lambda _: []))
+    service._events.clear()
+    app = FastAPI()
+    app.state.repo = repo
+    app.include_router(service.router)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/asset-allocation/backtest",
+            json={
+                "symbols": ["510300.SH"],
+                "lookback": 3,
+                "max_weight": 1,
+                "start": str(days[25]),
+                "end": str(days[-1]),
+                "rebalance": "monthly",
+            },
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["parameters"]["rebalance"] == "angel_devil"
+        assert result["rule_version"] == "angel_devil_close_v1"
+        assert len(result["schedule"]) == 20
+        assert result["trades"] == []
+        assert result["accounts"]["hrp"][0]["cash"] == 1.0

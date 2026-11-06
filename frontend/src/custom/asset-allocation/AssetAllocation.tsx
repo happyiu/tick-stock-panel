@@ -1,35 +1,60 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { ArrowRight, Check, Clock3, History, Loader2, PieChart, Plus, RefreshCw, Save, Search, Trash2, X } from 'lucide-react'
 import * as echarts from 'echarts'
+import { PageHeader } from '@/components/PageHeader'
 import { api, type AllocationPortfolio, type AllocationResult } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 
 const initial: AllocationPortfolio = { name: '新组合', symbols: [], lookback: 252, max_weight: .35, auto_refresh: true, rebalance: 'daily_threshold', threshold: .05 }
 const pct = (n: number) => `${(n * 100).toFixed(2)}%`
+const control = 'h-9 w-full rounded-lg border border-border bg-base px-3 text-sm text-foreground outline-none focus:border-accent focus:ring-1 focus:ring-accent/30 disabled:opacity-40'
+const button = 'inline-flex shrink-0 whitespace-nowrap min-h-9 items-center justify-center gap-2 rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-medium text-secondary transition-colors hover:border-accent/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40'
+const primary = button + ' border-accent bg-accent text-white hover:bg-accent/90 hover:text-white'
+const card = 'rounded-xl border border-border bg-surface'
+const table = 'w-full min-w-[540px] text-left text-xs [&_th]:px-4 [&_th]:py-3 [&_th]:font-medium [&_th]:text-muted [&_td]:px-4 [&_td]:py-3 [&_tbody_tr]:border-t [&_tbody_tr]:border-border [&_tbody_tr]:hover:bg-elevated/50'
+
+function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  return <label className="block min-w-0 space-y-2">
+    <span className="block text-xs font-medium text-secondary">{label}</span>
+    {children}
+    {hint && <span className="block text-[11px] leading-5 text-muted">{hint}</span>}
+  </label>
+}
 
 function Performance({ result, title }: { result: AllocationResult; title: string }) {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const chart = echarts.init(ref.current!)
     chart.setOption({
-      tooltip: { trigger: 'axis' }, legend: { data: ['HRP', '等权'], textStyle: { color: '#888' } },
-      xAxis: { type: 'category', data: result.history.hrp.points.map(p => p.date) },
-      yAxis: { type: 'value', scale: true },
+      color: ['#3b82f6', '#94a3b8'],
+      grid: { left: 46, right: 18, top: 36, bottom: 30 },
+      tooltip: { trigger: 'axis' },
+      legend: { data: ['HRP 配置', '等权对照'], textStyle: { color: '#94a3b8', fontSize: 11 } },
+      xAxis: { type: 'category', boundaryGap: false, data: result.history.hrp.points.map(p => p.date), axisLabel: { color: '#94a3b8', fontSize: 10 }, axisTick: { show: false } },
+      yAxis: { type: 'value', scale: true, axisLabel: { color: '#94a3b8', fontSize: 10 }, splitLine: { lineStyle: { color: '#94a3b8', opacity: .12 } } },
       series: Object.entries(result.history).map(([name, data]) => ({
-        name: name === 'hrp' ? 'HRP' : '等权', type: 'line', showSymbol: false, data: data.points.map(p => p.value),
+        name: name === 'hrp' ? 'HRP 配置' : '等权对照', type: 'line', showSymbol: false,
+        lineStyle: { width: 2, type: name === 'hrp' ? 'solid' : 'dashed' }, data: data.points.map(p => p.value),
       })),
     })
     const observer = new ResizeObserver(() => chart.resize())
     observer.observe(ref.current!)
     return () => { observer.disconnect(); chart.dispose() }
   }, [result])
-  return <section className="rounded-xl border border-border p-4 space-y-3">
-    <h2 className="font-semibold">{title}</h2>
-    <p className="text-xs text-muted">数据截至 {result.as_of} · 回看 {result.samples} 期 · 引擎 {result.engine_version}</p>
-    <p className="text-xs text-muted">{result.history.hrp.points[0]?.date} 至 {result.history.hrp.points.at(-1)?.date}</p>
-    <div className="flex flex-wrap gap-6 text-sm">{Object.entries(result.history).map(([name, data]) =>
-      <div key={name}>{name === 'hrp' ? 'HRP' : '等权'} 收益 {pct(data.return)} · 最大回撤 {pct(data.drawdown)}</div>)}</div>
-    <div ref={ref} className="h-64 w-full" />
+  return <section className={card}>
+    <div className="border-b border-border px-4 py-3">
+      <h3 className="text-sm font-semibold">{title}</h3>
+      <p className="mt-1 text-[11px] text-muted">{result.history.hrp.points[0]?.date} 至 {result.history.hrp.points.at(-1)?.date} · 净值从 1 开始</p>
+    </div>
+    <div className="grid grid-cols-2 gap-3 p-4">
+      {Object.entries(result.history).map(([name, data]) => <div key={name} className="rounded-lg bg-base p-3">
+        <p className="text-[11px] text-muted">{name === 'hrp' ? 'HRP 配置' : '等权对照'} · 累计收益</p>
+        <p className="mt-1 font-mono text-xl font-semibold">{pct(data.return)}</p>
+        <p className="mt-2 text-[11px] text-muted">最大回撤 <span className="font-mono text-secondary">{pct(data.drawdown)}</span></p>
+      </div>)}
+    </div>
+    <div ref={ref} className="h-64 w-full px-2 pb-3" />
   </section>
 }
 
@@ -39,8 +64,10 @@ export default function AssetAllocation() {
   const tracking = useQuery({ queryKey: QK.allocationTracking, queryFn: api.allocationTracking, refetchInterval: 30000 })
   const [draft, setDraft] = useState<AllocationPortfolio>(initial)
   const [id, setId] = useState('')
+  const [tab, setTab] = useState<'configure' | 'tracking' | 'backtest'>('configure')
   const [q, setQ] = useState('')
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<AllocationResult>()
   const [backtest, setBacktest] = useState<AllocationResult>()
@@ -49,9 +76,16 @@ export default function AssetAllocation() {
   const [fee, setFee] = useState(0)
   const [slippage, setSlippage] = useState(0)
   const search = useQuery({ queryKey: QK.etfPool({ page: 1, pageSize: 20, category: '', q }), queryFn: () => api.etfPool({ page: 1, pageSize: 20, category: '', q }), enabled: q.trim().length > 0 })
-  function update(next: AllocationPortfolio) { setDraft(next); setResult(undefined); setBacktest(undefined); setError('') }
+  const names = useQuery({ queryKey: QK.instrumentNames(draft.symbols), queryFn: () => api.instrumentNames(draft.symbols), enabled: draft.symbols.length > 0 && typeof api.instrumentNames === 'function' })
+  const nameOf = (symbol: string) => names.data?.names[symbol] ?? search.data?.rows.find(row => row.symbol === symbol)?.name ?? result?.names[symbol] ?? symbol
+  function update(next: AllocationPortfolio) {
+    setDraft(next); setResult(undefined); setBacktest(undefined); setError(''); setNotice('')
+  }
+  function selectPortfolio(key: string) {
+    setId(key); setQ(''); update(key ? portfolios.data![key] : initial)
+  }
   async function action(fn: () => Promise<void>) {
-    setBusy(true); setError('')
+    setBusy(true); setError(''); setNotice('')
     try { await fn() } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
   }
   const saved = id ? portfolios.data?.[id] : undefined
@@ -59,78 +93,179 @@ export default function AssetAllocation() {
   const dirty = !saved || definition(saved) !== definition(draft)
   const tracked = !dirty ? tracking.data?.[id] : undefined
   const refreshTracking = () => client.invalidateQueries({ queryKey: QK.allocationTracking })
-  const input = 'rounded border border-border bg-surface px-3 py-2 text-sm'
-  return <div className="p-4 pt-16 md:p-6 space-y-5">
-    <h1 className="text-xl font-semibold">资产配置</h1>
-    <fieldset disabled={busy} className="space-y-5">
-    {(error || portfolios.error || search.error || tracking.error) && <div role="alert" className="text-red-400">{error || String(portfolios.error || search.error || tracking.error)}</div>}
-    {portfolios.isLoading && <p>加载组合…</p>}
-    <div className="flex flex-wrap gap-2">
-      <select aria-label="已保存组合" className={input} value={id} onChange={e => {
-        const key = e.target.value; setId(key); update(key ? portfolios.data![key] : initial)
-      }}><option value="">新建组合</option>{Object.entries(portfolios.data || {}).map(([key, p]) => <option key={key} value={key}>{p.name}</option>)}</select>
-      <input aria-label="组合名称" className={input} value={draft.name} onChange={e => update({ ...draft, name: e.target.value })} />
-      <button disabled={busy || !draft.name.trim()} onClick={() => action(async () => {
-        const key = id || crypto.randomUUID()
-        client.setQueryData(QK.allocationPortfolios, await api.allocationSave(key, draft)); setId(key)
-      })}>保存组合</button>
-      <button disabled={busy || !id} onClick={() => action(async () => {
-        if (!window.confirm('删除这个已保存组合？')) return
-        client.setQueryData(QK.allocationPortfolios, await api.allocationDelete(id)); setId(''); update(initial)
-      })}>删除组合</button>
+  const feasible = draft.symbols.length * draft.max_weight >= 1 - 1e-9
+  const canCalculate = draft.symbols.length > 0 && feasible
+  const failure = error || portfolios.error?.message || tracking.error?.message || search.error?.message
+  const datesChanged = () => setBacktest(undefined)
+  const tabs = [
+    { id: 'configure', label: '配置仓位', icon: PieChart },
+    { id: 'tracking', label: '调仓跟踪', icon: RefreshCw },
+    { id: 'backtest', label: '历史回测', icon: History },
+  ] as const
+  return <div className="flex h-full min-h-0 flex-col">
+    <PageHeader title="资产配置" className="shrink-0 pl-16 md:pl-5" subtitle="选好 ETF，计算资金配比，再查看调仓建议与历史表现。" right={
+      <button className={button} disabled={busy} onClick={() => { selectPortfolio(''); setTab('configure') }}><Plus size={14} />新建组合</button>
+    } />
+    <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+      <fieldset disabled={busy} className="mx-auto min-w-0 w-full max-w-[1440px] space-y-4">
+        <section className={card + ' flex flex-wrap items-end gap-3 p-4'}>
+          <div className="min-w-0 flex-1 basis-48"><Field label="已保存组合">
+            <select aria-label="已保存组合" className={control} value={id} onChange={e => selectPortfolio(e.target.value)}>
+              <option value="">新建组合</option>{Object.entries(portfolios.data || {}).map(([key, p]) => <option key={key} value={key}>{p.name}</option>)}
+            </select>
+          </Field></div>
+          <div className="min-w-0 flex-1 basis-48"><Field label="组合名称">
+            <input aria-label="组合名称" className={control} value={draft.name} onChange={e => update({ ...draft, name: e.target.value })} />
+          </Field></div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button className={button} disabled={busy || !draft.name.trim()} onClick={() => action(async () => {
+              const key = id || crypto.randomUUID()
+              client.setQueryData(QK.allocationPortfolios, await api.allocationSave(key, draft)); setId(key); setNotice('组合已保存，可随时打开并重新计算。')
+            })}><Save size={14} />保存组合</button>
+            <button aria-label="删除组合" title="删除组合" className={button + ' hover:text-danger'} disabled={busy || !id} onClick={() => action(async () => {
+              if (!window.confirm('删除这个已保存组合？')) return
+              client.setQueryData(QK.allocationPortfolios, await api.allocationDelete(id)); setId(''); update(initial)
+            })}><Trash2 size={14} /></button>
+          </div>
+          <p className="w-full text-[11px] text-muted">{portfolios.isLoading ? '加载组合…' : dirty ? '修改尚未保存。可以先试算，保存后才能启用调仓跟踪。' : '组合已保存。修改 ETF 或参数后，请保存并重新计算。'}</p>
+        </section>
+        {failure && <div role="alert" className="rounded-lg border border-danger/30 bg-danger/5 p-3 text-xs leading-6 text-danger">{failure}</div>}
+        {notice && <div role="status" className="flex items-center gap-2 text-xs text-accent"><Check size={14} />{notice}</div>}
+        <div role="tablist" aria-label="资产配置功能" className="flex gap-1 border-b border-border">
+          {tabs.map(item => <button role="tab" aria-selected={tab === item.id} aria-controls={`allocation-${item.id}`} id={`tab-${item.id}`} key={item.id} onClick={() => setTab(item.id)}
+            className={`inline-flex items-center gap-2 whitespace-nowrap border-b-2 px-4 py-3 text-xs font-medium transition-colors ${tab === item.id ? 'border-accent text-accent' : 'border-transparent text-muted hover:text-foreground'}`}>
+            <item.icon size={14} />{item.label}
+          </button>)}
+        </div>
+        {busy && <p role="status" className="flex items-center gap-2 text-xs text-accent"><Loader2 size={14} className="animate-spin" />正在处理，请稍候…</p>}
+
+        {tab === 'configure' && <div id="allocation-configure" role="tabpanel" aria-labelledby="tab-configure" className="grid items-start gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
+          <section className={card + ' min-w-0'}>
+            <div className="border-b border-border px-4 py-3"><h2 className="text-sm font-semibold">ETF 与配置参数</h2><p className="mt-1 text-[11px] text-muted">根据历史波动与相关性，计算各只 ETF 的资金比例。</p></div>
+            <div className="space-y-4 p-4">
+              <div className="relative"><Search size={14} className="pointer-events-none absolute left-3 top-3 text-muted" />
+                <input aria-label="搜索 ETF" className={control + ' pl-9'} placeholder="搜索 ETF 名称或代码" value={q} onChange={e => setQ(e.target.value)} />
+              </div>
+              {q && <div className="max-h-56 overflow-y-auto rounded-lg border border-border bg-base">
+                {search.isFetching && <p className="p-3 text-xs text-muted">搜索中…</p>}
+                {search.data?.rows.map(row => <button key={row.symbol} disabled={draft.symbols.includes(row.symbol)} className="flex w-full items-center justify-between gap-3 border-b border-border px-3 py-2 text-left last:border-0 hover:bg-elevated disabled:opacity-40" onClick={() => { update({ ...draft, symbols: [...draft.symbols, row.symbol] }); setQ('') }}>
+                  <span className="min-w-0"><span className="block truncate text-xs">{row.name}</span><span className="font-mono text-[10px] text-muted">{row.symbol}</span></span>{draft.symbols.includes(row.symbol) ? <Check size={14} /> : <Plus size={14} className="text-accent" />}
+                </button>)}
+                {!search.isFetching && search.data?.rows.length === 0 && <p className="p-3 text-xs text-muted">没有匹配的 ETF，试试六位代码。</p>}
+              </div>}
+              <div><p className="mb-2 text-xs text-muted">已选 ETF <span className="font-mono text-secondary">{draft.symbols.length}</span></p>
+                {draft.symbols.length ? <div className="divide-y divide-border">{draft.symbols.map(symbol => <div key={symbol} className="flex items-center justify-between gap-2 py-2">
+                  <div className="min-w-0"><p className="truncate text-xs font-medium">{nameOf(symbol)}</p><p className="font-mono text-[10px] text-muted">{symbol}</p></div>
+                  <button aria-label={`移除 ${symbol}`} className="rounded-md p-1.5 text-muted hover:bg-elevated hover:text-danger" onClick={() => update({ ...draft, symbols: draft.symbols.filter(s => s !== symbol) })}><X size={14} /></button>
+                </div>)}</div> : <div className="rounded-lg border border-dashed border-border p-5 text-center text-xs leading-6 text-muted">搜索并添加 ETF<br />也可以先选择上方已保存的组合。</div>}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="回看交易日" hint="252 个交易日约为一年">
+                  <input aria-label="回看交易日" className={control + ' font-mono'} type="number" min="2" value={draft.lookback} onChange={e => update({ ...draft, lookback: Number(e.target.value) })} />
+                </Field>
+                <Field label="单只仓位上限（%）" hint="限制任意一只的配置比例">
+                  <input aria-label="单只上限" className={control + ' font-mono'} type="number" min="1" max="100" value={draft.max_weight * 100} onChange={e => update({ ...draft, max_weight: Number(e.target.value) / 100 })} />
+                </Field>
+              </div>
+              {!feasible && draft.symbols.length > 0 && <p className="rounded-lg bg-warning/10 p-3 text-xs leading-5 text-warning">当前最多配置 {pct(draft.symbols.length * draft.max_weight)}，请增加 ETF 或提高单只上限，使合计可达到 100%。</p>}
+              <button className={primary + ' w-full'} disabled={busy || !canCalculate} onClick={() => action(async () => { setResult(undefined); setResult(await api.allocationCalculate('optimize', draft)) })}>
+                <PieChart size={14} />计算目标仓位<ArrowRight size={14} />
+              </button>
+              <p className="text-[11px] leading-5 text-muted">使用最近完整收盘数据。调整标的或参数后，需要重新计算。</p>
+            </div>
+          </section>
+          <div className="min-w-0 space-y-4">
+            {result ? <>
+              <section className={card}>
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3"><div><h2 className="text-sm font-semibold">目标仓位</h2><p className="mt-1 text-[11px] text-muted">数据截至 {result.as_of} · 有效收益 {result.samples} 期</p></div><span className="rounded-md bg-accent/10 px-2 py-1 font-mono text-xs text-accent">合计 {pct(result.weights!.reduce((a, b) => a + b, 0))}</span></div>
+                <div className="overflow-x-auto"><table className={table}><thead><tr>{['ETF', 'HRP 目标', '等权对照', '相对等权（百分点）', '波动风险贡献'].map(t => <th key={t}>{t}</th>)}</tr></thead><tbody>{result.parameters.symbols.map((symbol, i) => <tr key={symbol}><td><p>{result.names[symbol] ?? symbol}</p><p className="mt-1 font-mono text-[10px] text-muted">{symbol}</p></td><td className="font-mono font-semibold text-accent">{pct(result.weights![i])}</td><td className="font-mono">{pct(1 / result.parameters.symbols.length)}</td><td className="font-mono">{((result.weights![i] - 1 / result.parameters.symbols.length) * 100).toFixed(2)}</td><td className="font-mono">{pct(result.risk_contribution![i])}</td></tr>)}</tbody></table></div>
+                <p className="border-t border-border p-3 text-[11px] leading-5 text-muted">等权对照将资金平均分给所有 ETF。风险贡献表示各 ETF 对组合波动的影响，负值可体现分散风险的作用。</p>
+              </section>
+              <Performance title="当前配置历史表现 · 样本内回看" result={result} />
+              <p className="text-[11px] leading-5 text-muted">以上使用整个样本期算出的当前权重回看历史。若要评估逐日使用当时数据调仓的效果，请进入“历史回测”。</p>
+              <button className={button} onClick={() => setTab('backtest')}><History size={14} />去做历史回测<ArrowRight size={14} /></button>
+            </> : <div className={card + ' flex min-h-[360px] flex-col items-center justify-center px-6 py-12 text-center'}>
+              <div className="mb-5 rounded-2xl bg-accent/10 p-4 text-accent"><PieChart size={28} strokeWidth={1.5} /></div>
+              <h2 className="text-sm font-semibold">先算一组目标仓位</h2>
+              <p className="mt-2 max-w-sm text-xs leading-6 text-muted">选择 ETF 和参数，再点击“计算目标仓位”。这里会显示资金配比、风险贡献和历史表现。</p>
+            </div>}
+          </div>
+        </div>}
+
+        {tab === 'tracking' && <section id="allocation-tracking" role="tabpanel" aria-labelledby="tab-tracking" className={card + ' p-4 sm:p-5 space-y-5'}>
+          <div><h2 className="text-sm font-semibold">跟踪仓位偏离，查看调仓建议</h2><p className="mt-2 text-xs leading-6 text-muted">保存组合 → 更新建议 → 确认模拟基准。后续根据价格、分红和拆分，比较跟踪仓位与新目标。</p></div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="rounded-lg bg-base p-4"><label className="flex cursor-pointer items-center gap-3 text-xs font-medium"><input className="accent-accent" type="checkbox" checked={draft.auto_refresh ?? false} onChange={e => update({ ...draft, auto_refresh: e.target.checked })} />每天收盘自动更新建议</label><p className="mt-2 text-[11px] leading-5 text-muted">保存后生效。系统运行时，工作日北京时间 16 点后每 15 分钟检查收盘数据。</p></div>
+            <Field label="触发偏离（百分点）" hint="例如 20% 偏离到 25%，差额是 5 个百分点。">
+              <input aria-label="触发偏离" className={control} type="number" min=".1" max="100" step=".1" value={(draft.threshold ?? .05) * 100} onChange={e => update({ ...draft, threshold: Number(e.target.value) / 100 })} />
+            </Field>
+          </div>
+          {dirty && <p className="rounded-lg bg-warning/10 p-3 text-xs text-warning">请先保存组合，再更新调仓建议。</p>}
+          <button className={primary} disabled={busy || dirty || !canCalculate} onClick={() => action(async () => { await api.allocationRefresh(id); await refreshTracking() })}><RefreshCw size={14} />更新调仓建议</button>
+          {!tracked && <p className="text-xs text-muted">首次使用，先更新建议，再将目标仓位确认为模拟跟踪基准。</p>}
+          {tracked && <div className="space-y-4 border-t border-border pt-4">
+            <div className="flex flex-wrap items-center gap-3"><span className={`rounded-md px-2 py-1 text-xs ${tracked.status === 'error' ? 'bg-danger/10 text-danger' : 'bg-accent/10 text-accent'}`}>{{ initial: '等待建立跟踪基准', rebalance: '已触发调仓建议', hold: '偏离未达到阈值', error: '本次计算失败' }[tracked.status]}</span><span className="text-[11px] text-muted">数据截至 {tracked.as_of ?? '—'} · 检查于 {tracked.checked_at.replace('T', ' ').slice(0, 19)}</span></div>
+            {tracked.error && <p role="alert" className="text-xs text-danger">{tracked.error}</p>}
+            {tracked.deviation != null && <p className="text-sm">当前最大偏离 <span className="font-mono font-semibold">{(tracked.deviation * 100).toFixed(2)}</span> 个百分点</p>}
+            {tracked.status !== 'error' && <>
+              <div className="overflow-x-auto rounded-lg border border-border"><table className={table}><thead><tr><th>ETF</th><th>模拟跟踪仓位</th><th>最新目标</th><th>差额（百分点）</th></tr></thead><tbody>{draft.symbols.map((symbol, i) => <tr key={symbol}><td>{nameOf(symbol)}<p className="mt-1 font-mono text-[10px] text-muted">{symbol}</p></td><td className="font-mono">{tracked.current ? pct(tracked.current[i]) : '待建立'}</td><td className="font-mono text-accent">{pct(tracked.target![i])}</td><td className="font-mono">{tracked.current ? ((tracked.target![i] - tracked.current[i]) * 100).toFixed(2) : '—'}</td></tr>)}</tbody></table></div>
+              <div className="flex flex-wrap items-center gap-3"><button className={button} onClick={() => action(async () => {
+                if (!window.confirm('将此目标权重按所示收盘价确认为新的模拟持仓跟踪基准？')) return
+                await api.allocationConfirm(id, tracked.checked_at); await refreshTracking(); setNotice('跟踪基准已更新，后续偏离将与此基准比较。')
+              })}><Check size={14} />{tracked.status === 'initial' ? '建立模拟跟踪基准' : '将目标设为新基准'}</button><p className="text-[11px] text-muted">确认后，按所示收盘价建立模拟持仓，重新开始跟踪偏离。</p></div>
+            </>}
+          </div>}
+        </section>}
+
+        {tab === 'backtest' && <div id="allocation-backtest" role="tabpanel" aria-labelledby="tab-backtest" className="space-y-4">
+          <section className={card + ' p-4 sm:p-5 space-y-4'}>
+            <div><h2 className="text-sm font-semibold">检验这组 ETF 的历史配置表现</h2><p className="mt-2 text-xs leading-6 text-muted">从空仓开始，每天计算目标配比。日线进攻时买入，撤退时清仓；偏离达标只减仓，加仓等待下一次进攻。</p></div>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="rounded-lg border border-accent/20 bg-accent/5 p-3 text-xs leading-6 text-secondary sm:col-span-2 lg:col-span-3">
+                天使魔鬼 · 日线信号 · 当日收盘价成交<br />
+                每天收盘确认信号和目标配比，先撤退卖出、再按阈值减仓，最后进攻买入。首日没有进攻信号就保持现金。收盘信号确认后按同一收盘价成交，为本回测指定的同价模拟口径。
+              </div>
+              <Field label="开始日期"><input aria-label="开始日期" className={control} type="date" value={start} onChange={e => { setStart(e.target.value); datesChanged() }} /></Field>
+              <Field label="结束日期"><input aria-label="结束日期" className={control} type="date" value={end} onChange={e => { setEnd(e.target.value); datesChanged() }} /></Field>
+              <Field label="单边费率（%）" hint="填写 0.02 代表每次成交金额的 0.02%。"><input aria-label="单边费率" className={control} type="number" min="0" step=".01" value={fee} onChange={e => { setFee(Number(e.target.value)); datesChanged() }} /></Field>
+              <Field label="滑点（%）" hint="模拟成交价偏差，与费率一起计入成本。"><input aria-label="滑点" className={control} type="number" min="0" step=".01" value={slippage} onChange={e => { setSlippage(Number(e.target.value)); datesChanged() }} /></Field>
+              {<Field label="强制减仓触发偏离（百分点）" hint="任意 ETF 偏离达标后，仅将超配持仓减至目标；低配部分等进攻信号。"><input aria-label="回测触发偏离" className={control} type="number" min=".1" max="100" step=".1" value={(draft.threshold ?? .05) * 100} onChange={e => update({ ...draft, threshold: Number(e.target.value) / 100 })} /></Field>}
+            </div>
+            <div className="flex flex-wrap items-center gap-3"><button className={primary} disabled={busy || !start || !end || start > end || !canCalculate} onClick={() => action(async () => { setBacktest(undefined); setBacktest(await api.allocationCalculate('backtest', { ...draft, rebalance: 'angel_devil', start, end, fee: fee / 100, slippage: slippage / 100 })) })}><History size={14} />运行历史回测</button><span className="text-[11px] text-muted">{draft.symbols.length} 只 ETF · 回看 {draft.lookback} 个交易日 · 可分割份额估算</span></div>
+            {!canCalculate && <p className="text-xs text-warning">请先在“配置仓位”中添加 ETF，并检查单只仓位上限。</p>}
+            {start && end && start > end && <p role="alert" className="text-xs text-danger">结束日期应晚于或等于开始日期。</p>}
+          </section>
+          {backtest ? <>
+            <Performance title="天使魔鬼信号与动态配比回测" result={backtest} />
+            <details className={card}><summary className="cursor-pointer px-4 py-3 text-sm font-medium">成交明细 <span className="ml-2 text-xs text-muted">{backtest.trades?.length ?? 0} 条</span></summary>
+              <div className="overflow-x-auto border-t border-border"><table className={table}>
+                <thead><tr><th>日期</th><th>方案</th><th>ETF</th><th>操作 / 原因</th><th>收盘成交价</th><th>成交金额 / 初始资金</th><th>成本 / 初始资金</th><th>当日目标</th></tr></thead>
+                <tbody>{backtest.trades?.map((t, index) => <tr key={index}>
+                  <td className="whitespace-nowrap font-mono">{t.date}</td><td className="whitespace-nowrap">{t.model === 'hrp' ? 'HRP 配置' : '等权对照'}</td>
+                  <td className="whitespace-nowrap">{t.symbol ? nameOf(t.symbol) : '—'}<p className="font-mono text-[10px] text-muted">{t.symbol}</p></td>
+                  <td className="whitespace-nowrap">{t.side === 'buy' ? '买入' : '卖出'} · {{ attack: '进攻信号', retreat: '撤退信号', threshold_reduce: '偏离达标，强制减仓' }[t.reason ?? 'attack']}</td>
+                  <td className="font-mono">{t.price?.toFixed(4)}</td><td className="font-mono">{pct(t.amount ?? 0)}</td><td className="font-mono">{pct(t.cost)}</td>
+                  <td className="font-mono">{t.symbol ? pct(t.weights[backtest.parameters.symbols.indexOf(t.symbol)]) : '—'}</td>
+                </tr>)}</tbody>
+              </table></div>
+            </details>
+            <details className={card}><summary className="cursor-pointer px-4 py-3 text-sm font-medium">每日配比与持仓</summary>
+              <div className="max-h-80 overflow-auto border-t border-border"><table className={table}>
+                <thead><tr><th>日期</th><th>日线信号</th><th>HRP 目标配比</th><th>HRP 实际持仓</th><th>现金占比</th></tr></thead>
+                <tbody>{backtest.schedule?.map((day, index) => {
+                  const account = backtest.accounts?.hrp[index]
+                  return <tr key={day.date}><td className="whitespace-nowrap font-mono">{day.date}</td>
+                    <td className="min-w-48">{day.signals.map((signal, j) => signal ? <p key={j}>{nameOf(backtest.parameters.symbols[j])} · {signal === 'attack' ? '进攻' : '撤退'}</p> : null)}{!day.signals.some(Boolean) && '无新信号'}</td>
+                    <td className="min-w-52">{day.weights.map((weight, j) => <p key={j}>{nameOf(backtest.parameters.symbols[j])} <span className="font-mono">{pct(weight)}</span></p>)}</td>
+                    <td className="min-w-52">{account?.weights.map((weight, j) => <p key={j}>{nameOf(backtest.parameters.symbols[j])} <span className="font-mono">{pct(weight)}</span></p>)}</td>
+                    <td className="font-mono">{account ? pct(account.cash / account.value) : '—'}</td>
+                  </tr>
+                })}</tbody>
+              </table></div>
+            </details>
+          </> : <div className={card + ' flex items-start gap-3 p-5 text-muted'}><Clock3 size={18} className="mt-0.5 shrink-0" /><p className="text-xs leading-6">设置区间后运行回测，即可查看信号成交、每天的目标与实际仓位、现金及净值。HRP 与等权对照使用相同信号和收盘成交规则。</p></div>}
+        </div>}
+      </fieldset>
     </div>
-    <div className="flex flex-wrap gap-4 items-center">
-      <label>回看交易日 <input aria-label="回看交易日" className={input + ' w-24'} type="number" min="2" value={draft.lookback} onChange={e => update({ ...draft, lookback: Number(e.target.value) })} /></label>
-      <label>单只上限 % <input aria-label="单只上限" className={input + ' w-24'} type="number" min="1" max="100" value={draft.max_weight * 100} onChange={e => update({ ...draft, max_weight: Number(e.target.value) / 100 })} /></label>
-    </div>
-    <section className="space-y-3 rounded-xl border border-border p-4">
-      <h2 className="font-semibold">动态调仓跟踪</h2>
-      <label className="flex gap-2"><input type="checkbox" checked={draft.auto_refresh ?? false} onChange={e => update({ ...draft, auto_refresh: e.target.checked })} />保存后每天收盘自动重算</label>
-      <label>触发偏离（百分点） <input aria-label="触发偏离" className={input + ' w-24'} type="number" min=".1" max="100" step=".1" value={(draft.threshold ?? .05) * 100} onChange={e => update({ ...draft, threshold: Number(e.target.value) / 100 })} /></label>
-      <p className="text-xs text-muted">北京时间 16 点后每 15 分钟检查一次。任意 ETF 偏离目标达到阈值时生成建议，计算基于确认时的模拟持仓及之后的价格、分红和拆分。</p>
-      {dirty && <p className="text-muted">请先保存组合，再重算调仓建议。</p>}
-      <button className={input} disabled={busy || dirty} onClick={() => action(async () => { await api.allocationRefresh(id); await refreshTracking() })}>重算调仓建议</button>
-      {tracked && <div className="space-y-2 text-sm">
-        <p>{({ initial: '等待建立跟踪基准', rebalance: '已触发调仓建议', hold: '偏离未达到阈值', error: '本次计算失败' })[tracked.status]} · 检查时间 {tracked.checked_at} · 数据截至 {tracked.as_of ?? '—'}</p>
-        {tracked.error && <p role="alert">{tracked.error}</p>}
-        {tracked.deviation != null && <p>最大偏离 {(tracked.deviation * 100).toFixed(2)} 个百分点</p>}
-        {tracked.status !== 'error' && <><div className="overflow-x-auto"><table className="w-full"><thead><tr><th>ETF</th><th>跟踪仓位</th><th>最新目标</th><th>差额</th></tr></thead><tbody>{draft.symbols.map((symbol, i) => <tr key={symbol}><td>{symbol}</td><td>{tracked.current ? pct(tracked.current[i]) : '—'}</td><td>{pct(tracked.target![i])}</td><td>{tracked.current ? pct(tracked.target![i] - tracked.current[i]) : '—'}</td></tr>)}</tbody></table></div>
-        <button className={input} onClick={() => action(async () => {
-          if (!window.confirm('将此目标权重按所示收盘价确认为新的模拟持仓跟踪基准？')) return
-          await api.allocationConfirm(id, tracked.checked_at); await refreshTracking()
-        })}>确认目标为跟踪基准</button></>}
-      </div>}
-    </section>
-    <div className="space-y-2">
-      <input aria-label="搜索 ETF" className={input + ' w-full'} placeholder="ETF 代码或名称" value={q} onChange={e => setQ(e.target.value)} />
-      {search.isFetching && <p className="text-muted">搜索中…</p>}
-      <div className="flex flex-wrap gap-2">{search.data?.rows.map(row => <button key={row.symbol} disabled={draft.symbols.includes(row.symbol)} className={input} onClick={() => update({ ...draft, symbols: [...draft.symbols, row.symbol] })}>{row.name} {row.symbol} ＋</button>)}</div>
-      {q && search.data?.rows.length === 0 && <p>没有匹配的 ETF</p>}
-      <div className="flex flex-wrap gap-2">{draft.symbols.map(symbol => <button className={input} key={symbol} onClick={() => update({ ...draft, symbols: draft.symbols.filter(s => s !== symbol) })}>{symbol} ×</button>)}</div>
-      {!draft.symbols.length && <p className="text-muted">搜索并添加 ETF，可以先保存草稿。</p>}
-      {draft.symbols.length > 0 && draft.symbols.length * draft.max_weight < 1 && <p className="text-amber-400">最多只能配置 {pct(draft.symbols.length * draft.max_weight)}，请提高单只上限或增加标的。</p>}
-      <button className={input} disabled={busy || !draft.symbols.length} onClick={() => action(async () => { setResult(undefined); setResult(await api.allocationCalculate('optimize', draft)) })}>{busy ? '处理中…' : '计算最新收盘配置'}</button>
-    </div>
-    {result && <>
-      <p className="text-sm">样本 {result.sample_start} 至 {result.as_of}，有效收益 {result.samples} 期 · 总仓位 {pct(result.weights!.reduce((a, b) => a + b, 0))}</p>
-      <div className="overflow-x-auto"><table className="w-full text-sm text-left"><thead><tr>{['ETF', 'HRP 目标权重', '等权', '相对等权', '波动风险贡献'].map(t => <th className="p-2" key={t}>{t}</th>)}</tr></thead><tbody>{result.parameters.symbols.map((s, i) => <tr key={s}><td className="p-2">{result.names[s]} {s}</td><td>{pct(result.weights![i])}</td><td>{pct(1 / draft.symbols.length)}</td><td>{pct(result.weights![i] - 1 / draft.symbols.length)}</td><td>{pct(result.risk_contribution![i])}</td></tr>)}</tbody></table></div>
-      <Performance title="当前配置历史表现 · 样本内回看，使用全窗口计算的权重" result={result} />
-    </>}
-    <section className="space-y-3">
-      <h2 className="font-semibold">调仓回测</h2>
-      <label>调仓规则 <select aria-label="调仓规则" className={input} value={draft.rebalance ?? 'monthly'} onChange={e => update({ ...draft, rebalance: e.target.value as 'monthly' | 'daily_threshold' })}>
-        <option value="daily_threshold">每日收盘信号＋偏离阈值</option><option value="monthly">每月调仓</option>
-      </select></label>
-      <div className="flex flex-wrap gap-3">
-        <label>开始 <input className={input} type="date" value={start} onChange={e => { setStart(e.target.value); setBacktest(undefined) }} /></label>
-        <label>结束 <input className={input} type="date" value={end} onChange={e => { setEnd(e.target.value); setBacktest(undefined) }} /></label>
-        <label>单边费率 % <input className={input + ' w-24'} type="number" min="0" step=".01" value={fee} onChange={e => { setFee(Number(e.target.value)); setBacktest(undefined) }} /></label>
-        <label>滑点 % <input className={input + ' w-24'} type="number" min="0" step=".01" value={slippage} onChange={e => { setSlippage(Number(e.target.value)); setBacktest(undefined) }} /></label>
-        <button className={input} disabled={busy || !start || !end || !draft.symbols.length} onClick={() => action(async () => { setBacktest(undefined); setBacktest(await api.allocationCalculate('backtest', { ...draft, start, end, fee: fee / 100, slippage: slippage / 100 })) })}>运行回测</button>
-      </div>
-      <p className="text-xs text-muted">{draft.rebalance === 'daily_threshold' ? '前一日收盘判断，达到阈值后下一交易日开盘调仓' : '每月首个交易日开盘调仓'} · 可分割份额估算 · 单边费率 {fee}% · 滑点 {slippage}%</p>
-      {backtest && <><Performance title={backtest.parameters.rebalance === 'daily_threshold' ? '动态阈值调仓回测' : '按月调仓回测'} result={backtest} /><div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr><th>日期</th><th>模型</th><th>触发原因</th><th>换手</th><th>成本 / 初始资金</th><th>各 ETF 目标权重</th></tr></thead><tbody>{backtest.trades?.map(t => <tr key={t.model + t.date}><td>{t.date}</td><td>{t.model}</td><td>{{ initial: '首次建仓', threshold: '达到偏离阈值', monthly: '月初调仓' }[t.reason ?? 'monthly']}</td><td>{pct(t.turnover)}</td><td>{pct(t.cost)}</td><td>{backtest.parameters.symbols.map((s, i) => `${s} ${pct(t.weights[i])}`).join(' · ')}</td></tr>)}</tbody></table></div></>}
-    </section>
-    </fieldset>
   </div>
 }

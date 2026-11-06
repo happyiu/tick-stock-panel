@@ -43,7 +43,7 @@ class Portfolio(BaseModel):
     lookback: int = Field(default=252, ge=2)
     max_weight: float = Field(default=0.35, gt=0, le=1)
     auto_refresh: bool = False
-    rebalance: Literal["monthly", "daily_threshold"] = "monthly"
+    rebalance: Literal["monthly", "daily_threshold", "angel_devil"] = "monthly"
     threshold: float = Field(default=0.05, gt=0, le=1)
 
 
@@ -177,10 +177,14 @@ def prepare(body, repo, mode, basis_date=None):
         raise ValueError("交易日历不足，请同步指数历史")
     payload = {**body.model_dump(mode="json"), "mode": mode, "dates": [str(d) for d in days]}
     closes, opens, dividends, splits = [], [], [], []
+    signals = []
     issues = []
     for symbol in symbols:
         frame = repo.get_etf_daily(
-            symbol, days[0], days[-1], columns=["date", "raw_close", "open", "close"]
+            symbol,
+            date(2000, 1, 1) if mode == "backtest" else days[0],
+            days[-1],
+            columns=["date", "raw_close", "open", "close"],
         )
         rows = {r["date"]: r for r in frame.to_dicts()}
         missing = [str(d) for d in days if d not in rows]
@@ -218,6 +222,38 @@ def prepare(body, repo, mode, basis_date=None):
             temporary = coverage_path.with_suffix(".tmp")
             temporary.write_text(json.dumps(coverage))
             temporary.replace(coverage_path)
+        if mode == "backtest":
+            from app.services.watchlist_market_trends import angel_devil_signals
+
+            history_days = sorted(rows)
+            first_signal_day = next((d for d in days if d >= body.start), None)
+            if first_signal_day is None:
+                raise ValueError("所选区间内没有已闭合交易日")
+            if sum(d < first_signal_day for d in history_days) < 21:
+                raise ValueError(f"{symbol} 天使魔鬼信号至少需要 21 根预热日线")
+            # Use the same proportional event adjustment as the enriched pipeline.
+            # Future splits/dividends only rescale earlier bars uniformly.
+            scale = 1.0
+            adjusted = []
+            previous_close = None
+            for day in history_days:
+                raw = rows[day]["raw_close"]
+                if raw is None or not math.isfinite(raw) or raw <= 0:
+                    raise ValueError(f"{symbol} {day} 信号历史价格无效")
+                event = events.get(str(day))
+                if event and previous_close is not None:
+                    cash = event["dividend"]
+                    if previous_close <= cash:
+                        raise ValueError(f"{symbol} {day} 分红金额无效")
+                    scale *= previous_close * event["split"] / (previous_close - cash)
+                adjusted.append({"date": str(day), "close": raw * scale})
+                previous_close = raw
+            # Gaps inside signal history must not change the indicator's time base.
+            expected = [d for d in calendar["date"].to_list() if history_days[0] <= d <= days[-1]]
+            if set(expected) - set(history_days):
+                raise ValueError(f"{symbol} 天使魔鬼信号历史存在交易日缺口")
+            by_day = dict(zip(history_days, angel_devil_signals(adjusted), strict=True))
+            signals.append([by_day[d] for d in days])
         c, o, div, split = [], [], [], []
         for day in days:
             row = rows[day]
@@ -247,6 +283,9 @@ def prepare(body, repo, mode, basis_date=None):
         ("split", splits),
     ]:
         payload[key] = list(map(list, zip(*arrays, strict=True)))
+    if mode == "backtest":
+        payload["signals"] = list(map(list, zip(*signals, strict=True)))
+        payload["rule_version"] = "angel_devil_close_v1"
     return payload
 
 
@@ -254,6 +293,8 @@ def calculate(body, request, mode):
     try:
         if mode == "backtest" and (not body.start or not body.end or body.start > body.end):
             raise ValueError("请选择有效的回测起止日期")
+        if mode == "backtest":
+            body = body.model_copy(update={"rebalance": "angel_devil"})
         payload = prepare(body, request.app.state.repo, mode)
         signature = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
         with _lock:

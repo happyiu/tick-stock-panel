@@ -69,3 +69,14 @@ def test_open_week_and_future_thirty_minute_bar_are_excluded():
     result = trends.summarize(minute, '30m', now.date(), now)
     assert result['status'] == 'no_signal'
     assert result['data_through'] != '2026-11-06 14:30'
+
+
+def test_event_series_uses_the_same_attack_retreat_formula_and_never_carries():
+    from app.indicators.chart_formula import evaluate
+    rows = prices([100.] * 30 + [110., 112., 90., 88., 105.])
+    values = evaluate(trends._PROGRAM, rows)["rows"]
+    expected = ["retreat" if r["retreat"] else "attack" if r["attack"] else None for r in values]
+    assert trends.angel_devil_signals(rows) == expected
+    assert expected[30] == "attack" and expected[31] is None
+    assert expected[32] == "retreat"
+    assert trends.angel_devil_signals(rows[:-1]) == expected[:-1]

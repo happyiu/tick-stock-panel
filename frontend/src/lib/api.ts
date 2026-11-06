@@ -5653,7 +5653,7 @@ export interface AllocationPortfolio {
   lookback: number
   max_weight: number
   auto_refresh?: boolean
-  rebalance?: 'monthly' | 'daily_threshold'
+  rebalance?: 'monthly' | 'daily_threshold' | 'angel_devil'
   threshold?: number
 }
 export interface AllocationPerformance {
@@ -5672,7 +5672,10 @@ export interface AllocationResult {
   engine_version: string
   parameters: AllocationPortfolio
   names: Record<string, string>
-  trades?: { model: string; date: string; weights: number[]; turnover: number; cost: number; reason?: string; deviation?: number }[]
+  trades?: { model: string; date: string; weights: number[]; turnover: number; cost: number; reason?: string; deviation?: number; symbol?: string; side?: 'buy' | 'sell'; price?: number; amount?: number }[]
+  schedule?: { date: string; as_of: string; weights: number[]; signals: ('attack' | 'retreat' | null)[] }[]
+  accounts?: Record<'hrp' | 'equal', { date: string; cash: number; value: number; weights: number[]; target: number[] }[]>
+  rule_version?: string
 }
 
 

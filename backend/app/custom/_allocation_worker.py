@@ -48,7 +48,6 @@ def calculate(p):
     symbols = p["symbols"]
     dates = pd.to_datetime(p["dates"])
     close = np.asarray(p["close"])
-    opening = np.asarray(p["open"])
     dividend = np.asarray(p["dividend"])
     split = np.asarray(p["split"])
     returns = pd.DataFrame(
@@ -77,70 +76,141 @@ def calculate(p):
             "sample_start": str(dates[-window - 1].date()),
             "samples": window,
         }
+    return signal_backtest(p, dates, close, dividend, split, returns, window, cap, equal)
+
+
+def signal_backtest(p, dates, close, dividend, split, returns, window, cap, equal):
     start, end = pd.Timestamp(p["start"]), pd.Timestamp(p["end"])
-    dynamic = p.get("rebalance", "monthly") == "daily_threshold"
-    candidates = (
-        list(range(window + 1, len(dates)))
-        if dynamic
-        else [i for i in range(1, len(dates)) if dates[i].month != dates[i - 1].month]
-    )
-    eligible = [i for i in candidates if i >= window + 1]
-    if not eligible:
-        raise ValueError("历史不足，暂无满足预热窗口的月初交易日")
-    if start < dates[eligible[0]]:
-        raise ValueError(f"最早可回测日期 {dates[eligible[0]].date()}")
-    trades = [i for i in eligible if start <= dates[i] <= end]
-    if not trades:
-        raise ValueError("区间内没有月初调仓日")
-    stop = max(i for i in range(len(dates)) if dates[i] <= end)
-    paths, logs = {}, []
+    signals = np.asarray(p.get("signals", []), dtype=object)
+    if signals.shape != close.shape or any(
+        value not in (None, "attack", "retreat") for value in signals.flat
+    ):
+        raise ValueError("天使魔鬼信号缺失或无效，请重新准备日线信号")
+    formal = [i for i, day in enumerate(dates) if start <= day <= end]
+    if not formal:
+        raise ValueError("所选区间内没有已闭合交易日")
+    if formal[0] < window:
+        raise ValueError("首日资产配置历史预热不足")
+    paths, logs, schedules, accounts = {}, [], [], {}
+    targets = {}
+    for i in formal:
+        # User-selected same-close simulation: include this completed day's return.
+        target = weights(returns.iloc[i - window : i], cap)
+        targets[i] = target
+        schedules.append(
+            {
+                "date": str(dates[i].date()),
+                "as_of": str(dates[i].date()),
+                "weights": target.tolist(),
+                "signals": signals[i].tolist(),
+            }
+        )
+    rate = p["fee"] + p["slippage"]
     for model in ("hrp", "equal"):
-        shares, cash = np.zeros(len(symbols)), 1.0
-        nav, timeline = [1.0], [dates[trades[0] - 1]]
-        for i in range(trades[0], stop + 1):
-            w = None
-            drift = 0.0
-            if i in trades:
-                target = (
-                    weights(returns.iloc[i - 1 - window : i - 1], cap) if model == "hrp" else equal
-                )
-                previous_value = cash + shares @ close[i - 1]
-                drift = float(np.max(np.abs(target - shares * close[i - 1] / previous_value)))
-                if not dynamic or i == trades[0] or drift >= p.get("threshold", 0.05) - 1e-10:
-                    w = target
+        shares, cash = np.zeros(len(equal)), 1.0
+        nav, timeline = [1.0], [dates[formal[0] - 1]]
+        daily_accounts = []
+        for i in formal:
             cash += shares @ dividend[i]
             shares *= split[i]
-            if w is not None:
-                equity = cash + shares @ opening[i]
-                current = shares * opening[i]
-                cost_rate = p["fee"] + p["slippage"]
-                # Solve post-cost target value, so buys never spend unowned cash.
-                low, high = 0.0, equity
-                for _ in range(60):
-                    net = (low + high) / 2
-                    if net + np.abs(net * w - current).sum() * cost_rate > equity:
-                        high = net
+            prices = close[i]
+            target = targets[i] if model == "hrp" else equal
+            equity = float(cash + shares @ prices)
+            amounts = shares * prices
+            deviation = float(np.max(np.abs(amounts / equity - target)))
+            triggered = deviation >= p.get("threshold", 0.05) - 1e-10
+            retreat = signals[i] == "retreat"
+            attack = signals[i] == "attack"
+            reduce = triggered & (amounts > equity * target + 1e-12)
+
+            def orders(
+                net,
+                held=amounts,
+                allocation=target,
+                retreats=retreat,
+                attacks=attack,
+                reductions=reduce,
+            ):
+                sell = np.where(
+                    retreats,
+                    held,
+                    np.where(reductions, np.maximum(held - net * allocation, 0.0), 0.0),
+                )
+                buy = np.where(attacks, np.maximum(net * allocation - (held - sell), 0.0), 0.0)
+                return sell, buy
+
+            # Solve all same-close orders jointly, including fees and available cash.
+            # No untriggered sale or signal-free purchase can fund this solution.
+            low, high = 0.0, equity
+            for _ in range(60):
+                net = (low + high) / 2
+                sell, buy = orders(net)
+                costs = (sell.sum() + buy.sum()) * rate
+                if net + costs > equity or cash + sell.sum() - buy.sum() - costs < -1e-12:
+                    high = net
+                else:
+                    low = net
+            sells, buys = orders(low)
+            day_logs = []
+            for side, values in (("sell", sells), ("buy", buys)):
+                for j in np.flatnonzero(values > 1e-12):
+                    value = float(values[j])
+                    quantity = value / prices[j]
+                    if side == "sell":
+                        shares[j] = max(0.0, shares[j] - quantity)
+                        cash += value * (1 - rate)
+                        reason = "retreat" if retreat[j] else "threshold_reduce"
                     else:
-                        low = net
-                turnover = float(np.abs(low * w - current).sum() / equity)
-                shares, cash = low * w / opening[i], 0.0
+                        shares[j] += quantity
+                        cash -= value * (1 + rate)
+                        reason = "attack"
+                    day_logs.append(
+                        {
+                            "symbol": p["symbols"][j],
+                            "side": side,
+                            "reason": reason,
+                            "price": float(prices[j]),
+                            "shares": quantity,
+                            "amount": value,
+                            "cost": value * rate,
+                        }
+                    )
+            if cash < -1e-8 or (shares < -1e-10).any():
+                raise ValueError("回测资金或份额为负")
+            cash = max(0.0, cash)
+            value = float(cash + shares @ prices)
+            for trade in day_logs:
                 logs.append(
                     {
+                        **trade,
                         "model": model,
                         "date": str(dates[i].date()),
-                        "weights": w.tolist(),
-                        "turnover": turnover,
-                        "cost": equity - low,
-                        "reason": "initial"
-                        if i == trades[0]
-                        else ("threshold" if dynamic else "monthly"),
-                        "deviation": drift,
+                        "weights": target.tolist(),
+                        "turnover": trade["amount"] / equity,
+                        "deviation": deviation,
                     }
                 )
-            nav.append(float(cash + shares @ close[i]))
+            nav.append(value)
             timeline.append(dates[i])
+            daily_accounts.append(
+                {
+                    "date": str(dates[i].date()),
+                    "cash": cash,
+                    "value": value,
+                    "weights": (shares * prices / value).tolist(),
+                    "target": target.tolist(),
+                }
+            )
         paths[model] = performance(nav, timeline)
-    return {"history": paths, "trades": logs, "samples": window}
+        accounts[model] = daily_accounts
+    return {
+        "history": paths,
+        "trades": logs,
+        "samples": window,
+        "schedule": schedules,
+        "accounts": accounts,
+        "rule_version": "angel_devil_close_v1",
+    }
 
 
 if __name__ == "__main__":

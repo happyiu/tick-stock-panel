@@ -20,6 +20,16 @@ logger = logging.getLogger(__name__)
 _PROGRAM = compile_formula('angel:=EMA(CLOSE,2); devil:=EMA(CLOSE+20*SLOPE(CLOSE,21),42); attack:CROSS(angel,devil); retreat:CROSS(devil,angel);')
 
 
+
+def angel_devil_signals(rows):
+    """Daily crossover events only; never carry a previous attack into later bars."""
+    values = evaluate(_PROGRAM, rows)["rows"] if rows else []
+    return [
+        "retreat" if row["retreat"] else "attack" if row["attack"] else None
+        for row in values
+    ]
+
+
 def empty_summary(status='empty'):
     return dict(status=status, signal=None, date=None, change_percent=None, bars=None, data_through=None)
 
