@@ -76,7 +76,7 @@
 | Scope | 允许 | 默认签发 |
 |---|---|---|
 | `read:market` | 行情/指数/标的搜索/分时/日K 读取 | ✅ 新 Token 默认 |
-| `read:watchlist` | 共享自选列表与自选行情增强读取 | ❌ 显式勾选 |
+| `read:watchlist` | 共享自选列表、行情增强与多周期 Angel/Devil 摘要读取 | ❌ 显式勾选 |
 | `write:watchlist` | 单标的添加与删除，影响共享列表；不含清空、导入、分组 | ❌ 显式勾选 |
 | `read:analysis` | 策略列表与运行结果、回测报告与候选、市场环境、监控事件读取 | ❌ 显式勾选 |
 | `read:ext` | 扩展数据 rows/values/schema 读取 | ❌ 显式勾选 |
@@ -158,7 +158,7 @@
 
 ### 契约更新记录（2026-11-06）
 
-Tier A 快照补齐 `GET /api/kline/period`、ETF雷达读取与任务状态，以及已由网关精确开放的 `GET /api/watchlist`、`GET /api/watchlist/enriched`、`POST /api/watchlist`。ETF雷达读取需要 `read:market`；自选读取、写入分别需要 `read:watchlist`、`write:watchlist`。
+Tier A 快照补齐 `GET /api/kline/period`、ETF雷达读取与任务状态，以及已由网关精确开放的 `GET /api/watchlist`、`GET /api/watchlist/enriched`、`POST /api/watchlist`、`POST /api/watchlist/market-trends`。ETF雷达读取需要 `read:market`；自选读取和多周期摘要需要 `read:watchlist`，写入需要 `write:watchlist`。
 
 ### 5.7 通用约定
 
@@ -199,6 +199,6 @@ Tier A 快照补齐 `GET /api/kline/period`、ETF雷达读取与任务状态，�
 
 ### 缠境服务接入补充
 
-`GET /api/kline/period` 使用 `read:market`。共享自选仅开放精确路径 `GET /api/watchlist`、`GET /api/watchlist/enriched`（`read:watchlist`）、`POST /api/watchlist` 及 `DELETE /api/watchlist/{六位代码.SH|SZ|BJ}`（`write:watchlist`）。不允许以路径前缀放行自选管理接口；`DELETE /api/watchlist` 清空仍不开放。
+`GET /api/kline/period` 使用 `read:market`。共享自选仅开放精确路径 `GET /api/watchlist`、`GET /api/watchlist/enriched`、`POST /api/watchlist/market-trends`（`read:watchlist`）、`POST /api/watchlist` 及 `DELETE /api/watchlist/{六位代码.SH|SZ|BJ}`（`write:watchlist`）。不允许以路径前缀放行自选管理接口；`DELETE /api/watchlist` 清空仍不开放。
 
 HStudioService 使用独立 Token 调用，App JWT 不转交此服务。已有 Token 的权限不会因新增 scope 自动扩大。

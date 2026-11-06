@@ -93,6 +93,7 @@ def required_scope(method: str, path: str) -> str | None:
         ("GET", "/api/kline/period"): "read:market",
         ("GET", "/api/watchlist"): "read:watchlist",
         ("GET", "/api/watchlist/enriched"): "read:watchlist",
+        ("POST", "/api/watchlist/market-trends"): "read:watchlist",
         ("POST", "/api/watchlist"): "write:watchlist",
     }
     if (method, path) in exact:

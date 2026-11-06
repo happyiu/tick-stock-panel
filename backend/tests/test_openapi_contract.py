@@ -87,6 +87,7 @@ EXPECTED_OPEN_ENDPOINTS: set[str] = {
     "GET /api/watchlist",
     "GET /api/watchlist/enriched",
     "POST /api/watchlist",
+    "POST /api/watchlist/market-trends",
 }
 
 
