@@ -3599,6 +3599,14 @@ export const api = {
   etfRadar: (date = '') => request<EtfRadarResponse>(`/api/kline/etf-pool/radar${date ? `?date=${encodeURIComponent(date)}` : ''}`),
   etfRadarScan: (date = '', force = false) => request<{ job_id: string; date?: string }>(`/api/kline/etf-pool/radar/scan?force=${force}${date ? `&date=${encodeURIComponent(date)}` : ''}`, { method: 'POST' }),
   etfRadarJob: (id: string) => request<{ status: string; error?: string; log: { msg: string }[] }>(`/api/kline/etf-pool/radar/jobs/${encodeURIComponent(id)}`),
+  allocationTracking: () => request<Record<string, AllocationTracking>>('/api/asset-allocation/tracking'),
+  allocationRefresh: (id: string) => request<AllocationTracking>(`/api/asset-allocation/portfolios/${id}/refresh`, { method: 'POST' }),
+  allocationConfirm: (id: string, checkedAt: string) => request<AllocationTracking>(`/api/asset-allocation/portfolios/${id}/confirm`, { method: 'POST', body: JSON.stringify({ checked_at: checkedAt }) }),
+  allocationPortfolios: () => request<Record<string, AllocationPortfolio>>('/api/asset-allocation/portfolios'),
+  allocationSave: (id: string, body: AllocationPortfolio) => request<Record<string, AllocationPortfolio>>(`/api/asset-allocation/portfolios/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  allocationDelete: (id: string) => request<Record<string, AllocationPortfolio>>(`/api/asset-allocation/portfolios/${id}`, { method: 'DELETE' }),
+  allocationCalculate: (mode: 'optimize' | 'backtest', body: AllocationPortfolio & { start?: string; end?: string; fee?: number; slippage?: number }) =>
+    request<AllocationResult>(`/api/asset-allocation/${mode}`, { method: 'POST', body: JSON.stringify(body) }),
   etfPool: (params: EtfPoolParams) => {
     const query = new URLSearchParams({ page: String(params.page), page_size: String(params.pageSize) })
     if (params.q) query.set('q', params.q)
@@ -5636,4 +5644,45 @@ export interface AnalysisMenu {
   created_at?: string | null
   updated_at?: string | null
   builtin?: boolean
+}
+
+
+export interface AllocationPortfolio {
+  name: string
+  symbols: string[]
+  lookback: number
+  max_weight: number
+  auto_refresh?: boolean
+  rebalance?: 'monthly' | 'daily_threshold'
+  threshold?: number
+}
+export interface AllocationPerformance {
+  return: number
+  drawdown: number
+  points: { date: string; value: number }[]
+}
+export interface AllocationResult {
+  weights?: number[]
+  risk_contribution?: number[]
+  history: { hrp: AllocationPerformance; equal: AllocationPerformance }
+  sample_start?: string
+  samples: number
+  as_of: string
+  data_version: string
+  engine_version: string
+  parameters: AllocationPortfolio
+  names: Record<string, string>
+  trades?: { model: string; date: string; weights: number[]; turnover: number; cost: number; reason?: string; deviation?: number }[]
+}
+
+
+export interface AllocationTracking {
+  status: 'initial' | 'rebalance' | 'hold' | 'error'
+  as_of?: string
+  checked_at: string
+  target?: number[]
+  current?: number[]
+  deviation?: number
+  error?: string
+  config: unknown[]
 }

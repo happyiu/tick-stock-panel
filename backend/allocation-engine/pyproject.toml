@@ -1,0 +1,5 @@
+[project]
+name = "allocation-engine"
+version = "1.0.0"
+requires-python = ">=3.11,<3.14"
+dependencies = ["riskfolio-lib==7.4.1"]

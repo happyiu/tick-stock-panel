@@ -117,6 +117,10 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
     done; \
     uv sync --frozen "$@" || uv sync "$@"
 
+# Isolate the allocation engine from the application's backtest dependencies.
+COPY backend/allocation-engine /app/allocation-engine
+RUN uv sync --project /app/allocation-engine --frozen --no-dev
+ENV ALLOCATION_PYTHON=/app/allocation-engine/.venv/bin/python
 # Backend code
 # 注意:Docker 里 WORKDIR=/app, 而 config.py 的 _PROJECT_ROOT 是按开发布局
 # (<root>/backend/app/) 推导的, 容器内会错算到 /。这里用环境变量显式指定
@@ -124,6 +128,8 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
 COPY backend/app ./app
 # Fail the build if the pinned CZSC wheel/native runtime cannot load.
 RUN /app/.venv/bin/python -c "from app.services.chanlun import _load_engine; _load_engine()"
+# Exercise the exact JSON-lines worker used at runtime.
+RUN printf '%s\n' '{"symbols":["A","B"],"dates":["2026-01-01","2026-01-02","2026-01-03","2026-01-04"],"close":[[1,1],[1.1,1.2],[1.05,1.15],[1.2,1.18]],"open":[[1,1],[1.1,1.2],[1.05,1.15],[1.2,1.18]],"dividend":[[0,0],[0,0],[0,0],[0,0]],"split":[[1,1],[1,1],[1,1],[1,1]],"lookback":3,"max_weight":0.6,"mode":"optimize"}' | /app/allocation-engine/.venv/bin/python /app/app/custom/_allocation_worker.py | /app/.venv/bin/python -c 'import json,sys; w=json.load(sys.stdin)["result"]["weights"]; assert len(w)==2 and abs(sum(w)-1)<1e-6 and max(w)<=0.600001'
 # a-stock-data 仅安装 mootdx.quotes 实际使用的 Python 包；--no-deps 避免
 # 上游旧版 httpx/py-mini-racer 声明与当前项目及 ARM 镜像冲突。
 RUN uv pip install --no-deps --python /app/.venv/bin/python \

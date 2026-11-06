@@ -410,3 +410,48 @@ python3 scripts/upgrade_check.py <目标Tag或分支>
 5. 需要升级直接修改源码的分支时，使用 `scripts/upgrade_check.py` 预检，再执行真实合并和回归。
 
 这种顺序遵循 KISS 和 YAGNI：先解决已经存在的升级冲突，不提前建设完整插件平台，也不阻止开发者在必要时直接修改源码。
+
+### 资产配置扩展
+
+资产配置扩展使用独立 Riskfolio-Lib 7.4.1 环境。开发环境先执行
+`uv sync --project backend/allocation-engine --frozen`，再按原方式启动应用。
+Docker 构建会安装同一锁定环境，并运行一次 JSON-lines 求解验收。
+`ALLOCATION_PYTHON` 可以指定引擎解释器，默认是后端目录下的独立环境。
+计算超时为 120 秒，子进程串行复用，退出应用时回收。
+
+ETF 原始行情由仓库读取；事件源通过 provider 的
+`get_etf_actions(symbol) -> list[dict]` 提供，记录包含 ISO 日期
+`date`、每份旧份额对应的新份额 `split` 和每份旧份额现金 `dividend`。
+请求失败必须抛异常；空列表只表示成功查询且无事件。
+首个实现为 astockdata 的新浪完整 hfq 序列，使用 s/u 仿射字段，
+仅 f 字段无法识别 ETF 分红拆分。
+`ALLOCATION_ACTION_PROVIDER` 默认 astockdata，源不支持此方法时拒绝计算。
+事件成功覆盖记录保存在 `user_data/asset_allocation_coverage.json`，
+事件内存缓存 5 分钟，价格和事件内容进入计算结果版本。
+组合定义保存在 `user_data/asset_allocation.json`，与 data 目录一起备份。
+不会在全市场范围自动覆盖既有 ETF 日线。
+
+历史表现为全窗口权重的样本内回看、分红在标的内再投；
+按月回测为上一交易日数据生成目标权重，月初开盘调仓，
+原持有人先取得分红权益，现金留到调仓使用。
+收益对比采用相同日期和成本，按可分割份额估算。
+
+资产配置动态跟踪支持每日收盘重算。已保存组合新增
+`auto_refresh`、`threshold` 和 `rebalance` 字段，
+旧组合缺字段时采用关闭自动刷新、5 个百分点阈值、月度回测。
+新建页面默认每日阈值规则，自动刷新需要保存后生效。
+后台在北京时间工作日 16 点后每 15 分钟尝试刷新，
+必须有当天完整数据才发布新建议，缺数据或源失败保留历史记录并标记错误。
+该调度不会代替行情同步。
+
+`GET /api/asset-allocation/tracking` 返回检查时间、行情日期、目标和偏离。
+`POST /portfolios/{id}/refresh` 可手动重算；
+`POST /portfolios/{id}/confirm` 接受 `checked_at`，确认所见建议为模拟跟踪基准，
+并发更新后的旧确认返回 409。基准及状态独立持久化，
+后续重算不会自动覆盖确认基准，持仓按价格、现金分红和拆分漂移。
+参数变化要求重新计算，ETF 列表、窗口、上限或阈值变化会重建基准。
+
+动态回测 `rebalance=daily_threshold` 每天用截至前一交易日的收益计算目标，
+比较前收盘模拟持仓，任意单资产绝对偏离达到 `threshold` 后在次日开盘调仓。
+HRP 与等权分别按相同阈值判断，记录首次建仓/阈值触发原因，
+成本依实际成交量扣减。

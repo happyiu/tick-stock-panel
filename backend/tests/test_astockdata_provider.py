@@ -49,8 +49,8 @@ def test_market_routing_rejects_mismatched_bse_suffix():
 def test_factor_transport_failure_is_not_an_empty_event_list(monkeypatch):
     def fail(*args):
         raise RuntimeError("offline")
-    monkeypatch.setattr(ap, "_sina_factors", fail)
-    with pytest.raises(RuntimeError, match="除权因子获取失败"):
+    monkeypatch.setattr(ap, "etf_corporate_actions", fail)
+    with pytest.raises(RuntimeError, match="offline"):
         AStockDataProvider().get_adj_factors(["510300.SH"], None, None, asset_type="etf")
 
 

@@ -13,6 +13,9 @@ const indicatorQuerySuffix = (value?: ChartIndicatorRequest) => value?.ids.lengt
 // ===== Query Key 工厂 =====
 
 export const QK = {
+  allocationTracking: ['allocation-tracking'] as const,
+  allocationPortfolios: ['allocation-portfolios'] as const,
+
   trendPatterns: (symbol: string, asset: string, period: string, asOf: string | null, rows: unknown) => ['trend-patterns', 'trend-pattern-v2', symbol, asset, period, asOf, rows] as const,
   patternCatalog: ['pattern-catalog', 'trend-pattern-v2'] as const,
   wave: (symbol: string, asset: string, asOf: string, revision: number) => ['wave', 'wave-v3-alpha-0.14.3-r1-comparison-v2', symbol, asset, asOf, revision] as const,

@@ -9,6 +9,9 @@ _PROVIDERS = {
 
 
 def get_provider(name: str = "tickflow"):
+    if name == "astockdata":
+        from app.plugins.astockdata.provider import AStockDataProvider
+        return AStockDataProvider()
     provider_cls = _PROVIDERS.get((name or "tickflow").lower())
     if provider_cls is None:
         raise ValueError(f"Unsupported data provider: {name}")

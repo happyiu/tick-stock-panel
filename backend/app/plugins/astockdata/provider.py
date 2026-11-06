@@ -723,6 +723,10 @@ class AStockDataProvider:
     """a-stock-data 行情层的标准 Provider。"""
 
     name = "astockdata"
+
+    def get_etf_actions(self, symbol: str) -> list[dict]:
+        return etf_corporate_actions(symbol)
+
     upstream_version = UPSTREAM_VERSION
     upstream_commit = UPSTREAM_COMMIT
     capabilities = ProviderCapabilities(
@@ -821,6 +825,27 @@ class AStockDataProvider:
         end_date = _date_value(end_time)
         if start_date and end_date and start_date > end_date:
             return pl.DataFrame()
+        if asset_type == "etf":
+            records = []
+            for symbol in symbols:
+                for event in etf_corporate_actions(symbol):
+                    day = date.fromisoformat(event["date"])
+                    if (start_date and day < start_date) or (end_date and day > end_date):
+                        continue
+                    history = self.get_daily([symbol], datetime.combine(day-timedelta(days=40), dt_time.min),
+                                             datetime.combine(day-timedelta(days=1), dt_time.max),
+                                             asset_type="etf")
+                    if history.is_empty():
+                        raise RuntimeError(f"{symbol} {day} 缺少除权前收盘价")
+                    previous = history.sort("date")["close"][-1]
+                    cash = event["dividend"]
+                    if previous <= cash:
+                        raise RuntimeError(f"{symbol} {day} 无效的除权金额")
+                    records.append({"symbol": symbol, "trade_date": day,
+                                    "ex_factor": previous*event["split"]/(previous-cash),
+                                    "dividend": cash, "bonus": event["split"]-1,
+                                    "prev_close": previous})
+            return normalize_adj_factors(records, source=self.name) if records else pl.DataFrame()
         rows: list[dict] = []
         chunks = chunked(symbols, _BATCH)
         for index, current in enumerate(chunks):
@@ -998,3 +1023,35 @@ def _preview(dataset: str, frame: pl.DataFrame) -> dict:
         "columns": frame.columns,
         "preview": frame.head(5).to_dicts() if not frame.is_empty() else [],
     }
+
+
+def etf_corporate_actions(symbol: str) -> list[dict]:
+    """Normalize Sina ETF affine adjustment into per-old-share cash and share ratios.
+
+    s*price+u is the continuous post-adjustment price. Full history is required
+    to establish the preceding s/u baseline even for a bounded query.
+    """
+    code, market, _ = _symbol_parts(symbol)
+    response = _http_get(f"https://finance.sina.com.cn/realstock/company/{market}{code}/hfq.js",
+                         headers={"User-Agent": _UA}, timeout=10)
+    response.raise_for_status()
+    text = response.text
+    data, _ = json.JSONDecoder().raw_decode(text[text.index("{"):])
+    rows = data.get("data")
+    if not rows:
+        raise ValueError(f"{symbol} 事件覆盖无法确认")
+    ordered = sorted(rows, key=lambda r: r["d"])
+    if ordered[0]["d"] != "1900-01-01":
+        raise ValueError(f"{symbol} 事件历史缺少初始基准，覆盖无法确认")
+    previous_s, previous_u = None, None
+    events = []
+    for row in ordered:
+        share, cash = float(row["s"]), float(row["u"])
+        if not math.isfinite(share+cash) or share <= 0:
+            raise ValueError(f"{symbol} 事件数据无效")
+        if previous_s is not None:
+            ratio, dividend = share/previous_s, (cash-previous_u)/previous_s
+            if ratio != 1 or abs(dividend) > 1e-10:
+                events.append({"date": row["d"], "split": ratio, "dividend": dividend})
+        previous_s, previous_u = share, cash
+    return events
