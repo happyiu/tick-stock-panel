@@ -13,14 +13,6 @@ const indicatorQuerySuffix = (value?: ChartIndicatorRequest) => value?.ids.lengt
 // ===== Query Key 工厂 =====
 
 export const QK = {
-  rotationStrategies: ['etf-rotation', 'strategies'] as const,
-  rotationConfigs: ['etf-rotation', 'configs'] as const,
-  rotationJobs: ['etf-rotation', 'jobs'] as const,
-  rotationResult: (id: string) => ['etf-rotation', 'result', id] as const,
-  rotationSearch: (q: string) => ['etf-rotation', 'search', q] as const,
-  rotationNames: (symbols: string[]) => ['etf-rotation', 'names', ...symbols] as const,
-  rotationPreview: (config: unknown, id: string) => ['etf-rotation', 'preview', config, id] as const,
-
   trendPatterns: (symbol: string, asset: string, period: string, asOf: string | null, rows: unknown) => ['trend-patterns', 'trend-pattern-v2', symbol, asset, period, asOf, rows] as const,
   patternCatalog: ['pattern-catalog', 'trend-pattern-v2'] as const,
   wave: (symbol: string, asset: string, asOf: string, revision: number) => ['wave', 'wave-v3-alpha-0.14.3-r1-comparison-v2', symbol, asset, asOf, revision] as const,
@@ -49,6 +41,7 @@ export const QK = {
   watchlist:            ['watchlist'] as const,
   watchlistGroups:      ['watchlist-groups'] as const,
   watchlistQuotes:      ['watchlist-quotes'] as const,
+  watchlistMarketTrends: (asset: string, symbols: string) => ['watchlist-market-trends', asset, symbols] as const,
   watchlistEnriched:    (ext?: string) => ['watchlist-enriched', ext] as const,
   // 异动边缘总览 (开启监控时才查询, 参数为 min_closeness/limit)
   abnormalOverview:     (minCloseness: number, limit: number) => ['abnormal-overview', minCloseness, limit] as const,

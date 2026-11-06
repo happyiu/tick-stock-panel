@@ -5,15 +5,15 @@ import logging
 import math
 import time
 from datetime import UTC, date, datetime
-from typing import Callable
+from typing import Callable, Literal
 
 import anyio
 import polars as pl
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.db_safe import is_valid_ext_ident, quote_ident
-from app.market_time import CN_TZ
+from app.market_time import CN_TZ, cn_now
 from app.price_limits import (
     polars_is_risk_warning_name,
     polars_limit_price,
@@ -459,6 +459,25 @@ def _added_base_closes(
         .group_by("symbol")
         .agg(pl.col("close").sort_by(pl.col("date")).last().alias("base_close"))
     )
+
+
+class MarketTrendsRequest(BaseModel):
+    symbols: list[str] = Field(min_length=1, max_length=200)
+    asset_type: Literal['stock', 'etf', 'index']
+
+
+@router.post('/market-trends')
+def watchlist_market_trends(body: MarketTrendsRequest, request: Request):
+    from app.services.watchlist_market_trends import symbol_trends
+
+    allowed = {entry['symbol'] for entry in watchlist.list_symbols()}
+    now = cn_now()
+    rows = []
+    for symbol in dict.fromkeys(body.symbols):
+        if symbol not in allowed or request.app.state.repo.resolve_asset_type(symbol) != body.asset_type:
+            continue
+        rows.append({'symbol': symbol, 'periods': symbol_trends(request.app.state, symbol, body.asset_type, now)})
+    return {'rows': rows, 'as_of': now.isoformat()}
 
 
 @router.get("/enriched")

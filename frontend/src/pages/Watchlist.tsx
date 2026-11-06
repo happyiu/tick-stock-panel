@@ -12,6 +12,7 @@ import { fmtAssetPrice, fmtPrice, fmtPct, fmtBigNum, priceColorClass, formatExtN
 import { cn } from '@/lib/cn'
 import { computeGroupPcts, loadGroupStatsConfig, type GroupStatsConfigPatch } from '@/lib/watchlistGroupStats'
 import { PageHeader } from '@/components/PageHeader'
+import { MarketTrendSignal } from '@/components/MarketTrendSignal'
 import { EmptyState } from '@/components/EmptyState'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { toNavItems, type NavItem } from '@/lib/listNav'
@@ -489,6 +490,7 @@ const StockCard = React.memo(function StockCard({
   onRequestRemove,
   isConfirming,
   extCols,
+  trendCols,
   expandedCells,
   onToggleExpand,
   onDimensionClick,
@@ -504,6 +506,7 @@ const StockCard = React.memo(function StockCard({
   onCancelRemove: () => void
   onRequestRemove: (symbol: string) => void
   isConfirming: boolean
+  trendCols: ColumnConfig[]
   extCols: ColumnConfig[]
   expandedCells: Set<string>
   onToggleExpand: (key: string) => void
@@ -662,6 +665,13 @@ const StockCard = React.memo(function StockCard({
             <span title="换手率">换手 <span className={`ml-1 font-mono ${turnoverColor(turnover)}`}>{turnover != null ? `${turnover.toFixed(2)}%` : '—'}</span></span>
           )}
         </span>
+        {trendCols.length > 0 && <div className="flex w-full basis-full flex-wrap items-start gap-y-2 border-t border-border/50 pt-2">
+        {trendCols.map(col => col.source.type === 'builtin' && (
+          <div key={col.id} className="shrink-0 border-l border-border px-3 first:border-l-0 first:pl-0">
+            <MarketTrendSignal compact summary={r[col.source.key]} period={col.source.key.slice(13)} loading={r.market_trend_loading} error={r.market_trend_error} />
+          </div>
+        ))}
+        </div>}
         {/* 扩展数据列展示在卡片中 */}
         {extCols.some(col => col.source.type === 'ext' && r[`${col.source.configId}__${col.source.fieldName}`] != null) && (
           <>
@@ -889,6 +899,15 @@ export function Watchlist({ assetType }: { assetType: WatchlistScope }) {
     ?.filter((r: any) => resolveWatchlistAssetType(r.asset_type) === assetType)
     .map((r: any) => r.symbol) ?? []
   const symbolsKey = symbols.join(',')
+  const trendCols = assetVisibleColumns.filter(col => col.source.type === 'builtin' && col.source.key.startsWith('market_trend_'))
+  const marketTrends = useQuery({
+    queryKey: QK.watchlistMarketTrends(assetType, symbolsKey),
+    queryFn: () => api.watchlistMarketTrends(symbols, assetType),
+    enabled: trendCols.length > 0 && symbols.length > 0,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  })
+  const trendsBySymbol = useMemo(() => new Map(marketTrends.data?.rows.map(row => [row.symbol, row.periods]) ?? []), [marketTrends.data])
 
   // 指数无本地分钟K数据, 分时批量请求剔除指数 symbol (省请求, 避免逐只 404)
   const minuteSymbols = useMemo(
@@ -1139,8 +1158,14 @@ export function Watchlist({ assetType }: { assetType: WatchlistScope }) {
     [listEntries],
   )
   const rowsWithGroup = useMemo(
-    () => rows.map(row => ({ ...row, group_ids: groupBySymbol.get(row.symbol) ?? [] })),
-    [groupBySymbol, rows],
+    () => rows.map(row => ({ ...row, group_ids: groupBySymbol.get(row.symbol) ?? [],
+      market_trend_1w: trendsBySymbol.get(row.symbol)?.['1w'],
+      market_trend_1d: trendsBySymbol.get(row.symbol)?.['1d'],
+      market_trend_30m: trendsBySymbol.get(row.symbol)?.['30m'],
+      market_trend_loading: marketTrends.isFetching,
+      market_trend_error: marketTrends.isError,
+    })),
+    [groupBySymbol, rows, trendsBySymbol, marketTrends.isFetching, marketTrends.isError],
   )
   const assetScopedRows = useMemo(
     () => rowsWithGroup.filter(row => resolveWatchlistAssetType(row.asset_type) === assetType),
@@ -1414,6 +1439,7 @@ export function Watchlist({ assetType }: { assetType: WatchlistScope }) {
       onCancelRemove={handleCardCancelRemove}
       onRequestRemove={handleCardRequestRemove}
       isConfirming={confirmRemove === r.symbol}
+      trendCols={trendCols}
       extCols={visibleExtCols}
       expandedCells={expandedCells}
       onToggleExpand={handleToggleExpand}
@@ -1551,7 +1577,7 @@ export function Watchlist({ assetType }: { assetType: WatchlistScope }) {
               <Settings2 className="h-4 w-4" />
             </button>
             <button
-              onClick={() => enriched.refetch()}
+              onClick={() => { void enriched.refetch(); if (trendCols.length && symbols.length) void marketTrends.refetch() }}
               disabled={enriched.isFetching}
               className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150 ease-smooth disabled:opacity-50"
               title="刷新"
@@ -1815,6 +1841,9 @@ export function Watchlist({ assetType }: { assetType: WatchlistScope }) {
                   return renderExtCell(r, col, expandedCells, handleToggleExpand, setDimensionTarget)
                 }
                 const key = col.source.key
+                if (key.startsWith('market_trend_')) {
+                  return <td className="min-w-[126px] px-2 py-2"><MarketTrendSignal summary={r[key]} period={key.slice(13)} loading={r.market_trend_loading} error={r.market_trend_error} /></td>
+                }
                 const price = r.rt_price ?? r.close
                 const pct = r.rt_pct ?? r.change_pct
                 const name = r.rt_name ?? r.name

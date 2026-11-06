@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime
+
 import polars as pl
 
 from app.indicators.pipeline import compute_indicators
@@ -141,3 +143,52 @@ def aggregate_minute_30m(df: pl.DataFrame) -> pl.DataFrame:
         .sort(["symbol", "date"])
     )
     return _with_chart_indicators(aggregated)
+
+
+def annotate_bar_closure(rows: list[dict], period: str, requested_end: date, *, now: datetime) -> list[dict]:
+    """Attach an explicit close-state contract without changing stored market data."""
+    today = now.date()
+    result: list[dict] = []
+    for index, raw in enumerate(rows):
+        row = dict(raw)
+        raw_date = row.get("date")
+        text = raw_date.isoformat() if hasattr(raw_date, "isoformat") else str(raw_date or "")
+        row.setdefault("period_start", row.get("period_start") or raw_date)
+        row.setdefault("period_end", row.get("period_end") or raw_date)
+        if period == "30m":
+            # The visible label is the scheduled bucket end; raw sources may carry the first/last tick.
+            row["period_end"] = text.replace("T", " ")[:16]
+        is_last = index == len(rows) - 1
+        closed = not is_last
+        try:
+            if period == "30m":
+                scheduled = datetime.fromisoformat(text.replace("T", " "))
+                closed = scheduled <= now.replace(tzinfo=None)
+            elif period == "1d":
+                bar_date = date.fromisoformat(text[:10])
+                closed = bar_date < today or (bar_date == today and now.hour >= 15)
+            else:
+                bar_end = row.get("period_end")
+                end_date = bar_end if isinstance(bar_end, date) else date.fromisoformat(str(bar_end)[:10])
+                if period == "1w":
+                    end_bucket = end_date.isocalendar()[:2]
+                    request_bucket = requested_end.isocalendar()[:2]
+                    closed = not is_last or request_bucket > end_bucket or (
+                        request_bucket == end_bucket and requested_end.weekday() >= 5
+                    ) or (
+                        request_bucket == end_bucket
+                        and requested_end.weekday() == 4
+                        and end_date == requested_end
+                        and (end_date < today or now.hour >= 15)
+                    )
+                else:
+                    end_bucket = (end_date.year, end_date.month)
+                    request_bucket = (requested_end.year, requested_end.month)
+                    closed = not is_last or request_bucket > end_bucket
+                if end_date == today and now.hour < 15:
+                    closed = False
+        except (TypeError, ValueError):
+            closed = False
+        row["is_closed"] = closed
+        result.append(row)
+    return result

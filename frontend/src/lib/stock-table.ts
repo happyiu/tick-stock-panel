@@ -113,6 +113,9 @@ export function getSortValue(r: any, col: ColumnConfig): any {
     // useTableSort 会先试 Number(''), 空串会被当成 0 排到最前。
     case 'added_at':      return r.added_at ? cnDateTimeFromUtc(r.added_at) : null
     case 'pct_since_added': return r.pct_since_added
+    case 'market_trend_1w':
+    case 'market_trend_1d':
+    case 'market_trend_30m': return r[key]?.signal === 'attack' ? 1 : r[key]?.signal === 'retreat' ? 0 : null
     case 'score':         return r.score
     default: return null
   }

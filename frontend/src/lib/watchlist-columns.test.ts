@@ -95,3 +95,11 @@ describe('watchlist columns: 自选加入信息列', () => {
     expect(merged.map(c => c.id).slice(-2)).toEqual(['builtin:added_at', 'builtin:pct_since_added'])
   })
 })
+
+it('adds visible market trend columns while retaining saved visibility', () => {
+  const keys = ['market_trend_1w', 'market_trend_1d', 'market_trend_30m']
+  const merged = mergeColumns([], BUILTIN_COLUMNS)
+  for (const key of keys) expect(merged.find(col => col.id === `builtin:${key}`)?.visible).toBe(true)
+  const saved = merged.map(col => col.id === 'builtin:market_trend_1d' ? { ...col, visible: false } : col)
+  expect(mergeColumns(saved, BUILTIN_COLUMNS).find(col => col.id === 'builtin:market_trend_1d')?.visible).toBe(false)
+})

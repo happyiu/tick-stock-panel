@@ -21,7 +21,7 @@ from app.price_limits import is_no_limit_day, is_risk_warning_name, parse_listin
 from app.services import kline_sync, trading_day
 from app.services import minute_adjust
 from app.services.etf_pool import EtfCategory, list_etfs
-from app.services.kline_periods import aggregate_daily_period, aggregate_minute_30m
+from app.services.kline_periods import aggregate_daily_period, aggregate_minute_30m, annotate_bar_closure
 from app.services.technical_scoring import (
     TECHNICAL_SCORE_COLUMNS,
     TECHNICAL_SCORE_INTERNAL_COLUMNS,
@@ -115,53 +115,7 @@ def _with_chanlun(payload: dict, enabled: bool, source: str, as_of: str | None, 
 
 
 def _annotate_bar_closure(rows: list[dict], period: str, requested_end: date) -> list[dict]:
-    """Attach an explicit close-state contract without changing stored market data."""
-    now = cn_now()
-    today = now.date()
-    result: list[dict] = []
-    for index, raw in enumerate(rows):
-        row = dict(raw)
-        raw_date = row.get("date")
-        text = raw_date.isoformat() if hasattr(raw_date, "isoformat") else str(raw_date or "")
-        row.setdefault("period_start", row.get("period_start") or raw_date)
-        row.setdefault("period_end", row.get("period_end") or raw_date)
-        if period == "30m":
-            # The visible label is the scheduled bucket end; raw sources may carry the first/last tick.
-            row["period_end"] = text.replace("T", " ")[:16]
-        is_last = index == len(rows) - 1
-        closed = not is_last
-        try:
-            if period == "30m":
-                scheduled = datetime.fromisoformat(text.replace("T", " "))
-                closed = scheduled <= now.replace(tzinfo=None)
-            elif period == "1d":
-                bar_date = date.fromisoformat(text[:10])
-                closed = bar_date < today or (bar_date == today and now.hour >= 15)
-            else:
-                bar_end = row.get("period_end")
-                end_date = bar_end if isinstance(bar_end, date) else date.fromisoformat(str(bar_end)[:10])
-                if period == "1w":
-                    end_bucket = end_date.isocalendar()[:2]
-                    request_bucket = requested_end.isocalendar()[:2]
-                    closed = not is_last or request_bucket > end_bucket or (
-                        request_bucket == end_bucket and requested_end.weekday() >= 5
-                    ) or (
-                        request_bucket == end_bucket
-                        and requested_end.weekday() == 4
-                        and end_date == requested_end
-                        and (end_date < today or now.hour >= 15)
-                    )
-                else:
-                    end_bucket = (end_date.year, end_date.month)
-                    request_bucket = (requested_end.year, requested_end.month)
-                    closed = not is_last or request_bucket > end_bucket
-                if end_date == today and now.hour < 15:
-                    closed = False
-        except (TypeError, ValueError):
-            closed = False
-        row["is_closed"] = closed
-        result.append(row)
-    return result
+    return annotate_bar_closure(rows, period, requested_end, now=cn_now())
 
 
 def _json_safe(obj):

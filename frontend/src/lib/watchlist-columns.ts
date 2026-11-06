@@ -79,6 +79,9 @@ export const BUILTIN_COLUMNS: ColumnConfig[] = [
   { id: 'builtin:signals', source: { type: 'builtin', key: 'signals' }, label: '信号', visible: true, align: 'center' },
   { id: 'builtin:candle', source: { type: 'builtin', key: 'candle' }, label: '日k', visible: false, align: 'center' },
   { id: 'builtin:intraday', source: { type: 'builtin', key: 'intraday' }, label: '分时', visible: false, align: 'center' },
+  { id: 'builtin:market_trend_1w', source: { type: 'builtin', key: 'market_trend_1w' }, label: '周线趋势', visible: true, align: 'center' },
+  { id: 'builtin:market_trend_1d', source: { type: 'builtin', key: 'market_trend_1d' }, label: '日线趋势', visible: true, align: 'center' },
+  { id: 'builtin:market_trend_30m', source: { type: 'builtin', key: 'market_trend_30m' }, label: '30F趋势', visible: true, align: 'center' },
   // 财务指标 (需财务数据能力 financial, 列默认隐藏)
   { id: 'builtin:eps', source: { type: 'builtin', key: 'eps' }, label: 'EPS', visible: false, align: 'center' },
   { id: 'builtin:bps', source: { type: 'builtin', key: 'bps' }, label: 'BPS', visible: false, align: 'center' },
@@ -105,6 +108,7 @@ export const COLUMN_GROUPS: ColumnGroup[] = [
   { id: 'momentum', label: '动量', icon: '🚀', keys: ['momentum_5d', 'momentum_10d', 'momentum_20d', 'momentum_30d', 'momentum_60d'] },
   { id: 'limit', label: '连板', icon: '🔥', keys: ['limit_ups', 'limit_downs'] },
   { id: 'signal', label: '信号', icon: '📡', keys: ['signals', 'candle', 'intraday'] },
+  { id: 'market_trend', label: '市场趋势', icon: '📈', keys: ['market_trend_1w', 'market_trend_1d', 'market_trend_30m'] },
   { id: 'finance', label: '财务', icon: '📋', keys: ['eps', 'bps', 'roe', 'pe_ttm', 'pb', 'gross_margin', 'net_margin', 'revenue_yoy', 'net_income_yoy', 'debt_ratio'] },
 ]
 
