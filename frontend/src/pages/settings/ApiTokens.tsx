@@ -61,6 +61,7 @@ export function SettingsApiTokensPanel() {
             <Plus className="h-3 w-3" /> 新建 Token
           </button>
         </div>
+        <p className="mt-2 text-[11px] text-muted">桌面小窗读取自选时，请为 Token 勾选「自选读取 read:watchlist」。明文只显示一次。</p>
 
         {/* 新建表单 */}
         {creating && (

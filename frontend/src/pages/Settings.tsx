@@ -6,7 +6,7 @@
 import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { BarChart3, Database, Radio, SlidersHorizontal, Sparkles, Settings2, PanelLeftClose, PanelLeftOpen, Clock3, Palette, Timer } from 'lucide-react'
+import { BarChart3, Database, Radio, SlidersHorizontal, Sparkles, Settings2, PanelLeftClose, PanelLeftOpen, Clock3, Palette, Timer, KeyRound } from 'lucide-react'
 import { SettingsAIPanel } from './settings/AI'
 import { SettingsMonitoringPanel } from './settings/Monitoring'
 import { SettingsExtPagesPanel } from './settings/ExtPages'
@@ -16,6 +16,7 @@ import { SettingsSystemPanel } from './settings/System'
 import { SettingsDataSourcesPanel } from './settings/DataSources'
 import { SettingsThemePanel } from './settings/Theme'
 import { SettingsSchedulesPanel } from './settings/Schedules'
+import { SettingsApiTokensPanel } from './settings/ApiTokens'
 import { PageHeader } from '@/components/PageHeader'
 import { cn } from '@/lib/cn'
 
@@ -40,6 +41,7 @@ const TABS: readonly TabDef[] = [
   { key: 'schedules',  label: '定时任务',   icon: Timer,     panel: SettingsSchedulesPanel },
   { key: 'menus',      label: '菜单设置',   icon: SlidersHorizontal, panel: SettingsMenuSettingsPanel },
   { key: 'system',     label: '系统设置',   icon: Settings2, panel: SettingsSystemPanel },
+  { key: 'api-tokens', label: '开放接口',   icon: KeyRound, panel: SettingsApiTokensPanel },
   { key: 'theme',      label: '主题',       icon: Palette, panel: SettingsThemePanel },
 ]
 
