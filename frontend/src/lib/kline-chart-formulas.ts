@@ -6,7 +6,7 @@ import { calculateKdEnhanced } from './kdEnhanced'
 import { calculateEtfSwingV2 } from './etfSwingV2'
 import { calculateBullBearTrendV2 } from './bullBearTrendV2'
 import { type MarketTrendHistory } from './marketTrend'
-import { calculateCompositeTrendSeries } from './marketTrendComposite'
+import { calculateCompositeTrendSeries, calculateTrendSpeedSeries, calculateTurningRegionSeries } from './marketTrendComposite'
 import type { KlinePeriod } from './api'
 import { chartTheme, getTheme } from './theme'
 
@@ -199,6 +199,73 @@ function subTooltip(name: string, fields: InfoField[], status = false): NonNulla
   }
 }
 
+function trendChartRows(data: KLineData[], period: string) {
+  return data.map(bar => {
+    const date = new Date(bar.timestamp + 8 * 60 * 60 * 1000).toISOString().slice(0, 16).replace('T', ' ')
+    return { date: period === '30m' ? date : date.slice(0, 10) }
+  })
+}
+
+// Reserve a pixel band below the score axis; speed keeps its own ATR/day scale.
+export const TREND_SPEED_BAND_HEIGHT = 84
+export function compositeScoreRange(height: number, header: number) {
+  const plot = Math.max(1, height - header - TREND_SPEED_BAND_HEIGHT - 4)
+  const from = -100 * (TREND_SPEED_BAND_HEIGHT + 4) / plot, to = 100 + 100 * header / plot
+  return { from, to, range: to - from, realFrom: from, realTo: to, realRange: to - from,
+    displayFrom: from, displayTo: to, displayRange: to - from }
+}
+const compositeSpeedDraw: Draw = ({ ctx, chart, indicator, xAxis, yAxis, bounding }) => {
+  const range = chart.getVisibleRange()
+  const from = Math.max(0, Math.floor(range.from)), to = Math.min(indicator.result.length, Math.ceil(range.to))
+  let scale = 0.1
+  for (let i = from; i < to; i++) scale = Math.max(scale, Math.abs(indicator.result[i].speed ?? 0))
+  // Shade observation dates behind the score curve. Region colors differ from speed bar colors.
+  const plotTop = yAxis.convertToPixel(100), plotBottom = yAxis.convertToPixel(0)
+  const barSpace = chart.getBarSpace().bar
+  ctx.save()
+  ctx.beginPath(); ctx.rect(0, plotTop, bounding.width, Math.max(0, plotBottom - plotTop)); ctx.clip()
+  let labelRight = -Infinity
+  for (let i = from; i < to; i++) {
+    const region = indicator.result[i].region
+    if (region !== -1 && region !== 1) continue
+    const x = xAxis.convertToPixel(i) - barSpace / 2
+    ctx.fillStyle = region === -1 ? 'rgba(6,182,212,0.16)' : 'rgba(245,158,11,0.16)'
+    ctx.fillRect(x, plotTop, barSpace + 0.5, Math.max(0, plotBottom - plotTop))
+    if (indicator.result[i - 1]?.region !== region && x >= labelRight && x >= 0 && x + 30 < bounding.width) {
+      ctx.font = '9px JetBrains Mono, monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'top'
+      ctx.fillStyle = region === -1 ? themeColor('#22D3EE', '#0E7490') : themeColor('#FBBF24', '#92400E')
+      ctx.fillText(region === -1 ? '底观' : '顶观', x + 1, plotTop + 2)
+      labelRight = x + 34
+    }
+  }
+  ctx.restore()
+  const top = bounding.height - TREND_SPEED_BAND_HEIGHT
+  const zero = top + 18 + (TREND_SPEED_BAND_HEIGHT - 24) / 2
+  const half = (TREND_SPEED_BAND_HEIGHT - 24) / 2
+  ctx.save()
+  ctx.beginPath(); ctx.rect(0, top, bounding.width, TREND_SPEED_BAND_HEIGHT); ctx.clip()
+  ctx.strokeStyle = palette().gray; ctx.lineWidth = 1; ctx.setLineDash([3, 3])
+  ctx.beginPath(); ctx.moveTo(0, top); ctx.lineTo(bounding.width, top)
+  ctx.moveTo(0, zero); ctx.lineTo(bounding.width, zero); ctx.stroke()
+  const width = Math.max(1, chart.getBarSpace().bar * 0.6)
+  for (let i = from; i < to; i++) {
+    const { speed, speedChange } = indicator.result[i]
+    if (speed == null) continue
+    const y = zero - speed / scale * half
+    ctx.fillStyle = speedChange == null || speedChange === 0 ? palette().gray : speedChange > 0 ? palette().red : palette().green
+    ctx.fillRect(xAxis.convertToPixel(i) - width / 2, Math.min(y, zero), width, Math.max(1, Math.abs(y - zero)))
+  }
+  ctx.font = '9px JetBrains Mono, monospace'; ctx.fillStyle = chartTheme(getTheme()).text
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top'
+  ctx.fillText('日线速度 ATR/日 · 红改善/绿转弱', 4, top + 3)
+  ctx.textAlign = 'right'
+  ctx.fillText(scale.toFixed(2), bounding.width - 3, top + 18)
+  ctx.fillText('0', bounding.width - 3, zero)
+  ctx.textBaseline = 'bottom'; ctx.fillText((-scale).toFixed(2), bounding.width - 3, bounding.height - 2)
+  ctx.restore()
+  return false
+}
+
 export const formulaIndicators: FormulaIndicator[] = [
   {
     name: 'TSP_ANGEL_DEVIL', shortName: '天使魔鬼', series: 'price', precision: 3,
@@ -266,30 +333,44 @@ export const formulaIndicators: FormulaIndicator[] = [
     ],
     calc: (data, indicator) => {
       const period = indicator.extendData?.period ?? '1d'
-      if (!['30m', '1d', '1w', '1mo'].includes(period)) return data.map(() => ({ score: null, level20: 20, level50: 50, level80: 80 }))
-      const chartRows = data.map(bar => {
-        const date = new Date(bar.timestamp + 8 * 60 * 60 * 1000).toISOString().slice(0, 16).replace('T', ' ')
-        return { date: period === '30m' ? date : date.slice(0, 10) }
-      })
+      if (!['30m', '1d', '1w', '1mo'].includes(period)) return data.map(() => ({ score: null, speed: null, speedChange: null, region: null, position60: null, scoreChange3: null, level20: 20, level50: 50, level80: 80 }))
+      const chartRows = trendChartRows(data, period)
       const scores = calculateCompositeTrendSeries(chartRows, period as KlinePeriod, indicator.extendData?.marketTrendHistory)
-      return scores.map(score => ({ score, level20: 20, level50: 50, level80: 80 }))
+      const speeds = calculateTrendSpeedSeries(chartRows, period as KlinePeriod, indicator.extendData?.marketTrendHistory)
+      const regions = calculateTurningRegionSeries(chartRows, period as KlinePeriod, indicator.extendData?.marketTrendHistory)
+      return scores.map((score, index) => ({ score, ...speeds[index], ...regions[index], level20: 20, level50: 50, level80: 80 }))
     },
     shouldUpdate: (previous, current) => ({
       calc: previous.extendData?.period !== current.extendData?.period
         || previous.extendData?.marketTrendHistory !== current.extendData?.marketTrendHistory,
       draw: true,
     }),
-    createTooltipDataSource: subTooltip('多周期评分', [
-      ['score', '综合得分', 'white', 0], ['level20', '20分线', 'gray', 0],
-      ['level50', '50分线', 'gray', 0], ['level80', '80分线', 'gray', 0],
-    ]),
+    draw: compositeSpeedDraw,
+    createTooltipDataSource: params => {
+      const tooltip = subTooltip('多周期评分', [
+        ['score', '综合得分', 'white', 0], ['speed', '日线速度', 'white', 3, ' ATR/日'],
+        ['speedChange', '速度较3日前', 'gray', 3, ' ATR/日'], ['position60', '60日位置', 'gray', 1, '%'],
+        ['scoreChange3', '分数较3日前', 'gray', 0, '分'],
+      ])(params)
+      const row = params.indicator.result[params.crosshair.dataIndex ?? params.chart.getDataList().length - 1]
+      const region = row?.region
+      const day = row?.regionDay?.toString()
+      const dateLabel = day?.length === 8 ? `（${day.slice(0, 4)}-${day.slice(4, 6)}-${day.slice(6)}收盘）` : ''
+      tooltip.legends.push({ title: { text: '日线观察区: ', color: chartTheme(getTheme()).text }, value: {
+        text: (region == null ? '数据不足' : region === -1 ? '底部观察区（候选）' : region === 1 ? '顶部观察区（候选）' : '未满足条件') + dateLabel,
+        color: region === -1 ? palette().cyan : region === 1 ? palette().yellow : chartTheme(getTheme()).text,
+      } })
+      return tooltip
+    },
   },
+
 ]
 
 export const formulaName = (key: string) => `TSP_${key.toUpperCase().replaceAll('-', '_')}`
 
 /** 按实际可用宽度预留提示换行空间，避免辅助价格遮住副图。 */
 export function formulaHeaderHeight(key: string, width: number) {
+  if (key === 'builtin-multi-period-score') return width < 400 ? 104 : width < 650 ? 76 : 52
   if (key !== 'etf-swing-v2' && key !== 'bull-bear-trend-v2') return 28
   return width < 400 ? 80 : width < 650 ? 56 : 40
 }

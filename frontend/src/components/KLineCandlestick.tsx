@@ -2,7 +2,7 @@ import { buildPatternOverlays, PATTERN_GROUP, patternZoneTemplate } from '@/lib/
 import { waveLegLabel, waveSegmentTemplate } from '@/lib/kline-chart-wave'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { dispose, init, registerIndicator, registerOverlay, type Chart, type Crosshair, type IndicatorFigure, type KLineData } from 'klinecharts'
+import { dispose, init, registerIndicator, registerOverlay, registerYAxis, type Chart, type Crosshair, type IndicatorFigure, type KLineData } from 'klinecharts'
 import { chartTheme, useTheme } from '@/lib/theme'
 import { fmtAssetPrice, fmtPct, priceDigits } from '@/lib/format'
 import {
@@ -10,7 +10,7 @@ import {
   type ChartBar, type CandlestickProps,
 } from '@/lib/kline-chart'
 import { annotationTemplate, ANNOTATION_GROUP, buildAnnotations } from '@/lib/kline-chart-overlays'
-import { formulaHeaderHeight, formulaName, formulaIndicators } from '@/lib/kline-chart-formulas'
+import { formulaHeaderHeight, formulaName, formulaIndicators, TREND_SPEED_BAND_HEIGHT, compositeScoreRange } from '@/lib/kline-chart-formulas'
 import { ANGEL_DEVIL_MA, calculateAngelDevil } from '@/lib/angelDevil'
 import { BOLL2_LINES, calculateBoll2 } from '@/lib/boll2'
 import { storage } from '@/lib/storage'
@@ -26,6 +26,7 @@ export type { CandlestickProps, ChartMarker, ChartPriceLine, ChartPriceCurve, Ch
 
 chartIndicators.forEach(indicator => registerIndicator(indicator))
 formulaIndicators.forEach(indicator => registerIndicator(indicator))
+registerYAxis({ name: 'tsp_composite_score', displayValueToText: value => value >= 0 && value <= 100 ? value.toFixed(0) : '' })
 const registeredServerFormulas = new Set<string>()
 const legacyDefinitions = [...DEFAULT_SUB_CHARTS.map(i => ({ ...i, pane: 'sub' as const })), ...DEFAULT_MAIN_CHARTS.map(i => ({ ...i, height: 100, pane: 'main' as const }))].map(i => ({ ...i, id: i.key, name: i.label, source: i.key.startsWith('builtin-') ? 'builtin' : 'custom', revision: 1 }))
 registerOverlay(patternZoneTemplate)
@@ -792,7 +793,7 @@ export function KLineCandlestick({
             const height = Math.min(2000, Math.max(50, current + (event.key === 'ArrowUp' ? 20 : -20)))
             const header = headerHeights.current.get(key) ?? 28
             paneHeights.current.set(key, height)
-            chart.setPaneOptions({ id: `tsp_${key.replaceAll('-', '_')}`, height: height + header, minHeight: header + 50, dragEnabled: true })
+            chart.setPaneOptions({ id: `tsp_${key.replaceAll('-', '_')}`, height: height + header, minHeight: header + 50 + (key === MULTI_PERIOD_SCORE_KEY ? TREND_SPEED_BAND_HEIGHT : 0), dragEnabled: true })
             const adjustment = chartHeightAdjustment + height - current
             setChartHeightAdjustment(adjustment)
             storage.stockPreviewChartHeightAdjustment.set(adjustment)
@@ -824,6 +825,12 @@ function layoutSubPane(chart: Chart, key: string, width: number, headers: Map<st
   const header = formulaHeaderHeight(key, chart.getSize(paneId, 'main')?.width ?? width) + (key === 'vol' && volumeControls ? 26 : 0)
   if (order == null && headers.get(key) === header) return
   headers.set(key, header)
-  chart.setPaneOptions({ id: paneId, height: (heights.get(key) ?? def.height) + header, minHeight: header + 50, ...(order == null ? {} : { order: order + 1 }), dragEnabled: true })
-  chart.overrideYAxis({ paneId, gap: { top: header, bottom: 4 } })
+  chart.setPaneOptions({ id: paneId, height: (heights.get(key) ?? def.height) + header, minHeight: header + 50 + (key === MULTI_PERIOD_SCORE_KEY ? TREND_SPEED_BAND_HEIGHT : 0), ...(order == null ? {} : { order: order + 1 }), dragEnabled: true })
+  chart.overrideYAxis(key === MULTI_PERIOD_SCORE_KEY ? {
+    paneId, name: 'tsp_composite_score', gap: { top: 0, bottom: 0 },
+    createRange: ({ chart: current, defaultRange }) => ({ ...defaultRange,
+      ...compositeScoreRange(current.getSize(paneId, 'main')?.height ?? 250, header),
+    }),
+    createTicks: ({ defaultTicks }) => defaultTicks.filter(tick => Number(tick.value) >= 0 && Number(tick.value) <= 100),
+  } : { paneId, gap: { top: header, bottom: 4 } })
 }

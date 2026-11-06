@@ -17,6 +17,33 @@ export interface MarketTrendComposite {
 }
 const valid = (value: number | null | undefined): value is number => value != null && Number.isFinite(value) && value >= 0 && value <= 100
 
+/** Smooth directional MACD score; scale by ATR so prices and volatility are comparable. */
+export function continuousMacdScore(daily?: TechnicalScoreRow): number | null {
+  const raw = daily?.categories?.find(c => c.id === 'momentum')?.indicators.find(i => i.id === 'macd')?.raw_values
+  const atr = daily?.categories?.find(c => c.id === 'price_position')?.indicators.find(i => i.id === 'ma20_atr_position')?.raw_values.atr14
+  if (!raw || atr == null || !Number.isFinite(atr) || atr <= 0) return null
+  const { dif, hist, previous_hist: previous } = raw
+  if ([dif, hist, previous].some(value => value == null || !Number.isFinite(value))) return null
+  return 50 + 50 * (0.5 * Math.tanh(2 * hist! / atr)
+    + 0.3 * Math.tanh(dif! / atr) + 0.2 * Math.tanh(8 * (hist! - previous!) / atr))
+}
+
+export function calculateTrendSpeedSeries(rows: readonly { date: string }[], period: KlinePeriod, history?: MarketTrendHistory) {
+  const daily = history?.dailyScores ?? []
+  const values = daily.map(row => row.categories?.find(c => c.id === 'price_position')?.indicators.find(i => i.id === 'ma20_atr_position')?.raw_values)
+  const speeds = values.map((raw, index) => {
+    const close = raw?.close, previous = values[index - 5]?.close, atr = raw?.atr14
+    return close != null && previous != null && atr != null && [close, previous, atr].every(Number.isFinite) && close > 0 && previous > 0 && atr > 0
+      ? (close - previous) / (5 * atr) : null
+  })
+  let cursor = -1
+  return rows.map(bar => {
+    while (cursor + 1 < daily.length && signalAvailableAt(daily[cursor + 1].as_of, '1d', bar.date, period)) cursor++
+    const speed = speeds[cursor] ?? null, previous = speeds[cursor - 3] ?? null
+    return { speed, speedChange: speed != null && previous != null ? speed - previous : null }
+  })
+}
+
 /** Inputs must all describe the same closed daily observation. Historical details are never active signals. */
 export function assessMarketTrendComposite(original: number | null, daily?: TechnicalScoreRow, dow?: DowAnalysis, asOf: string | null = null): MarketTrendComposite {
   const alignedDaily = daily && daily.as_of === asOf ? daily : undefined
@@ -27,7 +54,7 @@ export function assessMarketTrendComposite(original: number | null, daily?: Tech
   const rsi = momentum?.indicators.find(indicator => indicator.id === 'rsi')
   const volume = categories.find(category => category.id === 'volume_price')
   const volumeScore = volume?.available && volume.coverage >= 100 && valid(volume.score) ? volume.score : null
-  const macdScore = valid(macd?.score) ? macd.score : null
+  const macdScore = continuousMacdScore(alignedDaily)
   const rsiValue = rsi?.raw_values.rsi14
   let rsiScore: number | null = null
   if (valid(rsiValue) && ['RISING', 'FALLING', 'FLAT'].includes(rsi?.direction ?? '')) {
@@ -99,5 +126,32 @@ export function calculateCompositeTrendSeries(rows: readonly { date: string }[],
       status: dow.status === 'ok' && highs >= 2 && lows >= 2 ? 'ok' : 'insufficient',
       trend, damaged, basis: undefined, events: [], paths: [] }
     return assessMarketTrendComposite(originals[index], daily[cursor], snapshot, asOf).score
+  })
+}
+
+export type TurningRegion = -1 | 0 | 1 | null // bottom / none / top / unavailable
+export function identifyTurningRegion(position60: number | null, scoreChange: number | null, speed: number | null, speedChange: number | null): TurningRegion {
+  if (!valid(position60) || [scoreChange, speed, speedChange].some(value => value == null || !Number.isFinite(value))) return null
+  if (position60 <= 20 && speed! < 0 && scoreChange! >= 2 && speedChange! >= 0.05) return -1
+  if (position60 >= 80 && speed! > 0 && scoreChange! <= -2 && speedChange! <= -0.05) return 1
+  return 0
+}
+
+/** Daily observation areas are published at the close, never moved back to earlier lows/highs. */
+export function calculateTurningRegionSeries(rows: readonly { date: string }[], period: KlinePeriod, history?: MarketTrendHistory) {
+  const daily = history?.dailyScores ?? []
+  const dates = daily.map(row => ({ date: row.as_of }))
+  const scores = calculateCompositeTrendSeries(dates, '1d', history)
+  const speeds = calculateTrendSpeedSeries(dates, '1d', history)
+  const areas = daily.map((row, i) => {
+    const rawPosition = row.categories?.find(c => c.id === 'price_position')?.indicators.find(indicator => indicator.id === 'range_position_60')?.value
+    const position60 = valid(rawPosition) ? rawPosition : null
+    const scoreChange3 = scores[i] != null && scores[i - 3] != null ? scores[i]! - scores[i - 3]! : null
+    return { region: identifyTurningRegion(position60, scoreChange3, speeds[i].speed, speeds[i].speedChange), position60, scoreChange3, regionDay: Number(row.as_of.slice(0, 10).replaceAll('-', '')) }
+  })
+  let cursor = -1
+  return rows.map(bar => {
+    while (cursor + 1 < daily.length && signalAvailableAt(daily[cursor + 1].as_of, '1d', bar.date, period)) cursor++
+    return areas[cursor] ?? { region: null, position60: null, scoreChange3: null, regionDay: null }
   })
 }

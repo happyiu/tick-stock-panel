@@ -290,18 +290,18 @@ it('形态选择保留分析截面，切页签保留，刷新和切股清除', a
 })
 
 it('市场趋势以闭合日线对齐因子，历史截面与切股不泄漏旧结果', async () => {
-  state.scores = { version: 'test', rows: ['2026-10-14', '2026-10-15'].map((as_of, i) => ({ as_of, categories: [{ id: 'momentum', indicators: [{ id: 'macd', score: i ? 90 : 20, raw_values: {} }] }] })) } as unknown as import('@/lib/api').TechnicalScores
+  state.scores = { version: 'test', rows: ['2026-10-14', '2026-10-15'].map((as_of, i) => ({ as_of, categories: [{ id: 'momentum', indicators: [{ id: 'macd', score: i ? 90 : 20, raw_values: { dif: i ? 1 : -1, hist: 0, previous_hist: 0 } }] }, { id: 'price_position', indicators: [{ id: 'ma20_atr_position', raw_values: { atr14: 1 } }] }] })) } as unknown as import('@/lib/api').TechnicalScores
   await render(); await click('市场趋势', 'tab')
   expect(state.scoreCalls).toHaveBeenCalledWith('512000.SH')
   expect(state.dow).toHaveBeenLastCalledWith('512000.SH', '1d', '2026-10-15')
-  expect(host.textContent).toContain('90.0 × 15% = 13.50')
+  expect(host.textContent).toContain('61.4 × 15% = 9.21')
   await act(async () => state.chart.onDateClick?.('2026-10-14')); await settle()
   expect(state.dow).toHaveBeenLastCalledWith('512000.SH', '1d', '2026-10-14')
-  expect(host.textContent).toContain('20.0 × 15% = 3.00')
-  expect(host.textContent).not.toContain('90.0 × 15% = 13.50')
+  expect(host.textContent).toContain('38.6 × 15% = 5.79')
+  expect(host.textContent).not.toContain('61.4 × 15% = 9.21')
   state.scores = undefined; state.dow.mockImplementation(() => new Promise(() => {}))
   await render({ symbol: '159915.SZ' })
-  expect(host.textContent).not.toContain('20.0 × 15% = 3.00')
+  expect(host.textContent).not.toContain('38.6 × 15% = 5.79')
 })
 it('市场趋势排除未收盘日线，主图30F仍按日线截止取结构', async () => {
   state.unclosed = true
@@ -310,11 +310,11 @@ it('市场趋势排除未收盘日线，主图30F仍按日线截止取结构', a
 })
 
 it('综合评分刷新失败保留同一上下文有效因子并提示失败', async () => {
-  state.scores = { version: 'test', rows: [{ as_of: '2026-10-15', categories: [{ id: 'momentum', indicators: [{ id: 'macd', score: 90, raw_values: {} }] }] }] } as unknown as import('@/lib/api').TechnicalScores
+  state.scores = { version: 'test', rows: [{ as_of: '2026-10-15', categories: [{ id: 'momentum', indicators: [{ id: 'macd', score: 90, raw_values: { dif: 1, hist: 0, previous_hist: 0 } }] }, { id: 'price_position', indicators: [{ id: 'ma20_atr_position', raw_values: { atr14: 1 } }] }] }] } as unknown as import('@/lib/api').TechnicalScores
   await render(); await click('市场趋势', 'tab')
-  expect(host.textContent).toContain('90.0 × 15% = 13.50')
+  expect(host.textContent).toContain('61.4 × 15% = 9.21')
   state.failScores = true
   await click('刷新评分')
-  expect(host.textContent).toContain('90.0 × 15% = 13.50')
+  expect(host.textContent).toContain('61.4 × 15% = 9.21')
   expect(host.textContent).toContain('刷新失败；已有结果保留')
 })
