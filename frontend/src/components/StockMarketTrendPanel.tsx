@@ -1,3 +1,4 @@
+import type { MarketTrendComposite } from '@/lib/marketTrendComposite'
 import { useState } from 'react'
 import {
   latestAngelDevilSignal,
@@ -147,7 +148,7 @@ function MarketTrendHistorySummary({ weeklyItem, dailyItem, thirtyMinuteItem }: 
   )
 }
 
-export function StockMarketTrendPanel({ items }: { items: StockMarketTrendItem[] }) {
+export function StockMarketTrendPanel({ items, composite, compositeLoading, compositeError, onRefreshComposite }: { items: StockMarketTrendItem[]; composite?: MarketTrendComposite; compositeLoading?: boolean; compositeError?: boolean; onRefreshComposite?: () => void }) {
   const summaries = items.map(item => ({ ...item, ...latestAngelDevilSignal(item.rows) }))
   const weeklyItem = summaries.find(item => item.period === '1w')
   const dailyItem = summaries.find(item => item.period === '1d')
@@ -158,6 +159,13 @@ export function StockMarketTrendPanel({ items }: { items: StockMarketTrendItem[]
 
   return (
     <section aria-label="市场趋势分析" className="space-y-4 p-3 text-xs leading-relaxed">
+      {composite && <div className="space-y-2 rounded border border-border p-3" aria-label="综合趋势评分">
+        <div className="flex flex-wrap items-center justify-between gap-2"><div><strong>综合趋势分</strong>{onRefreshComposite && <button type="button" className="ml-2 text-[10px] text-accent" onClick={onRefreshComposite} disabled={compositeLoading}>刷新评分</button>}</div><strong className="font-mono text-2xl text-accent">{compositeLoading ? '计算中…' : composite.score == null ? '数据不足' : `${composite.score}/100`}</strong></div>
+        <p className="text-[10px] text-muted">多空强弱评分 · 越高越偏多 · 非上涨概率 · 日线截止 {composite.asOf ?? '—'}</p>
+        {composite.factors.map(factor => <div key={factor.name} className="flex flex-wrap justify-between gap-x-2"><span>{factor.name} · {factor.weight}%</span><span className="font-mono">{factor.score == null ? '数据不足' : `${factor.score.toFixed(1)} × ${factor.weight}% = ${factor.contribution!.toFixed(2)}`}</span></div>)}
+        <p className="text-[10px] text-muted">30F仅提供短周期提示，波段转折以日线结构确认。</p>
+        {compositeError && <p role="status" className="text-muted">刷新失败；已有结果保留，缺失项暂不可计算。</p>}
+      </div>}
       <div>
         <h3 className="font-medium text-muted">各周期最近信号</h3>
         <div className="mt-2 flex min-w-0 items-center gap-2">
@@ -198,22 +206,6 @@ export function StockMarketTrendPanel({ items }: { items: StockMarketTrendItem[]
             )
           })}
         </div>
-      </div>
-      <div>
-        <div className="flex items-center justify-between rounded border border-border px-3 py-2">
-          <span className="text-muted">得分</span>
-          <div>
-            <strong className={`font-mono text-2xl ${assessment ? 'text-accent' : 'text-muted'}`}>{assessment?.score ?? '—'}</strong>
-            {assessment && <span className="ml-0.5 text-[10px] text-muted">/100</span>}
-          </div>
-        </div>
-        {assessment && (
-          <div className="mt-2 rounded border border-border px-3 py-2 text-[10px] text-muted">
-            <p><span className="font-medium">计算过程：</span><span className="break-words">{assessment.scoreCalculation}</span></p>
-            <p className="mt-1">进攻按 1、撤退按 0；30F 缺失时按 0.5 计入。</p>
-            <p className="mt-1">按周线权重 55、日线权重 30、30F 权重 15 计算。</p>
-          </div>
-        )}
       </div>
       {!assessment && <p className="text-[11px] text-muted">{thirtyMinuteLoading
             ? '正在计算周线、日线和30F最近信号。'

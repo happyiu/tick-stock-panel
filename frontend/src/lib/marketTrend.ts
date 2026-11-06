@@ -5,7 +5,10 @@ import type { KlinePeriod, KlineRow } from './api'
 export const MARKET_TREND_PERIODS = ['1w', '1d', '30m'] as const
 export type MarketTrendPeriod = typeof MARKET_TREND_PERIODS[number]
 export type MarketTrendSignal = 'attack' | 'retreat'
-export type MarketTrendHistory = Record<MarketTrendPeriod, readonly { date: string; close: number }[]>
+export type MarketTrendHistory = Record<MarketTrendPeriod, readonly { date: string; close: number }[]> & {
+  dailyScores?: import('./api').TechnicalScoreRow[]
+  dailyDow?: import('./dow').DowAnalysis
+}
 
 export interface LatestAngelDevilSignal {
   signal: MarketTrendSignal
@@ -210,7 +213,7 @@ function summarizeSignalHistory(
   }
 }
 
-function signalAvailableAt(
+export function signalAvailableAt(
   signalDate: string,
   signalPeriod: MarketTrendPeriod,
   chartDate: string,

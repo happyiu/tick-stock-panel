@@ -32,6 +32,8 @@ import {
 } from '@/components/StockDailyKChart'
 import { StockIntradayChart } from '@/components/StockIntradayChart'
 import { StockTechnicalPanel } from '@/components/StockTechnicalPanel'
+import { assessMarketTrendComposite } from '@/lib/marketTrendComposite'
+import { latestAngelDevilSignal, marketTrendAssessment } from '@/lib/marketTrend'
 import { StockMarketTrendPanel } from '@/components/StockMarketTrendPanel'
 import { LevelOverview, PriceLevelControls, usePriceLevels } from './stock-analysis/PriceLevels'
 import { QK } from '@/lib/queryKeys'
@@ -561,7 +563,10 @@ export function StockPanel({
           candidatePeriod,
           candidatePeriod === '1d' ? marketTrendHistoryRange : defaultKlineRange(candidatePeriod, marketTrendEnd, historyDays, analysisAssetType),
           historyDays,
+          undefined,
+          candidatePeriod === '1d',
         ),
+        placeholderData: undefined,
         enabled: !!symbol && resolvedRightPaneMode === 'technical' && analysisTab === 'marketTrend',
         staleTime: 30_000,
       }
@@ -571,12 +576,23 @@ export function StockPanel({
     const query = marketTrendQueries[index]
     return {
       period: candidatePeriod,
-      rows: marketTrendRowsThrough(query.data?.rows ?? [], candidatePeriod, period, chanlunCutoff ?? marketTrendAsOf),
+      rows: marketTrendRowsThrough(query.data?.rows ?? [], candidatePeriod, period, chanlunCutoff ?? marketTrendAsOf).filter(row => row.is_closed === true),
       loading: query.isLoading && !query.data,
       error: query.isError,
       retry: () => { void query.refetch() },
     }
   })
+  const marketDailyDate = marketTrendItems.find(item => item.period === '1d')?.rows.at(-1)?.date.slice(0, 10) ?? null
+  const marketDowQuery = useQuery({
+    queryKey: QK.dow(symbol, analysisAssetType ?? 'stock', '1d', marketDailyDate ?? '', analysisSnapshot?.calculatedAt ?? 0),
+    queryFn: () => api.dowAnalysis(symbol, '1d', marketDailyDate!),
+    enabled: !!symbol && !!marketDailyDate && resolvedRightPaneMode === 'technical' && analysisTab === 'marketTrend',
+    staleTime: 30_000,
+  })
+  const marketSignals = marketTrendItems.map(item => latestAngelDevilSignal(item.rows).latest?.signal ?? null)
+  const marketOriginal = marketTrendAssessment(marketSignals[0], marketSignals[1], marketSignals[2])
+  const marketDailyScore = marketTrendQueries[1].data?.technical_scores?.rows.find(row => row.as_of === marketDailyDate)
+  const marketComposite = assessMarketTrendComposite(marketOriginal?.score ?? null, marketDailyScore, marketDowQuery.data?.dow, marketDailyDate)
   const [patternChoice, setPatternChoice] = useState<{ context: string; rows: KlineRow[]; pattern: import('@/lib/trendPatterns').PatternHit } | null>(null)
   const patternContext = `${analysisContextKey}|${chanlunCutoff}|${analysisSnapshot?.calculatedAt ?? 0}`
   useEffect(() => { setPatternChoice(null) }, [patternContext, displayAnalysisResponse?.rows])
@@ -1151,7 +1167,7 @@ export function StockPanel({
                 </>}
                 {analysisTab === 'wave' && <StockWavePanel analysis={waveAnalysis} confluence={waveBundle?.comparison?.summary ?? waveBundle?.coherence} comparison={waveBundle?.comparison} period={wavePeriod} onPeriodChange={setWavePeriod} depth={waveDepth} onDepthChange={setWaveDepth} symbol={symbol} asset={analysisAssetType ?? 'stock'} onHistory={data => setWaveHistorical({context: dowContext, data})} onLatest={() => setWaveHistorical(null)} saved={waveBundle?.saved} selected={waveSelected} onSelect={id => { setWaveChoice({ context: waveSelectionContext, id }); if (period === wavePeriod) setWaveOverlay(dowContext) }} loading={waveQuery.isFetching} error={waveQuery.isError} retry={() => { void waveQuery.refetch() }} enabled={waveOverlay === dowContext} toggle={() => setWaveOverlay(waveOverlay === dowContext ? null : dowContext)} supported={period === wavePeriod} />}
                 {analysisTab === 'dow' && <StockDowPanel items={dowItems} selected={dowSelected} onSelect={setDowSelected} enabled={dowEnabled} onToggle={() => setDowOverlayContext(dowEnabled ? null : dowContext)} supported={period !== '1mo'} />}
-                {analysisTab === 'marketTrend' && <StockMarketTrendPanel items={marketTrendItems} />}
+                {analysisTab === 'marketTrend' && <StockMarketTrendPanel items={marketTrendItems} composite={marketComposite} onRefreshComposite={() => { marketTrendQueries.forEach(query => { void query.refetch() }); if (marketDailyDate) void marketDowQuery.refetch() }} compositeLoading={marketTrendQueries.some(query => query.isLoading) || marketDowQuery.isFetching && !marketDowQuery.data} compositeError={marketTrendQueries.some(query => query.isError) || marketDowQuery.isError} />}
                 {analysisTab === 'structure' && <StockChanlunPanel key={symbol} items={overviewItems} period={period} asOf={chanlunCutoff} hideDates={hideCurrentDate} assetType={analysisAssetType}
                   projectionEnabled={projectionEnabled} projectionAvailable={chanlunAnalysis.capabilities?.projection === true && !chanlunQuery.isError}
                   projection={chanlunAnalysis.projection} projectionSelection={activeProjectionSelection} onProjectionBranchSelect={selectProjectionBranch}

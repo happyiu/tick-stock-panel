@@ -7,16 +7,17 @@ import { StockPanel } from './StockPanel'
 import type { CandlestickProps } from '@/lib/kline-chart'
 import type { StockLevels } from '@/lib/api'
 import { emptyChanlunAnalysis } from '@/lib/chanlun'
-const state = vi.hoisted(() => ({ technical: {} as import('./StockTechnicalPanel').StockTechnicalPanelProps, chart: {} as CandlestickProps, levels: vi.fn(), chanlun: vi.fn(), daily: vi.fn(), period: vi.fn(), catalog: vi.fn(), wave: vi.fn(), asset: 'etf' }))
+const state = vi.hoisted(() => ({ technical: {} as import('./StockTechnicalPanel').StockTechnicalPanelProps, chart: {} as CandlestickProps, levels: vi.fn(), chanlun: vi.fn(), daily: vi.fn(), period: vi.fn(), catalog: vi.fn(), wave: vi.fn(), asset: 'etf', dow: vi.fn(), scoreCalls: vi.fn(), scores: undefined as import('@/lib/api').TechnicalScores | undefined, unclosed: false, failScores: false }))
 vi.mock('@/lib/api', async importOriginal => ({
   ...await importOriginal<typeof import('@/lib/api')>(),
   api: {
     chartIndicators: state.catalog,
-    klineDaily: async (symbol: string, _days: unknown, _range: unknown, _ext: unknown, _scores: unknown, chanlun: unknown, indicators: unknown) => { if (!chanlun) state.daily(symbol, indicators); return ({ asset_type: state.asset, chanlun: chanlun ? await state.chanlun(symbol, '1d', chanlun) : undefined, rows: [
-      { date: '2026-10-14', open: 0.49, high: 0.5, low: 0.48, close: 0.49 },
-      { date: '2026-10-15', open: 0.49, high: 0.5, low: 0.48, close: 0.497 },
+    klineDaily: async (symbol: string, _days: unknown, _range: unknown, _ext: unknown, _scores: unknown, chanlun: unknown, indicators: unknown) => { if (!chanlun) state.daily(symbol, indicators); if (_scores) { state.scoreCalls(symbol); if (state.failScores) throw new Error('test refresh failure') } return ({ technical_scores: state.scores, asset_type: state.asset, chanlun: chanlun ? await state.chanlun(symbol, '1d', chanlun) : undefined, rows: [
+      { date: '2026-10-14', is_closed: true, open: 0.49, high: 0.5, low: 0.48, close: 0.49 },
+      { date: '2026-10-15', is_closed: !state.unclosed, open: 0.49, high: 0.5, low: 0.48, close: 0.497 },
     ] }) },
-    klinePeriod: async (symbol: string, period: string, _range: unknown, _days: unknown, _scores: unknown, chanlun: unknown) => { state.period(symbol, period); return ({ asset_type: state.asset, chanlun: chanlun ? await state.chanlun(symbol, period, chanlun) : undefined, rows: [{ date: '2026-10-15', open: 0.49, high: 0.5, low: 0.48, close: 0.497 }] }) },
+    klinePeriod: async (symbol: string, period: string, _range: unknown, _days: unknown, _scores: unknown, chanlun: unknown) => { state.period(symbol, period); return ({ asset_type: state.asset, chanlun: chanlun ? await state.chanlun(symbol, period, chanlun) : undefined, rows: [{ date: '2026-10-15', is_closed: !state.unclosed, open: 0.49, high: 0.5, low: 0.48, close: 0.497 }] }) },
+    dowAnalysis: state.dow,
     stockAnalysisLevels: state.levels,
     waveAnalysis: state.wave,
   },
@@ -48,6 +49,8 @@ let host: HTMLDivElement, root: ReturnType<typeof createRoot>, client: QueryClie
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   state.asset = 'etf'
+  state.scores = undefined; state.unclosed = false; state.failScores = false; state.scoreCalls.mockClear()
+  state.dow.mockReset().mockResolvedValue({ dow: undefined })
   localStorage.clear(); state.daily.mockClear(); state.catalog.mockReset().mockResolvedValue({ items: ['ma', 'vol'].map(id => ({ id, name: id === 'ma' ? 'MA 均线' : '成交量', source: 'custom', pane: id === 'ma' ? 'main' : 'sub', revision: 1, formula: '', description: '', height: 100 })), errors: [] }); state.levels.mockReset().mockResolvedValue(levels)
   state.wave.mockReset().mockResolvedValue({ periods: { '1d': { counts: [] } }, saved: true })
   state.chanlun.mockReset().mockResolvedValue(emptyChanlunAnalysis())
@@ -96,6 +99,10 @@ it('市场趋势按周线、日线和30F查询最近的天使魔鬼信号', asyn
   expect(host.textContent).toContain('日线')
   expect(host.textContent).toContain('30F')
   expect(host.textContent).toContain('市场环境')
+  expect(host.textContent).toContain('综合趋势分')
+  expect(host.textContent).not.toContain('顶部风险')
+  expect(host.textContent).not.toContain('底部机会')
+  expect(host.textContent).toContain('数据不足')
   expect(host.textContent).toContain('样本不足')
 })
 it('历史截面隔离查询，切股加载中清除旧价位，非日K提示口径并移除覆盖物', async () => {
@@ -280,4 +287,34 @@ it('形态选择保留分析截面，切页签保留，刷新和切股清除', a
   expect(state.chart.patternHit).toBeUndefined()
   await render()
   expect(state.chart.patternHit).toBeUndefined()
+})
+
+it('市场趋势以闭合日线对齐因子，历史截面与切股不泄漏旧结果', async () => {
+  state.scores = { version: 'test', rows: ['2026-10-14', '2026-10-15'].map((as_of, i) => ({ as_of, categories: [{ id: 'momentum', indicators: [{ id: 'macd', score: i ? 90 : 20, raw_values: {} }] }] })) } as unknown as import('@/lib/api').TechnicalScores
+  await render(); await click('市场趋势', 'tab')
+  expect(state.scoreCalls).toHaveBeenCalledWith('512000.SH')
+  expect(state.dow).toHaveBeenLastCalledWith('512000.SH', '1d', '2026-10-15')
+  expect(host.textContent).toContain('90.0 × 15% = 13.50')
+  await act(async () => state.chart.onDateClick?.('2026-10-14')); await settle()
+  expect(state.dow).toHaveBeenLastCalledWith('512000.SH', '1d', '2026-10-14')
+  expect(host.textContent).toContain('20.0 × 15% = 3.00')
+  expect(host.textContent).not.toContain('90.0 × 15% = 13.50')
+  state.scores = undefined; state.dow.mockImplementation(() => new Promise(() => {}))
+  await render({ symbol: '159915.SZ' })
+  expect(host.textContent).not.toContain('20.0 × 15% = 3.00')
+})
+it('市场趋势排除未收盘日线，主图30F仍按日线截止取结构', async () => {
+  state.unclosed = true
+  await render({ period: '30m' }); await click('市场趋势', 'tab')
+  expect(state.dow).toHaveBeenLastCalledWith('512000.SH', '1d', '2026-10-14')
+})
+
+it('综合评分刷新失败保留同一上下文有效因子并提示失败', async () => {
+  state.scores = { version: 'test', rows: [{ as_of: '2026-10-15', categories: [{ id: 'momentum', indicators: [{ id: 'macd', score: 90, raw_values: {} }] }] }] } as unknown as import('@/lib/api').TechnicalScores
+  await render(); await click('市场趋势', 'tab')
+  expect(host.textContent).toContain('90.0 × 15% = 13.50')
+  state.failScores = true
+  await click('刷新评分')
+  expect(host.textContent).toContain('90.0 × 15% = 13.50')
+  expect(host.textContent).toContain('刷新失败；已有结果保留')
 })

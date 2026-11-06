@@ -5,7 +5,8 @@ import { calculateKdDivergence } from './kdDivergence'
 import { calculateKdEnhanced } from './kdEnhanced'
 import { calculateEtfSwingV2 } from './etfSwingV2'
 import { calculateBullBearTrendV2 } from './bullBearTrendV2'
-import { calculateMarketTrendScoreSeries, type MarketTrendHistory } from './marketTrend'
+import { type MarketTrendHistory } from './marketTrend'
+import { calculateCompositeTrendSeries } from './marketTrendComposite'
 import type { KlinePeriod } from './api'
 import { chartTheme, getTheme } from './theme'
 
@@ -270,7 +271,7 @@ export const formulaIndicators: FormulaIndicator[] = [
         const date = new Date(bar.timestamp + 8 * 60 * 60 * 1000).toISOString().slice(0, 16).replace('T', ' ')
         return { date: period === '30m' ? date : date.slice(0, 10) }
       })
-      const scores = calculateMarketTrendScoreSeries(chartRows, period as KlinePeriod, indicator.extendData?.marketTrendHistory)
+      const scores = calculateCompositeTrendSeries(chartRows, period as KlinePeriod, indicator.extendData?.marketTrendHistory)
       return scores.map(score => ({ score, level20: 20, level50: 50, level80: 80 }))
     },
     shouldUpdate: (previous, current) => ({
