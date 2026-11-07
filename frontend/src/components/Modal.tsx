@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 
 /**
  * 共享模态对话框原语 — 统一处理可访问性:
@@ -65,13 +66,13 @@ export function Modal({
     // 初始聚焦
     const focusFirst = () => {
       if (initialFocusRef?.current) {
-        initialFocusRef.current.focus()
+        initialFocusRef.current.focus({ preventScroll: true })
         return
       }
       const panel = panelRef.current
       if (!panel) return
       const first = panel.querySelector<HTMLElement>(FOCUSABLE)
-      ;(first ?? panel).focus()
+      ;(first ?? panel).focus({ preventScroll: true })
     }
     // 等一帧确保内容已挂载
     const raf = requestAnimationFrame(focusFirst)
@@ -119,7 +120,7 @@ export function Modal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  return (
+  return createPortal(
     <div
       className={overlayClassName}
       onMouseDown={(e) => {
@@ -143,6 +144,7 @@ export function Modal({
       >
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

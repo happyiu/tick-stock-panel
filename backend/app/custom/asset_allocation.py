@@ -119,7 +119,7 @@ def portfolios(request: Request):
 def save(portfolio_id: uuid.UUID, body: Portfolio, request: Request):
     with _lock:
         items = read_portfolios(request)
-        items[str(portfolio_id)] = body.model_dump()
+        items[str(portfolio_id)] = {**body.model_dump(), "updated_at": cn_now().isoformat()}
         write_portfolios(request, items)
         return items
 

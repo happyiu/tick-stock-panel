@@ -428,7 +428,7 @@ ETF 原始行情由仓库读取；事件源通过 provider 的
 `ALLOCATION_ACTION_PROVIDER` 默认 astockdata，源不支持此方法时拒绝计算。
 事件成功覆盖记录保存在 `user_data/asset_allocation_coverage.json`，
 事件内存缓存 5 分钟，价格和事件内容进入计算结果版本。
-组合定义保存在 `user_data/asset_allocation.json`，与 data 目录一起备份。
+组合定义保存在 `user_data/asset_allocation.json`，与 data 目录一起备份。每次保存都会记录 `updated_at`，页面首次加载默认选择最近修改的配置；历史记录缺少时间戳时，按 JSON 中的原有顺序回退选择。
 不会在全市场范围自动覆盖既有 ETF 日线。
 
 历史表现为全窗口权重的样本内回看、分红在标的内再投。

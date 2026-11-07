@@ -5655,6 +5655,7 @@ export interface AllocationPortfolio {
   auto_refresh?: boolean
   rebalance?: 'monthly' | 'daily_threshold' | 'angel_devil'
   threshold?: number
+  updated_at?: string | null
 }
 export interface AllocationPerformance {
   return: number

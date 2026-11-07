@@ -41,8 +41,10 @@ const click = async (label: string) => {
   await act(async () => { button.click(); await new Promise(resolve => setTimeout(resolve, 0)) })
 }
 const selectSaved = async () => {
-  const select = host.querySelector<HTMLSelectElement>('[aria-label="已保存组合"]')!
-  await act(async () => { select.value = 'one'; select.dispatchEvent(new Event('change', { bubbles: true })) })
+  const currentConfig = host.querySelector<HTMLButtonElement>('[aria-label^="配置 "]')!
+  await act(async () => { currentConfig.click(); await new Promise(resolve => setTimeout(resolve, 0)) })
+  const savedConfig = host.querySelector<HTMLButtonElement>('#allocation-portfolio-menu button')!
+  await act(async () => { savedConfig.click(); await new Promise(resolve => setTimeout(resolve, 0)) })
 }
 
 it('restores a saved portfolio and displays its ETF and parameters', async () => {
@@ -52,11 +54,19 @@ it('restores a saved portfolio and displays its ETF and parameters', async () =>
 })
 
 it('guides new users and keeps tracking and backtest separate from configuration', async () => {
+  await click('新建配置')
+  const configName = host.querySelector<HTMLInputElement>('[aria-label="新建配置名称"]')!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(configName, '测试配置')
+    configName.dispatchEvent(new Event('input', { bubbles: true }))
+    configName.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  await click('创建配置')
   expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain('配置仓位')
   expect(host.textContent).toContain('先算一组目标仓位')
   expect(host.querySelector<HTMLInputElement>('[aria-label="开始日期"]')).toBeNull()
   await click('调仓跟踪')
-  expect(host.textContent).toContain('请先保存组合，再更新调仓建议')
+  expect(host.textContent).toContain('请先保存配置，再更新调仓建议')
   expect([...host.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent?.trim() === '更新调仓建议')?.disabled).toBe(true)
   await click('历史回测')
   expect(host.textContent).toContain('填写 0.02 代表')
