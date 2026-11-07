@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom'
  * 共享模态对话框原语 — 统一处理可访问性:
  * - role="dialog" + aria-modal + aria-labelledby / aria-label
  * - ESC 关闭
- * - 打开时把焦点移入对话框 (initialFocusRef 或首个可聚焦元素)
+ * - 打开时可把焦点移入对话框 (initialFocusRef 或首个可聚焦元素)
  * - Tab / Shift+Tab 焦点陷阱 (焦点不会跑出对话框)
  * - 关闭时把焦点还给打开前的元素
  * - 点击遮罩关闭 (可用 closeOnBackdrop 关闭)
@@ -23,6 +23,8 @@ export interface ModalProps {
   panelClassName?: string
   /** 遮罩 className (覆盖默认居中/背景) */
   overlayClassName?: string
+  /** 是否在打开时自动聚焦对话框内容 (默认 true) */
+  autoFocus?: boolean
   /** 打开时聚焦的元素; 不传则聚焦面板内首个可聚焦元素 */
   initialFocusRef?: React.RefObject<HTMLElement>
   /** 点击遮罩是否关闭 (默认 true) */
@@ -45,6 +47,7 @@ export function Modal({
   ariaLabel,
   panelClassName = 'w-[92vw] max-w-lg bg-surface border border-border rounded-card shadow-xl',
   overlayClassName = 'fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm',
+  autoFocus = true,
   initialFocusRef,
   closeOnBackdrop = true,
 }: ModalProps) {
@@ -75,7 +78,7 @@ export function Modal({
       ;(first ?? panel).focus({ preventScroll: true })
     }
     // 等一帧确保内容已挂载
-    const raf = requestAnimationFrame(focusFirst)
+    const raf = autoFocus ? requestAnimationFrame(focusFirst) : undefined
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -111,14 +114,14 @@ export function Modal({
 
     document.addEventListener('keydown', onKeyDown, true)
     return () => {
-      cancelAnimationFrame(raf)
+      if (raf !== undefined) cancelAnimationFrame(raf)
       document.removeEventListener('keydown', onKeyDown, true)
       // 还原焦点
       prevActive?.focus?.()
     }
-    // 只在挂载时装一次: onClose 走 ref, initialFocusRef 为稳定 ref 对象, 无需进依赖。
+    // onClose 走 ref; initialFocusRef 为稳定 ref 对象。autoFocus 改变时重装事件处理。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [autoFocus])
 
   return createPortal(
     <div

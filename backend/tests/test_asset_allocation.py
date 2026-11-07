@@ -38,12 +38,26 @@ def test_portfolios_persist_and_delete(tmp_path):
     assert service.portfolios(request) == {}
 
 
+def test_initial_capital_validation_and_cent_allocation():
+    assert service.Portfolio().initial_capital is None
+    for invalid in (True, 0, -1, float("inf"), 1.5, 1_000_000_000_000):
+        with pytest.raises(ValueError):
+            service.Portfolio(initial_capital=invalid)
+
+    equal = service.allocate_amounts([1 / 3] * 3, 100_001)
+    assert equal == [33_333.67, 33_333.67, 33_333.66]
+    assert round(sum(equal), 2) == 100_001
+    hrp = service.allocate_amounts([0.1, 0.2, 0.7], 123)
+    assert hrp == [12.3, 24.6, 86.1]
+    assert round(sum(hrp), 2) == 123
+
+
 def test_invalid_constraints_precede_data_access():
     with pytest.raises(ValueError, match="70%"):
         service.prepare(service.Calculation(symbols=["a", "b"]), Mock(), "optimize")
 
 
-def run_signal_worker(payload, targets=None):
+def run_signal_worker(payload, targets=None, fail_min_variance=False):
     import json
     import subprocess
 
@@ -55,11 +69,20 @@ m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 p=json.load(sys.stdin)
 targets=p.pop("_targets",None)
 if targets:
-    m.weights=lambda r,cap:m.np.array(targets[str(r.index[-1].date())])
+    m.weights=lambda r,cap,method:m.np.array(targets[str(r.index[-1].date())])
+if p.pop("_fail_min_variance",False):
+    m.rp.Portfolio.optimization=lambda self,**kwargs: None
+    try:
+        m.calculate(p)
+    except ValueError as exc:
+        print(json.dumps({"error":str(exc)}))
+        sys.exit(0)
 print(json.dumps(m.calculate(p)))
 """
     if targets:
         payload = {**payload, "_targets": targets}
+    if fail_min_variance:
+        payload = {**payload, "_fail_min_variance": True}
     return json.loads(
         subprocess.check_output(
             [
@@ -104,6 +127,40 @@ def test_no_initial_position_or_carried_attack():
     assert all(
         row["cash"] == 1.0 and row["weights"] == [0.0, 0.0] for row in result["accounts"]["hrp"]
     )
+
+
+def test_worker_uses_selected_methods_for_weights_and_backtest():
+    import numpy as np
+
+    p = signal_payload()
+    returns = np.random.default_rng(26).normal(size=(8, 2)) * [0.004, 0.025]
+    p["close"] = (100 * np.cumprod(1 + returns, axis=0)).tolist()
+    p.update(lookback=4, start=p["dates"][4], max_weight=1.0)
+    p["signals"][4] = ["attack", "attack"]
+    first_window = {
+        **p,
+        "mode": "optimize",
+        **{key: p[key][:5] for key in ("dates", "close", "split", "dividend")},
+    }
+    primary = {}
+    for method in ("hrp", "herc", "min_variance"):
+        cap = 0.75 if method == "herc" else 1.0
+        optimized = run_signal_worker({**first_window, "method": method, "max_weight": cap})
+        primary[method] = optimized["weights"]
+        assert set(optimized["history"]) == {method, "equal"}
+        assert sum(primary[method]) == pytest.approx(1.0)
+        assert all(0 <= weight <= cap + 1e-6 for weight in primary[method])
+    assert primary["min_variance"] != pytest.approx(primary["hrp"])
+    result = run_signal_worker({**p, "method": "herc", "max_weight": 0.75})
+    assert set(result["accounts"]) == {"herc", "equal"}
+    assert result["schedule"][0]["weights"] == pytest.approx(primary["herc"])
+    assert result["accounts"]["herc"][0]["weights"] == pytest.approx(primary["herc"])
+    assert {trade["model"] for trade in result["trades"]} == {"herc", "equal"}
+    failed = run_signal_worker(
+        {**first_window, "method": "min_variance"}, fail_min_variance=True
+    )
+    assert failed["error"].startswith("最小方差 求解失败")
+    assert failed["error"].endswith("未返回可行结果")
 
 
 def test_attack_retreat_close_fills_and_one_sided_rebalance():
@@ -185,15 +242,34 @@ def test_api_and_data_validation(tmp_path, monkeypatch):
     app = FastAPI()
     app.state.repo = repo
     app.include_router(service.router)
-    body = {"symbols": ["510300.SH"], "lookback": 2, "max_weight": 1}
+    body = {"symbols": ["510300.SH"], "lookback": 2, "max_weight": 1, "initial_capital": 1235}
     with TestClient(app) as client:
         response = client.post("/api/asset-allocation/optimize", json=body)
         assert response.status_code == 200, response.text
         result = response.json()
         assert result["weights"] == [1.0]
+        assert result["target_amounts"] == {"hrp": [1235.0], "equal": [1235.0]}
+        assert result["parameters"]["initial_capital"] == 1235
+        assert result["parameters"]["method"] == "hrp"
         assert result["history"]["hrp"]["return"] == pytest.approx(0.2)
+        legacy_body = {key: value for key, value in body.items() if key != "initial_capital"}
+        legacy = client.post("/api/asset-allocation/optimize", json=legacy_body).json()
+        assert legacy["parameters"]["initial_capital"] is None
+        assert "target_amounts" not in legacy
+        different_capital = client.post(
+            "/api/asset-allocation/optimize", json={**body, "initial_capital": 2346}
+        ).json()
+        assert different_capital["data_version"] != result["data_version"]
+        selected = client.post("/api/asset-allocation/optimize", json={**body, "method": "herc"}).json()
+        assert selected["parameters"]["method"] == "herc"
+        assert selected["data_version"] != result["data_version"]
+        assert selected["target_amounts"] == {"herc": [1235.0], "equal": [1235.0]}
         route = "/api/asset-allocation/portfolios/11111111-1111-4111-8111-111111111111"
-        assert client.put(route, json=body).status_code == 200
+        assert client.put(route, json=body).json()[str(route.rsplit("/", 1)[-1])]["initial_capital"] == 1235
+        invalid_body = {**body, "initial_capital": 1234.5}
+        assert client.put(route, json=invalid_body).status_code == 422
+        assert client.put(route, json={**body, "method": "equal"}).status_code == 422
+        assert client.post("/api/asset-allocation/optimize", json={**body, "method": "equal"}).status_code == 422
         recommendation = client.post(route + "/refresh").json()
         assert recommendation["status"] == "initial"
         assert client.post(route + "/confirm", json={"checked_at": "stale"}).status_code == 409
@@ -302,6 +378,63 @@ def test_tracking_confirm_and_legacy_defaults(tmp_path, monkeypatch):
             service.Confirmation(checked_at=service.tracking(request)[str(key)]["checked_at"]),
             request,
         )
+
+
+def test_switching_method_invalidates_tracking_and_scheduler_reads_saved_method(tmp_path, monkeypatch):
+    import uuid
+    from datetime import datetime
+
+    from fastapi import HTTPException
+
+    request = Mock()
+    repo = request.app.state.repo
+    repo.store.data_dir = tmp_path
+    key = uuid.uuid4()
+    key_str = str(key)
+    body = service.Portfolio(symbols=["ONE"], max_weight=1, auto_refresh=True)
+    raw = body.model_dump(exclude={"method"})
+    service.write_portfolios(request, {key_str: raw})
+    prior = {
+        "config": service.config_signature(body),
+        "checked_at": "legacy",
+        "status": "hold",
+        "basis": {"date": "2026-11-09", "weights": [1], "prices": [100]},
+    }
+    service.write_tracking(request, {key_str: prior})
+    service.save(key, body, request)
+    assert service.tracking(request)[key_str]["basis"] == prior["basis"]
+
+    methods = []
+
+    def prepare(config, *_):
+        methods.append(config.method)
+        return {"dates": ["2026-11-09"], "close": [[100]], "method": config.method}
+
+    monkeypatch.setattr(service, "prepare", prepare)
+    monkeypatch.setattr(service, "cn_now", lambda: datetime(2026, 11, 9, 16))
+    body.method = "herc"
+
+    def complete_old_calculation(_):
+        service.save(key, body, request)
+        return {"weights": [1.0]}
+
+    monkeypatch.setattr(service, "run_engine", complete_old_calculation)
+    assert service.refresh_portfolio(key_str, request) is None
+    assert service.tracking(request) == {}
+    with pytest.raises(HTTPException):
+        service.confirm(key, service.Confirmation(checked_at="legacy"), request)
+    monkeypatch.setattr(service, "run_engine", lambda _: {"weights": [1.0]})
+    assert service.refresh(key, request)["method"] == "herc"
+    service.refresh_saved(repo)
+    entry = service.tracking(request)[key_str]
+    assert entry["method"] == "herc" and entry["status"] == "initial"
+    assert entry["basis"] is None
+    service.confirm(key, service.Confirmation(checked_at=entry["checked_at"]), request)
+    assert service.tracking(request)[key_str]["basis"]["weights"] == [1]
+    body.method = "hrp"
+    service.save(key, body, request)
+    assert service.tracking(request) == {}
+    assert methods == ["hrp", "herc", "herc"]
 
 
 def test_same_day_weights_are_causal_and_missing_signals_fail_closed():
@@ -440,6 +573,7 @@ def test_backtest_api_forces_signal_rule_and_starts_in_cash(tmp_path, monkeypatc
                 "symbols": ["510300.SH"],
                 "lookback": 3,
                 "max_weight": 1,
+                "initial_capital": 500000,
                 "start": str(days[25]),
                 "end": str(days[-1]),
                 "rebalance": "monthly",
@@ -448,6 +582,7 @@ def test_backtest_api_forces_signal_rule_and_starts_in_cash(tmp_path, monkeypatc
         assert response.status_code == 200, response.text
         result = response.json()
         assert result["parameters"]["rebalance"] == "angel_devil"
+        assert result["parameters"]["initial_capital"] == 500000
         assert result["rule_version"] == "angel_devil_close_v1"
         assert len(result["schedule"]) == 20
         assert result["trades"] == []

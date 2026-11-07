@@ -14,13 +14,14 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from datetime import date, timedelta
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from requests import RequestException
 
 from app.data_providers import get_provider
@@ -40,11 +41,20 @@ _events = {}
 class Portfolio(BaseModel):
     name: str = Field(default="新组合", min_length=1, max_length=100)
     symbols: list[str] = Field(default_factory=list)
+    method: Literal["hrp", "herc", "min_variance"] = "hrp"
+    initial_capital: int | None = Field(default=None, ge=1, lt=1_000_000_000_000)
     lookback: int = Field(default=252, ge=2)
     max_weight: float = Field(default=0.35, gt=0, le=1)
     auto_refresh: bool = False
     rebalance: Literal["monthly", "daily_threshold", "angel_devil"] = "monthly"
     threshold: float = Field(default=0.05, gt=0, le=1)
+
+    @field_validator("initial_capital", mode="before")
+    @classmethod
+    def reject_boolean_capital(cls, value):
+        if isinstance(value, bool):
+            raise ValueError("初始资金必须为整数元")
+        return value
 
 
 class Calculation(Portfolio):
@@ -52,6 +62,21 @@ class Calculation(Portfolio):
     end: date | None = None
     fee: float = Field(default=0, ge=0, lt=0.1)
     slippage: float = Field(default=0, ge=0, lt=0.1)
+
+
+def allocate_amounts(weights, initial_capital):
+    cents = int(Decimal(str(initial_capital)) * 100)
+    precise_weights = [max(Decimal(0), Decimal(str(weight))) for weight in weights]
+    total_weight = sum(precise_weights)
+    if total_weight <= 0:
+        raise ValueError("目标权重无效，无法分配初始资金")
+    exact_cents = [weight / total_weight * cents for weight in precise_weights]
+    amounts = [int(value) for value in exact_cents]
+    remainder = cents - sum(amounts)
+    order = sorted(range(len(weights)), key=lambda index: exact_cents[index] - amounts[index], reverse=True)
+    for index in order[:remainder]:
+        amounts[index] += 1
+    return [amount / 100 for amount in amounts]
 
 
 def stop_worker():
@@ -119,7 +144,15 @@ def portfolios(request: Request):
 def save(portfolio_id: uuid.UUID, body: Portfolio, request: Request):
     with _lock:
         items = read_portfolios(request)
-        items[str(portfolio_id)] = {**body.model_dump(), "updated_at": cn_now().isoformat()}
+        key = str(portfolio_id)
+        previous = items.get(key, {})
+        record = {**body.model_dump(), "updated_at": cn_now().isoformat()}
+        if previous and previous.get("method", "hrp") != body.method:
+            # Save the reset with the new method in one atomic file replacement.
+            record["method_revision"] = uuid.uuid4().hex
+        elif "method_revision" in previous:
+            record["method_revision"] = previous["method_revision"]
+        items[key] = record
         write_portfolios(request, items)
         return items
 
@@ -311,6 +344,13 @@ def calculate(body, request, mode):
                     "names": request.app.state.repo.get_name_map(body.symbols),
                 }
             )
+            if body.initial_capital is not None and result.get("weights") is not None:
+                result["target_amounts"] = {
+                    body.method: allocate_amounts(result["weights"], body.initial_capital),
+                    "equal": allocate_amounts(
+                        [1 / len(body.symbols)] * len(body.symbols), body.initial_capital
+                    ),
+                }
             with _lock:
                 if len(_cache) >= 32:
                     _cache.pop(next(iter(_cache)))
@@ -358,6 +398,13 @@ def config_signature(body):
     return [body.symbols, body.lookback, body.max_weight, body.threshold]
 
 
+def same_tracking_method(entry, portfolio):
+    return (
+        entry.get("method", "hrp") == portfolio.get("method", "hrp")
+        and entry.get("method_revision") == portfolio.get("method_revision")
+    )
+
+
 def tracked_weights(payload, basis):
     shares = [w / p for w, p in zip(basis["weights"], basis["prices"], strict=True)]
     cash = 0.0
@@ -374,7 +421,12 @@ def tracked_weights(payload, basis):
 @router.get("/tracking")
 def tracking(request: Request):
     with _lock:
-        return read_tracking(request)
+        saved = read_portfolios(request)
+        return {
+            key: entry
+            for key, entry in read_tracking(request).items()
+            if key in saved and same_tracking_method(entry, saved[key])
+        }
 
 
 def refresh_portfolio(portfolio_id, request, require_today=False):
@@ -384,6 +436,8 @@ def refresh_portfolio(portfolio_id, request, require_today=False):
     if raw is None:
         raise HTTPException(404, "组合已删除")
     body = Calculation(**raw)
+    if not same_tracking_method(previous, raw):
+        previous = {}
     signature = config_signature(body)
     basis = previous.get("basis") if previous.get("config") == signature else None
     try:
@@ -423,6 +477,7 @@ def refresh_portfolio(portfolio_id, request, require_today=False):
         # A concurrent edit/delete must not publish a result for an old definition.
         if read_portfolios(request).get(portfolio_id) != raw:
             return None
+        record.update(method=body.method, method_revision=raw.get("method_revision"))
         entries = read_tracking(request)
         entries[portfolio_id] = record
         write_tracking(request, entries)
@@ -444,7 +499,12 @@ def confirm(portfolio_id: uuid.UUID, body: Confirmation, request: Request):
         entries = read_tracking(request)
         entry = entries.get(str(portfolio_id))
         raw = read_portfolios(request).get(str(portfolio_id))
-        if not entry or entry.get("status") == "error" or raw is None:
+        if (
+            not entry
+            or entry.get("status") == "error"
+            or raw is None
+            or not same_tracking_method(entry, raw)
+        ):
             raise HTTPException(422, "请先重算组合")
         if entry["checked_at"] != body.checked_at:
             raise HTTPException(409, "建议已经更新，请刷新后确认")

@@ -5647,9 +5647,15 @@ export interface AnalysisMenu {
 }
 
 
+export type AllocationMethod = 'hrp' | 'herc' | 'min_variance'
+type AllocationModel = AllocationMethod | 'equal'
+type AllocationComparison<T> = { equal: T } & Partial<Record<AllocationMethod, T>>
+
 export interface AllocationPortfolio {
   name: string
   symbols: string[]
+  method?: AllocationMethod
+  initial_capital?: number | null
   lookback: number
   max_weight: number
   auto_refresh?: boolean
@@ -5665,7 +5671,8 @@ export interface AllocationPerformance {
 export interface AllocationResult {
   weights?: number[]
   risk_contribution?: number[]
-  history: { hrp: AllocationPerformance; equal: AllocationPerformance }
+  target_amounts?: AllocationComparison<number[]>
+  history: AllocationComparison<AllocationPerformance>
   sample_start?: string
   samples: number
   as_of: string
@@ -5673,14 +5680,15 @@ export interface AllocationResult {
   engine_version: string
   parameters: AllocationPortfolio
   names: Record<string, string>
-  trades?: { model: string; date: string; weights: number[]; turnover: number; cost: number; reason?: string; deviation?: number; symbol?: string; side?: 'buy' | 'sell'; price?: number; amount?: number }[]
+  trades?: { model: AllocationModel; date: string; weights: number[]; turnover: number; cost: number; reason?: string; deviation?: number; symbol?: string; side?: 'buy' | 'sell'; price?: number; amount?: number }[]
   schedule?: { date: string; as_of: string; weights: number[]; signals: ('attack' | 'retreat' | null)[] }[]
-  accounts?: Record<'hrp' | 'equal', { date: string; cash: number; value: number; weights: number[]; target: number[] }[]>
+  accounts?: AllocationComparison<{ date: string; cash: number; value: number; weights: number[]; target: number[] }[]>
   rule_version?: string
 }
 
 
 export interface AllocationTracking {
+  method?: AllocationMethod
   status: 'initial' | 'rebalance' | 'hold' | 'error'
   as_of?: string
   checked_at: string

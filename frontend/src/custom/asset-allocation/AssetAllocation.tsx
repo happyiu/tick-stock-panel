@@ -1,19 +1,26 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowRight, Check, ChevronDown, Clock3, History, Loader2, PieChart, Plus, RefreshCw, Save, Search, Settings, Trash2, X } from 'lucide-react'
+import { ArrowRight, Check, ChevronDown, Clock3, History, ListPlus, Loader2, PieChart, Plus, RefreshCw, Save, Search, Settings, Trash2, X } from 'lucide-react'
 import * as echarts from 'echarts'
 import { Modal } from '@/components/Modal'
 import { PageHeader } from '@/components/PageHeader'
-import { api, type AllocationPortfolio, type AllocationResult } from '@/lib/api'
+import { toast } from '@/components/Toast'
+import { WatchlistGroupMenu } from '@/components/WatchlistAddMenu'
+import { api, type AllocationMethod, type AllocationPortfolio, type AllocationResult, type AllocationTracking } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 
-const initial: AllocationPortfolio = { name: '新配置', symbols: [], lookback: 252, max_weight: .35, auto_refresh: true, rebalance: 'daily_threshold', threshold: .05 }
+const initial: AllocationPortfolio = { name: '新配置', symbols: [], method: 'hrp', initial_capital: 100_000, lookback: 252, max_weight: .35, auto_refresh: true, rebalance: 'daily_threshold', threshold: .05 }
+const methods: Record<AllocationMethod, string> = { hrp: 'HRP', herc: 'HERC', min_variance: '最小方差' }
+const modelLabel = (model: AllocationMethod | 'equal') => model === 'equal' ? '等权对照' : `${methods[model]} 配置`
 const pct = (n: number) => `${(n * 100).toFixed(2)}%`
+const money = new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY', minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const validCapital = (value: number | null | undefined) => value != null && Number.isInteger(value) && value >= 1 && value < 1_000_000_000_000
 const control = 'h-9 w-full rounded-lg border border-border bg-base px-3 text-sm text-foreground outline-none focus:border-accent focus:ring-1 focus:ring-accent/30 disabled:opacity-40'
 const button = 'inline-flex shrink-0 whitespace-nowrap min-h-9 items-center justify-center gap-2 rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-medium text-secondary transition-colors hover:border-accent/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40'
 const primary = button + ' border-accent bg-accent text-white hover:bg-accent/90 hover:text-white'
 const card = 'rounded-xl border border-border bg-surface'
-const table = 'w-full min-w-[540px] text-left text-xs [&_th]:px-4 [&_th]:py-3 [&_th]:font-medium [&_th]:text-muted [&_td]:px-4 [&_td]:py-3 [&_tbody_tr]:border-t [&_tbody_tr]:border-border [&_tbody_tr]:hover:bg-elevated/50'
+const tableStyle = 'w-full text-left text-xs [&_th]:py-3 [&_th]:font-medium [&_th]:text-muted [&_td]:py-3 [&_tbody_tr]:border-t [&_tbody_tr]:border-border'
+const table = tableStyle + ' min-w-[540px] [&_th]:px-4 [&_td]:px-4'
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return <label className="block min-w-0 space-y-2">
@@ -25,35 +32,49 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 
 function Performance({ result, title }: { result: AllocationResult; title: string }) {
   const ref = useRef<HTMLDivElement>(null)
+  const initialCapital = result.parameters.initial_capital
+  const method = result.parameters.method ?? 'hrp'
+  const primaryHistory = result.history[method]!
   useEffect(() => {
     const chart = echarts.init(ref.current!)
+    const series = [
+      { name: modelLabel(method), data: primaryHistory, style: 'solid' },
+      { name: modelLabel('equal'), data: result.history.equal, style: 'dashed' },
+    ] as const
     chart.setOption({
       color: ['#3b82f6', '#94a3b8'],
       grid: { left: 46, right: 18, top: 36, bottom: 30 },
-      tooltip: { trigger: 'axis' },
-      legend: { data: ['HRP 配置', '等权对照'], textStyle: { color: '#94a3b8', fontSize: 11 } },
-      xAxis: { type: 'category', boundaryGap: false, data: result.history.hrp.points.map(p => p.date), axisLabel: { color: '#94a3b8', fontSize: 10 }, axisTick: { show: false } },
-      yAxis: { type: 'value', scale: true, axisLabel: { color: '#94a3b8', fontSize: 10 }, splitLine: { lineStyle: { color: '#94a3b8', opacity: .12 } } },
-      series: Object.entries(result.history).map(([name, data]) => ({
-        name: name === 'hrp' ? 'HRP 配置' : '等权对照', type: 'line', showSymbol: false,
-        lineStyle: { width: 2, type: name === 'hrp' ? 'solid' : 'dashed' }, data: data.points.map(p => p.value),
+      tooltip: { trigger: 'axis', valueFormatter: (value: unknown) => initialCapital == null ? String(value) : money.format(Number(value)) },
+      legend: { data: series.map(item => item.name), textStyle: { color: '#94a3b8', fontSize: 11 } },
+      xAxis: { type: 'category', boundaryGap: false, data: primaryHistory.points.map(p => p.date), axisLabel: { color: '#94a3b8', fontSize: 10 }, axisTick: { show: false } },
+      yAxis: { type: 'value', scale: true, axisLabel: { color: '#94a3b8', fontSize: 10, formatter: initialCapital == null ? undefined : (value: number) => money.format(value) }, splitLine: { lineStyle: { color: '#94a3b8', opacity: .12 } } },
+      series: series.map(({ name, data, style }) => ({
+        name, type: 'line', showSymbol: false,
+        lineStyle: { width: 2, type: style }, data: data.points.map(p => initialCapital == null ? p.value : p.value * initialCapital),
       })),
     })
     const observer = new ResizeObserver(() => chart.resize())
     observer.observe(ref.current!)
     return () => { observer.disconnect(); chart.dispose() }
-  }, [result])
+  }, [initialCapital, method, primaryHistory, result.history.equal])
   return <section className={card}>
     <div className="border-b border-border px-4 py-3">
       <h3 className="text-sm font-semibold">{title}</h3>
-      <p className="mt-1 text-[11px] text-muted">{result.history.hrp.points[0]?.date} 至 {result.history.hrp.points.at(-1)?.date} · 净值从 1 开始</p>
+      <p className="mt-1 text-[11px] text-muted">{primaryHistory.points[0]?.date} 至 {primaryHistory.points.at(-1)?.date} · {initialCapital == null ? '净值从 1 开始' : `初始资金 ${money.format(initialCapital)}，曲线显示资产金额`}</p>
     </div>
     <div className="grid grid-cols-2 gap-3 p-4">
-      {Object.entries(result.history).map(([name, data]) => <div key={name} className="rounded-lg bg-base p-3">
-        <p className="text-[11px] text-muted">{name === 'hrp' ? 'HRP 配置' : '等权对照'} · 累计收益</p>
-        <p className="mt-1 font-mono text-xl font-semibold">{pct(data.return)}</p>
-        <p className="mt-2 text-[11px] text-muted">最大回撤 <span className="font-mono text-secondary">{pct(data.drawdown)}</span></p>
-      </div>)}
+      {([method, 'equal'] as const).map(model => {
+        const data = model === 'equal' ? result.history.equal : primaryHistory
+        return <div key={model} className="rounded-lg bg-base p-3">
+          <p className="text-[11px] text-muted">{modelLabel(model)} · 累计收益</p>
+          <p className="mt-1 font-mono text-xl font-semibold">{pct(data.return)}</p>
+          {initialCapital != null && <>
+            <p className="mt-2 text-[11px] text-muted">期末资产 <span className="font-mono text-secondary">{money.format(initialCapital * (1 + data.return))}</span></p>
+            <p className="mt-1 text-[11px] text-muted">累计盈亏 <span className="font-mono text-secondary">{money.format(initialCapital * data.return)}</span></p>
+          </>}
+          <p className="mt-2 text-[11px] text-muted">最大回撤 <span className="font-mono text-secondary">{pct(data.drawdown)}</span></p>
+        </div>
+      })}
     </div>
     <div ref={ref} className="h-64 w-full px-2 pb-3" />
   </section>
@@ -68,8 +89,8 @@ export default function AssetAllocation() {
   const [portfolioMenuOpen, setPortfolioMenuOpen] = useState(false)
   const [configNameDialog, setConfigNameDialog] = useState<'create' | 'rename' | null>(null)
   const [configNameInput, setConfigNameInput] = useState('')
+  const [initialCapitalInput, setInitialCapitalInput] = useState('')
   const portfolioMenuRef = useRef<HTMLDivElement>(null)
-  const newConfigNameRef = useRef<HTMLInputElement>(null)
   const initialPortfolioHandled = useRef(false)
   const portfolioInteraction = useRef(false)
   const [tab, setTab] = useState<'configure' | 'tracking' | 'backtest'>('configure')
@@ -84,8 +105,22 @@ export default function AssetAllocation() {
   const [fee, setFee] = useState(0)
   const [slippage, setSlippage] = useState(0)
   const search = useQuery({ queryKey: QK.etfPool({ page: 1, pageSize: 20, category: '', q }), queryFn: () => api.etfPool({ page: 1, pageSize: 20, category: '', q }), enabled: q.trim().length > 0 })
+  const watchlist = useQuery({ queryKey: QK.watchlist, queryFn: () => api.watchlistList(), staleTime: 30_000 })
+  const watchlistEntries = useMemo(
+    () => (watchlist.data?.symbols ?? []).filter(entry => entry.asset_type === 'etf'),
+    [watchlist.data],
+  )
+  const watchlistCounts = useMemo(() => {
+    const counts: Record<string, number> = { ungrouped: 0 }
+    for (const entry of watchlistEntries) {
+      const groups = entry.group_ids ?? []
+      if (groups.length === 0) counts.ungrouped += 1
+      else for (const groupId of groups) counts[groupId] = (counts[groupId] ?? 0) + 1
+    }
+    return counts
+  }, [watchlistEntries])
   const names = useQuery({ queryKey: QK.instrumentNames(draft.symbols), queryFn: () => api.instrumentNames(draft.symbols), enabled: draft.symbols.length > 0 && typeof api.instrumentNames === 'function' })
-  const nameOf = (symbol: string) => names.data?.names[symbol] ?? search.data?.rows.find(row => row.symbol === symbol)?.name ?? result?.names[symbol] ?? symbol
+  const nameOf = (symbol: string) => names.data?.names[symbol] ?? watchlistEntries.find(entry => entry.symbol === symbol)?.name ?? search.data?.rows.find(row => row.symbol === symbol)?.name ?? result?.names[symbol] ?? symbol
   useEffect(() => {
     if (!portfolioMenuOpen) return
     const closeOnOutsideClick = (event: MouseEvent) => {
@@ -105,6 +140,15 @@ export default function AssetAllocation() {
     if (userInitiated) portfolioInteraction.current = true
     setDraft(next); setResult(undefined); setBacktest(undefined); setError(''); setNotice('')
   }
+  function importFromWatchlist(groupId: string | null) {
+    const entries = groupId === 'all'
+      ? watchlistEntries
+      : groupId == null
+        ? watchlistEntries.filter(entry => !(entry.group_ids?.length))
+        : watchlistEntries.filter(entry => !!entry.group_ids?.includes(groupId))
+    if (entries.length === 0) return
+    update({ ...draft, symbols: Array.from(new Set([...draft.symbols, ...entries.map(entry => entry.symbol)])) })
+  }
   function selectPortfolio(key: string, automatic = false) {
     if (!automatic) portfolioInteraction.current = true
     const next = key ? { ...portfolios.data![key] } : { ...initial }
@@ -115,11 +159,20 @@ export default function AssetAllocation() {
     const name = configNameInput.trim()
     if (!name) return
     if (configNameDialog === 'create') {
-      setId(''); setQ(''); setPortfolioMenuOpen(false); setTab('configure')
-      update({ ...initial, name })
-    } else {
-      update({ ...draft, name })
+      const initialCapital = Number(initialCapitalInput)
+      if (!validCapital(initialCapital)) return
+      const next = { ...initial, name, initial_capital: initialCapital }
+      const key = crypto.randomUUID()
+      setId(key); setQ(''); setPortfolioMenuOpen(false); setTab('configure')
+      update(next)
+      setConfigNameDialog(null)
+      void action(async () => {
+        client.setQueryData(QK.allocationPortfolios, await api.allocationSave(key, next))
+        toast('配置已创建并保存，可随时打开并重新计算。', 'success')
+      })
+      return
     }
+    update({ ...draft, name })
     setConfigNameDialog(null)
   }
   useEffect(() => {
@@ -129,6 +182,7 @@ export default function AssetAllocation() {
     const entries = Object.entries(portfolios.data || {})
     if (!entries.length) {
       setConfigNameInput('')
+      setInitialCapitalInput(String(initial.initial_capital))
       setConfigNameDialog('create')
       return
     }
@@ -147,12 +201,17 @@ export default function AssetAllocation() {
     try { await fn() } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
   }
   const saved = id ? portfolios.data?.[id] : undefined
-  const definition = (p: AllocationPortfolio) => JSON.stringify([p.name, p.symbols, p.lookback, p.max_weight, p.auto_refresh ?? false, p.rebalance ?? 'monthly', p.threshold ?? .05])
+  const method = draft.method ?? 'hrp'
+  const resultMethod = result?.parameters.method ?? 'hrp'
+  const backtestMethod = backtest?.parameters.method ?? 'hrp'
+  const definition = (p: AllocationPortfolio) => JSON.stringify([p.name, p.symbols, p.method ?? 'hrp', p.lookback, p.max_weight, p.initial_capital ?? null, p.auto_refresh ?? false, p.rebalance ?? 'monthly', p.threshold ?? .05])
   const dirty = !saved || definition(saved) !== definition(draft)
-  const tracked = !dirty ? tracking.data?.[id] : undefined
+  const recommendation = tracking.data?.[id]
+  const tracked = !dirty && (recommendation?.method ?? 'hrp') === method ? recommendation : undefined
   const refreshTracking = () => client.invalidateQueries({ queryKey: QK.allocationTracking })
   const feasible = draft.symbols.length * draft.max_weight >= 1 - 1e-9
-  const canCalculate = draft.symbols.length > 0 && feasible
+  const capitalReady = id ? draft.initial_capital == null || validCapital(draft.initial_capital) : validCapital(draft.initial_capital)
+  const canCalculate = draft.symbols.length > 0 && feasible && capitalReady
   const failure = error || portfolios.error?.message || tracking.error?.message || search.error?.message
   const datesChanged = () => setBacktest(undefined)
   const tabs = [
@@ -163,7 +222,7 @@ export default function AssetAllocation() {
   return <div className="flex h-full min-h-0 flex-col">
     <PageHeader title="资产配置" className="shrink-0 pl-16 md:pl-5" subtitle="选好 ETF，计算资金配比，再查看调仓建议与历史表现。" right={
       <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
-        <button className={button} disabled={busy} onClick={() => { portfolioInteraction.current = true; setConfigNameInput(''); setConfigNameDialog('create') }}><Plus size={14} />新建配置</button>
+        <button className={button} disabled={busy} onClick={() => { portfolioInteraction.current = true; setConfigNameInput(''); setInitialCapitalInput(String(initial.initial_capital)); setConfigNameDialog('create') }}><Plus size={14} />新建配置</button>
         <div ref={portfolioMenuRef} className="relative flex min-w-0 items-center gap-2">
           <button type="button" className={button + ' w-[132px] justify-between'} aria-label={`配置 ${draft.name || '新配置'}，打开配置列表`} aria-expanded={portfolioMenuOpen} aria-controls={portfolioMenuOpen ? 'allocation-portfolio-menu' : undefined} disabled={busy} onClick={() => { portfolioInteraction.current = true; setPortfolioMenuOpen(open => !open) }}>
             <span className="min-w-0 flex-1 truncate" title={draft.name}>{draft.name || '新配置'}</span><ChevronDown size={14} />
@@ -188,19 +247,32 @@ export default function AssetAllocation() {
             </button>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <button className={button} disabled={busy || !draft.name.trim()} onClick={() => {
+            <button className={button} disabled={busy || !draft.name.trim() || !capitalReady} onClick={() => {
               portfolioInteraction.current = true
               void action(async () => {
                 const key = id || crypto.randomUUID()
-                client.setQueryData(QK.allocationPortfolios, await api.allocationSave(key, draft)); setId(key); setNotice('配置已保存，可随时打开并重新计算。')
+                const updated = await api.allocationSave(key, draft)
+                const methodChanged = saved && (saved.method ?? 'hrp') !== method
+                if (methodChanged) {
+                  await client.cancelQueries({ queryKey: QK.allocationTracking })
+                  client.setQueryData<Record<string, AllocationTracking>>(QK.allocationTracking, previous => {
+                    const next = { ...previous }
+                    delete next[key]
+                    return next
+                  })
+                }
+                client.setQueryData(QK.allocationPortfolios, updated)
+                setId(key)
+                if (methodChanged) void refreshTracking()
+                toast('配置已保存，可随时打开并重新计算。', 'success')
               })
             }}><Save size={14} />保存配置</button>
-            <button aria-label="删除配置" title="删除配置" className={button + ' hover:text-danger'} disabled={busy || !id} onClick={() => action(async () => {
+            <button aria-label="删除配置" title="删除配置" className={button + ' hover:text-danger'} disabled={busy || !id || !saved} onClick={() => action(async () => {
               if (!window.confirm('删除这个已保存配置？')) return
               client.setQueryData(QK.allocationPortfolios, await api.allocationDelete(id)); setId(''); update(initial)
             })}><Trash2 size={14} /></button>
           </div>
-          <p className="w-full text-[11px] text-muted">{portfolios.isLoading ? '加载配置…' : dirty ? '修改尚未保存。可以先试算，保存后才能启用调仓跟踪。' : '配置已保存。修改 ETF 或参数后，请保存并重新计算。'}</p>
+          {(portfolios.isLoading || dirty) && <p className="w-full text-[11px] text-muted">{portfolios.isLoading ? '加载配置…' : '修改尚未保存。可以先试算，保存后才能启用调仓跟踪。'}</p>}
         </section>
         {failure && <div role="alert" className="rounded-lg border border-danger/30 bg-danger/5 p-3 text-xs leading-6 text-danger">{failure}</div>}
         {notice && <div role="status" className="flex items-center gap-2 text-xs text-accent"><Check size={14} />{notice}</div>}
@@ -226,13 +298,46 @@ export default function AssetAllocation() {
                   {!search.isFetching && search.data?.rows.length === 0 && <p className="p-3 text-xs text-muted">没有匹配的 ETF，试试六位代码。</p>}
                 </div>}
               </div>
-              <div><p className="mb-2 text-xs text-muted">已选 ETF <span className="font-mono text-secondary">{draft.symbols.length}</span></p>
+              <div><div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <p className="text-xs text-muted">已选 ETF <span className="font-mono text-secondary">{draft.symbols.length}</span></p>
+                  <button
+                    type="button"
+                    aria-label="清空已选 ETF"
+                    title="清空已选 ETF"
+                    disabled={draft.symbols.length === 0}
+                    onClick={() => update({ ...draft, symbols: [] })}
+                    className="inline-flex items-center gap-1 whitespace-nowrap rounded-input border border-border bg-surface px-1.5 py-1 text-[10px] text-secondary transition-colors hover:border-danger/50 hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <X className="h-2.5 w-2.5" />清空
+                  </button>
+                </div>
+                <WatchlistGroupMenu
+                  onSelect={importFromWatchlist}
+                  disabled={watchlist.isLoading || watchlistEntries.length === 0}
+                  includeAll
+                  counts={watchlistCounts}
+                  total={watchlistEntries.length}
+                  disableEmpty
+                  menuLabel="导入自选ETF分组"
+                  align="right"
+                  triggerClassName="inline-flex items-center gap-1 whitespace-nowrap rounded-input border border-border bg-surface px-2 py-1.5 text-[11px] text-secondary transition-colors hover:border-accent/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                  title="选择自选分组并导入 ETF"
+                  ariaLabel="从自选分组导入 ETF"
+                >
+                  <ListPlus className="h-3 w-3" />
+                  {watchlist.isLoading ? '加载…' : `导入自选ETF(${watchlistEntries.length})`}
+                </WatchlistGroupMenu>
+              </div>
                 {draft.symbols.length ? <div className="divide-y divide-border">{draft.symbols.map(symbol => <div key={symbol} className="flex items-center justify-between gap-2 py-2">
                   <div className="min-w-0"><p className="truncate text-xs font-medium">{nameOf(symbol)}</p><p className="font-mono text-[10px] text-muted">{symbol}</p></div>
                   <button aria-label={`移除 ${symbol}`} className="rounded-md p-1.5 text-muted hover:bg-elevated hover:text-danger" onClick={() => update({ ...draft, symbols: draft.symbols.filter(s => s !== symbol) })}><X size={14} /></button>
                 </div>)}</div> : <div className="rounded-lg border border-dashed border-border p-5 text-center text-xs leading-6 text-muted">搜索并添加 ETF<br />也可以先选择上方已保存的配置。</div>}
               </div>
               <div className="grid grid-cols-2 gap-3">
+                <Field label="初始资金（元）" hint="按权重分配资金，金额需为整数">
+                  <input aria-label="初始资金" className={control + ' font-mono'} type="number" min="1" max="999999999999" step="1" value={draft.initial_capital ?? ''} onChange={e => update({ ...draft, initial_capital: e.target.value === '' ? undefined : Number(e.target.value) })} />
+                </Field>
                 <Field label="回看交易日" hint="252 个交易日约为一年">
                   <input aria-label="回看交易日" className={control + ' font-mono'} type="number" min="2" value={draft.lookback} onChange={e => update({ ...draft, lookback: Number(e.target.value) })} />
                 </Field>
@@ -241,6 +346,11 @@ export default function AssetAllocation() {
                 </Field>
               </div>
               {!feasible && draft.symbols.length > 0 && <p className="rounded-lg bg-warning/10 p-3 text-xs leading-5 text-warning">当前最多配置 {pct(draft.symbols.length * draft.max_weight)}，请增加 ETF 或提高单只上限，使合计可达到 100%。</p>}
+              <Field label="配置方法">
+                <select className={control} value={method} onChange={e => update({ ...draft, method: e.target.value as AllocationMethod })}>
+                  {Object.entries(methods).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+              </Field>
               <button className={primary + ' w-full'} disabled={busy || !canCalculate} onClick={() => action(async () => { setResult(undefined); setResult(await api.allocationCalculate('optimize', draft)) })}>
                 <PieChart size={14} />计算目标仓位<ArrowRight size={14} />
               </button>
@@ -250,9 +360,33 @@ export default function AssetAllocation() {
           <div className="min-w-0 space-y-4">
             {result ? <>
               <section className={card}>
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3"><div><h2 className="text-sm font-semibold">目标仓位</h2><p className="mt-1 text-[11px] text-muted">数据截至 {result.as_of} · 有效收益 {result.samples} 期</p></div><span className="rounded-md bg-accent/10 px-2 py-1 font-mono text-xs text-accent">合计 {pct(result.weights!.reduce((a, b) => a + b, 0))}</span></div>
-                <div className="overflow-x-auto"><table className={table}><thead><tr>{['ETF', 'HRP 目标', '等权对照', '相对等权（百分点）', '波动风险贡献'].map(t => <th key={t}>{t}</th>)}</tr></thead><tbody>{result.parameters.symbols.map((symbol, i) => <tr key={symbol}><td><p>{result.names[symbol] ?? symbol}</p><p className="mt-1 font-mono text-[10px] text-muted">{symbol}</p></td><td className="font-mono font-semibold text-accent">{pct(result.weights![i])}</td><td className="font-mono">{pct(1 / result.parameters.symbols.length)}</td><td className="font-mono">{((result.weights![i] - 1 / result.parameters.symbols.length) * 100).toFixed(2)}</td><td className="font-mono">{pct(result.risk_contribution![i])}</td></tr>)}</tbody></table></div>
-                <p className="border-t border-border p-3 text-[11px] leading-5 text-muted">等权对照将资金平均分给所有 ETF。风险贡献表示各 ETF 对整体波动的影响，负值可体现分散风险的作用。</p>
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
+                  <div>
+                    <h2 className="text-sm font-semibold">目标仓位与等权对照</h2>
+                    <p className="mt-1 text-[11px] text-muted">数据截至 {result.as_of} · 有效收益 {result.samples} 期</p>
+                  </div>
+                  <span className="rounded-md bg-accent/10 px-2 py-1 font-mono text-xs text-accent">合计 {pct(result.weights!.reduce((a, b) => a + b, 0))}</span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className={table} aria-label="目标仓位与等权对照">
+                    <thead><tr>
+                      <th>ETF</th>
+                      <th>{methods[resultMethod]} 目标</th>
+                      {result.target_amounts && <th>{methods[resultMethod]} 金额</th>}
+                      <th>波动风险贡献</th>
+                      <th className="border-l border-border">等权对照</th>
+                      <th>相对等权</th>
+                    </tr></thead>
+                    <tbody>{result.parameters.symbols.map((symbol, i) => <tr key={symbol} className="transition-colors hover:bg-accent/10">
+                      <td><p>{result.names[symbol] ?? symbol}</p><p className="mt-1 font-mono text-[10px] text-muted">{symbol}</p></td>
+                      <td className="font-mono font-semibold text-accent">{pct(result.weights![i])}</td>
+                      {result.target_amounts && <td className="whitespace-nowrap font-mono">{money.format(result.target_amounts[resultMethod]![i])}</td>}
+                      <td className="font-mono">{pct(result.risk_contribution![i])}</td>
+                      <td className="border-l border-border font-mono">{pct(1 / result.parameters.symbols.length)}</td>
+                      <td className="font-mono">{((result.weights![i] - 1 / result.parameters.symbols.length) * 100).toFixed(2)}%</td>
+                    </tr>)}</tbody>
+                  </table>
+                </div>
               </section>
               <Performance title="当前配置历史表现 · 样本内回看" result={result} />
               <p className="text-[11px] leading-5 text-muted">以上使用整个样本期算出的当前权重回看历史。若要评估逐日使用当时数据调仓的效果，请进入“历史回测”。</p>
@@ -266,7 +400,7 @@ export default function AssetAllocation() {
         </div>}
 
         {tab === 'tracking' && <section id="allocation-tracking" role="tabpanel" aria-labelledby="tab-tracking" className={card + ' p-4 sm:p-5 space-y-5'}>
-          <div><h2 className="text-sm font-semibold">跟踪仓位偏离，查看调仓建议</h2><p className="mt-2 text-xs leading-6 text-muted">保存配置 → 更新建议 → 确认模拟基准。后续根据价格、分红和拆分，比较跟踪仓位与新目标。</p></div>
+          <div><h2 className="text-sm font-semibold">跟踪仓位偏离，查看调仓建议</h2><p className="mt-2 text-xs leading-6 text-muted">配置方法：{methods[method]}。保存配置 → 更新建议 → 确认模拟基准。后续根据价格、分红和拆分，比较跟踪仓位与新目标。</p></div>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="rounded-lg bg-base p-4"><label className="flex cursor-pointer items-center gap-3 text-xs font-medium"><input className="accent-accent" type="checkbox" checked={draft.auto_refresh ?? false} onChange={e => update({ ...draft, auto_refresh: e.target.checked })} />每天收盘自动更新建议</label><p className="mt-2 text-[11px] leading-5 text-muted">保存后生效。系统运行时，工作日北京时间 16 点后每 15 分钟检查收盘数据。</p></div>
             <Field label="触发偏离（百分点）" hint="例如 20% 偏离到 25%，差额是 5 个百分点。">
@@ -304,7 +438,7 @@ export default function AssetAllocation() {
               <Field label="滑点（%）" hint="模拟成交价偏差，与费率一起计入成本。"><input aria-label="滑点" className={control} type="number" min="0" step=".01" value={slippage} onChange={e => { setSlippage(Number(e.target.value)); datesChanged() }} /></Field>
               {<Field label="强制减仓触发偏离（百分点）" hint="任意 ETF 偏离达标后，仅将超配持仓减至目标；低配部分等进攻信号。"><input aria-label="回测触发偏离" className={control} type="number" min=".1" max="100" step=".1" value={(draft.threshold ?? .05) * 100} onChange={e => update({ ...draft, threshold: Number(e.target.value) / 100 })} /></Field>}
             </div>
-            <div className="flex flex-wrap items-center gap-3"><button className={primary} disabled={busy || !start || !end || start > end || !canCalculate} onClick={() => action(async () => { setBacktest(undefined); setBacktest(await api.allocationCalculate('backtest', { ...draft, rebalance: 'angel_devil', start, end, fee: fee / 100, slippage: slippage / 100 })) })}><History size={14} />运行历史回测</button><span className="text-[11px] text-muted">{draft.symbols.length} 只 ETF · 回看 {draft.lookback} 个交易日 · 可分割份额估算</span></div>
+            <div className="flex flex-wrap items-center gap-3"><button className={primary} disabled={busy || !start || !end || start > end || !canCalculate} onClick={() => action(async () => { setBacktest(undefined); setBacktest(await api.allocationCalculate('backtest', { ...draft, rebalance: 'angel_devil', start, end, fee: fee / 100, slippage: slippage / 100 })) })}><History size={14} />运行历史回测</button><span className="text-[11px] text-muted">{methods[method]} · {draft.symbols.length} 只 ETF · 回看 {draft.lookback} 个交易日 · 可分割份额估算</span></div>
             {!canCalculate && <p className="text-xs text-warning">请先在“配置仓位”中添加 ETF，并检查单只仓位上限。</p>}
             {start && end && start > end && <p role="alert" className="text-xs text-danger">结束日期应晚于或等于开始日期。</p>}
           </section>
@@ -312,35 +446,37 @@ export default function AssetAllocation() {
             <Performance title="天使魔鬼信号与动态配比回测" result={backtest} />
             <details className={card}><summary className="cursor-pointer px-4 py-3 text-sm font-medium">成交明细 <span className="ml-2 text-xs text-muted">{backtest.trades?.length ?? 0} 条</span></summary>
               <div className="overflow-x-auto border-t border-border"><table className={table}>
-                <thead><tr><th>日期</th><th>方案</th><th>ETF</th><th>操作 / 原因</th><th>收盘成交价</th><th>成交金额 / 初始资金</th><th>成本 / 初始资金</th><th>当日目标</th></tr></thead>
+                <thead><tr><th>日期</th><th>方案</th><th>ETF</th><th>操作 / 原因</th><th>收盘成交价</th><th>成交金额 / 初始资金占比</th><th>成本 / 初始资金占比</th><th>当日目标</th></tr></thead>
                 <tbody>{backtest.trades?.map((t, index) => <tr key={index}>
-                  <td className="whitespace-nowrap font-mono">{t.date}</td><td className="whitespace-nowrap">{t.model === 'hrp' ? 'HRP 配置' : '等权对照'}</td>
+                  <td className="whitespace-nowrap font-mono">{t.date}</td><td className="whitespace-nowrap">{modelLabel(t.model)}</td>
                   <td className="whitespace-nowrap">{t.symbol ? nameOf(t.symbol) : '—'}<p className="font-mono text-[10px] text-muted">{t.symbol}</p></td>
                   <td className="whitespace-nowrap">{t.side === 'buy' ? '买入' : '卖出'} · {{ attack: '进攻信号', retreat: '撤退信号', threshold_reduce: '偏离达标，强制减仓' }[t.reason ?? 'attack']}</td>
-                  <td className="font-mono">{t.price?.toFixed(4)}</td><td className="font-mono">{pct(t.amount ?? 0)}</td><td className="font-mono">{pct(t.cost)}</td>
+                  <td className="font-mono">{t.price?.toFixed(4)}</td><td className="whitespace-nowrap font-mono">{backtest.parameters.initial_capital == null ? '—' : <>{money.format((t.amount ?? 0) * backtest.parameters.initial_capital)} / {pct(t.amount ?? 0)}</>}</td><td className="whitespace-nowrap font-mono">{backtest.parameters.initial_capital == null ? '—' : <>{money.format(t.cost * backtest.parameters.initial_capital)} / {pct(t.cost)}</>}</td>
                   <td className="font-mono">{t.symbol ? pct(t.weights[backtest.parameters.symbols.indexOf(t.symbol)]) : '—'}</td>
                 </tr>)}</tbody>
               </table></div>
             </details>
             <details className={card}><summary className="cursor-pointer px-4 py-3 text-sm font-medium">每日配比与持仓</summary>
               <div className="max-h-80 overflow-auto border-t border-border"><table className={table}>
-                <thead><tr><th>日期</th><th>日线信号</th><th>HRP 目标配比</th><th>HRP 实际持仓</th><th>现金占比</th></tr></thead>
+                <thead><tr><th>日期</th><th>日线信号</th><th>{methods[backtestMethod]} 目标配比</th><th>{methods[backtestMethod]} 实际持仓</th><th>持仓市值</th><th>现金余额</th><th>账户总资产</th></tr></thead>
                 <tbody>{backtest.schedule?.map((day, index) => {
-                  const account = backtest.accounts?.hrp[index]
+                  const account = backtest.accounts?.[backtestMethod]?.[index]
                   return <tr key={day.date}><td className="whitespace-nowrap font-mono">{day.date}</td>
                     <td className="min-w-48">{day.signals.map((signal, j) => signal ? <p key={j}>{nameOf(backtest.parameters.symbols[j])} · {signal === 'attack' ? '进攻' : '撤退'}</p> : null)}{!day.signals.some(Boolean) && '无新信号'}</td>
                     <td className="min-w-52">{day.weights.map((weight, j) => <p key={j}>{nameOf(backtest.parameters.symbols[j])} <span className="font-mono">{pct(weight)}</span></p>)}</td>
                     <td className="min-w-52">{account?.weights.map((weight, j) => <p key={j}>{nameOf(backtest.parameters.symbols[j])} <span className="font-mono">{pct(weight)}</span></p>)}</td>
-                    <td className="font-mono">{account ? pct(account.cash / account.value) : '—'}</td>
+                    <td className="whitespace-nowrap font-mono">{account && backtest.parameters.initial_capital != null ? money.format((account.value - account.cash) * backtest.parameters.initial_capital) : '—'}</td>
+                    <td className="whitespace-nowrap font-mono">{account && backtest.parameters.initial_capital != null ? money.format(account.cash * backtest.parameters.initial_capital) : '—'}</td>
+                    <td className="whitespace-nowrap font-mono">{account && backtest.parameters.initial_capital != null ? money.format(account.value * backtest.parameters.initial_capital) : '—'}</td>
                   </tr>
                 })}</tbody>
               </table></div>
             </details>
-          </> : <div className={card + ' flex items-start gap-3 p-5 text-muted'}><Clock3 size={18} className="mt-0.5 shrink-0" /><p className="text-xs leading-6">设置区间后运行回测，即可查看信号成交、每天的目标与实际仓位、现金及净值。HRP 与等权对照使用相同信号和收盘成交规则。</p></div>}
+          </> : <div className={card + ' flex items-start gap-3 p-5 text-muted'}><Clock3 size={18} className="mt-0.5 shrink-0" /><p className="text-xs leading-6">设置区间后运行回测，即可查看信号成交、每天的目标与实际仓位、现金及净值。{methods[method]} 与等权对照使用相同信号和收盘成交规则。</p></div>}
         </div>}
       </fieldset>
     </div>
-    {configNameDialog && <Modal onClose={() => setConfigNameDialog(null)} labelledBy="allocation-config-name-title" initialFocusRef={newConfigNameRef} panelClassName="w-[92vw] max-w-xl max-h-[88vh] rounded-xl border border-border bg-surface shadow-xl">
+    {configNameDialog && <Modal onClose={() => setConfigNameDialog(null)} labelledBy="allocation-config-name-title" autoFocus={false} panelClassName="w-[92vw] max-w-xl max-h-[88vh] rounded-xl border border-border bg-surface shadow-xl">
       <form onSubmit={event => { event.preventDefault(); submitConfigName() }}>
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <h2 id="allocation-config-name-title" className="flex items-center gap-2 text-sm font-semibold">
@@ -353,12 +489,16 @@ export default function AssetAllocation() {
         </div>
         <div className="max-h-[calc(88vh-4rem)] overflow-y-auto p-4">
           <label className="block text-xs font-medium text-secondary"><span className="mb-2 block">配置名称</span>
-            <input ref={newConfigNameRef} aria-label={configNameDialog === 'create' ? '新建配置名称' : '配置名称'} className={control} value={configNameInput} maxLength={100} required onChange={e => setConfigNameInput(e.target.value)} placeholder="输入配置名称" />
+            <input aria-label={configNameDialog === 'create' ? '新建配置名称' : '配置名称'} className={control} value={configNameInput} maxLength={100} required onChange={e => setConfigNameInput(e.target.value)} placeholder="输入配置名称" />
           </label>
+          {configNameDialog === 'create' && <label className="mt-4 block text-xs font-medium text-secondary"><span className="mb-2 block">初始资金（元）</span>
+            <input aria-label="新建初始资金" className={control + ' font-mono'} type="number" min="1" max="999999999999" step="1" value={initialCapitalInput} required onChange={e => setInitialCapitalInput(e.target.value)} placeholder="例如 100000" />
+            <span className="mt-2 block text-[11px] leading-5 text-muted">填写正整数，默认 100,000 元。</span>
+          </label>}
         </div>
         <div className="flex justify-end gap-2 border-t border-border px-5 py-3">
           <button type="button" className={button} onClick={() => setConfigNameDialog(null)}>取消</button>
-          <button type="submit" className={primary} disabled={!configNameInput.trim()}>{configNameDialog === 'create' ? '创建配置' : '确认'}</button>
+          <button type="submit" className={primary} disabled={!configNameInput.trim() || (configNameDialog === 'create' && !validCapital(Number(initialCapitalInput)))}>{configNameDialog === 'create' ? '创建配置' : '确认'}</button>
         </div>
       </form>
     </Modal>}

@@ -5,17 +5,38 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import AssetAllocation from './AssetAllocation'
 
-const calls = vi.hoisted(() => ({ calculations: 0, payloads: [] as { mode: string; body: Record<string, unknown> }[] }))
+const calls = vi.hoisted(() => ({
+  calculations: 0,
+  payloads: [] as { mode: string; body: Record<string, unknown> }[],
+  saved: [] as { id: string; body: Record<string, unknown> }[],
+  messages: [] as { message: string; kind: string }[],
+}))
 vi.mock('echarts', () => ({ init: () => ({ setOption() {}, resize() {}, dispose() {} }) }))
+vi.mock('@/components/Toast', () => ({ toast: (message: string, kind = 'error') => calls.messages.push({ message, kind }) }))
 vi.mock('@/lib/api', () => ({ api: {
   instrumentNames: async () => ({ names: { '510300.SH': '沪深300 ETF' } }),
+  watchlistList: async () => ({ symbols: [] }),
+  watchlistGroups: async () => ({ groups: [] }),
   allocationTracking: async () => ({}),
-  allocationPortfolios: async () => ({ one: { name: '已保存', symbols: ['510300.SH'], lookback: 126, max_weight: 1 } }),
+  allocationPortfolios: async () => ({ one: { name: '已保存', symbols: ['510300.SH'], lookback: 126, max_weight: 1, initial_capital: 100000 } }),
+  allocationSave: async (id: string, body: Record<string, unknown>) => {
+    calls.saved.push({ id, body })
+    return { [id]: body }
+  },
   allocationCalculate: async (mode: string, body: Record<string, unknown>) => {
     calls.calculations++
     calls.payloads.push({ mode, body })
     const history = { return: .1, drawdown: -.05, points: [{ date: '2026-01-01', value: 1 }, { date: '2026-11-06', value: 1.1 }] }
-    return { weights: [1], risk_contribution: [1], parameters: { symbols: ['510300.SH'] }, history: { hrp: history, equal: history },
+    const initialCapital = Number(body.initial_capital)
+    const method = String(body.method ?? 'hrp')
+    const account = [{ date: '2026-06-01', cash: .2, value: 1.1, weights: [.8], target: [1] }]
+    const backtestData = mode === 'backtest' ? {
+      trades: [{ model: method, date: '2026-06-01', symbol: '510300.SH', side: 'buy', reason: 'attack', price: 1, amount: .2, cost: .001, weights: [1] }],
+      schedule: [{ date: '2026-06-01', signals: ['attack'], weights: [1] }],
+      accounts: { [method]: account, equal: account },
+    } : {}
+    return { weights: [1], risk_contribution: [1], target_amounts: Number.isFinite(initialCapital) ? { [method]: [initialCapital], equal: [initialCapital] } : undefined,
+      parameters: { ...body, method, symbols: ['510300.SH'] }, history: { [method]: history, equal: history }, ...backtestData,
       as_of: '2026-11-06', samples: 126, names: { '510300.SH': '沪深300 ETF' }, engine_version: '7.4.1' }
   },
 } }))
@@ -27,8 +48,10 @@ beforeEach(async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, ResizeObserver: class { observe() {} disconnect() {} } })
   calls.calculations = 0
   calls.payloads = []
+  calls.saved = []
+  calls.messages = []
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  client.setQueryData(['allocation-portfolios'], { one: { name: '已保存', symbols: ['510300.SH'], lookback: 126, max_weight: 1 } })
+  client.setQueryData(['allocation-portfolios'], { one: { name: '已保存', symbols: ['510300.SH'], lookback: 126, max_weight: 1, initial_capital: 100000 } })
   host = document.createElement('div')
   document.body.append(host)
   root = createRoot(host)
@@ -36,7 +59,7 @@ beforeEach(async () => {
 })
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove() })
 const click = async (label: string) => {
-  const button = [...host.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent?.trim() === label)!
+  const button = [...document.body.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent?.trim() === label)!
   expect(button).toBeTruthy()
   await act(async () => { button.click(); await new Promise(resolve => setTimeout(resolve, 0)) })
 }
@@ -45,6 +68,15 @@ const selectSaved = async () => {
   await act(async () => { currentConfig.click(); await new Promise(resolve => setTimeout(resolve, 0)) })
   const savedConfig = host.querySelector<HTMLButtonElement>('#allocation-portfolio-menu button')!
   await act(async () => { savedConfig.click(); await new Promise(resolve => setTimeout(resolve, 0)) })
+}
+const fill = async (label: string, value: string) => {
+  const input = document.body.querySelector<HTMLInputElement>(`[aria-label="${label}"]`)!
+  expect(input).toBeTruthy()
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  })
 }
 
 it('restores a saved portfolio and displays its ETF and parameters', async () => {
@@ -55,18 +87,17 @@ it('restores a saved portfolio and displays its ETF and parameters', async () =>
 
 it('guides new users and keeps tracking and backtest separate from configuration', async () => {
   await click('新建配置')
-  const configName = host.querySelector<HTMLInputElement>('[aria-label="新建配置名称"]')!
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(configName, '测试配置')
-    configName.dispatchEvent(new Event('input', { bubbles: true }))
-    configName.dispatchEvent(new Event('change', { bubbles: true }))
-  })
+  await fill('新建配置名称', '测试配置')
+  await fill('新建初始资金', '100000')
   await click('创建配置')
+  expect(calls.saved).toHaveLength(1)
+  expect(calls.messages).toEqual([{ message: '配置已创建并保存，可随时打开并重新计算。', kind: 'success' }])
+  expect(host.textContent).not.toContain('配置已创建并保存')
   expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain('配置仓位')
   expect(host.textContent).toContain('先算一组目标仓位')
   expect(host.querySelector<HTMLInputElement>('[aria-label="开始日期"]')).toBeNull()
   await click('调仓跟踪')
-  expect(host.textContent).toContain('请先保存配置，再更新调仓建议')
+  expect(host.textContent).not.toContain('请先保存配置，再更新调仓建议')
   expect([...host.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent?.trim() === '更新调仓建议')?.disabled).toBe(true)
   await click('历史回测')
   expect(host.textContent).toContain('填写 0.02 代表')
@@ -88,26 +119,106 @@ it('keeps selected ETFs across tabs and clears stale calculated results after ed
   expect(host.textContent).not.toContain('100.00%')
 })
 
+it('creates and saves a portfolio with initial capital, then restores the amount', async () => {
+  await click('新建配置')
+  await act(async () => new Promise(resolve => setTimeout(resolve, 25)))
+  expect(document.activeElement).not.toBe(document.body.querySelector('[aria-label="新建配置名称"]'))
+  expect(document.body.querySelector<HTMLInputElement>('[aria-label="新建初始资金"]')?.value).toBe('100000')
+  await fill('新建配置名称', '资金配置')
+  await fill('新建初始资金', '100000.5')
+  expect([...document.body.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent?.trim() === '创建配置')?.disabled).toBe(true)
+  await fill('新建初始资金', '100001')
+  await click('创建配置')
+  expect(host.querySelector<HTMLInputElement>('[aria-label="初始资金"]')?.value).toBe('100001')
+  expect(calls.saved).toHaveLength(1)
+  expect(calls.saved[0].body).toMatchObject({ name: '资金配置', initial_capital: 100001 })
+  const currentConfig = host.querySelector<HTMLButtonElement>('[aria-label^="配置 "]')!
+  await act(async () => { currentConfig.click(); await new Promise(resolve => setTimeout(resolve, 0)) })
+  await act(async () => { host.querySelector<HTMLButtonElement>('#allocation-portfolio-menu button')!.click(); await new Promise(resolve => setTimeout(resolve, 0)) })
+  expect(host.querySelector<HTMLInputElement>('[aria-label="初始资金"]')?.value).toBe('100001')
+})
+
+it('shows target allocations and performance in currency after calculation', async () => {
+  await selectSaved()
+  await click('计算目标仓位')
+  expect(calls.payloads.at(-1)?.body.initial_capital).toBe(100000)
+  expect(host.textContent).toContain('¥100,000.00')
+  expect(host.textContent).toContain('期末资产')
+  expect(host.textContent).toContain('累计盈亏')
+  expect(host.textContent).toContain('最大回撤')
+})
+
+it('clears calculated results when the configured capital changes', async () => {
+  await selectSaved()
+  await click('计算目标仓位')
+  expect(host.textContent).toContain('期末资产')
+  await fill('初始资金', '200000')
+  expect(host.textContent).not.toContain('期末资产')
+  await click('计算目标仓位')
+  expect(calls.payloads.at(-1)?.body.initial_capital).toBe(200000)
+  expect(host.textContent).toContain('¥200,000.00')
+})
+
+it('uses the selected method for estimates, saved tracking and unsaved backtests', async () => {
+  await selectSaved()
+  await click('计算目标仓位')
+  expect(host.textContent).toContain('HRP 金额')
+  const chooseMethod = async (value: string) => {
+    const select = host.querySelector<HTMLSelectElement>('select')!
+    await act(async () => {
+      select.value = value
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+  }
+  await chooseMethod('herc')
+  expect(host.textContent).not.toContain('HRP 金额')
+  await click('计算目标仓位')
+  expect(calls.payloads.at(-1)?.body.method).toBe('herc')
+  expect(host.textContent).toContain('HERC 金额')
+  expect(host.textContent).toContain('HERC 配置 · 累计收益')
+  await click('调仓跟踪')
+  expect(host.textContent).toContain('配置方法：HERC')
+  expect(host.textContent).toContain('请先保存配置，再更新调仓建议')
+  await click('保存配置')
+  expect(calls.saved.at(-1)?.body.method).toBe('herc')
+  expect(host.textContent).not.toContain('请先保存配置，再更新调仓建议')
+  await selectSaved()
+  await click('配置仓位')
+  expect(host.querySelector<HTMLSelectElement>('select')?.value).toBe('herc')
+  await chooseMethod('min_variance')
+  await click('历史回测')
+  await fill('开始日期', '2026-06-01')
+  await fill('结束日期', '2026-11-07')
+  await click('运行历史回测')
+  expect(calls.payloads.at(-1)).toMatchObject({ mode: 'backtest', body: { method: 'min_variance' } })
+  expect(host.textContent).toContain('最小方差 配置 · 累计收益')
+  expect(host.textContent).toContain('最小方差 实际持仓')
+  await click('配置仓位')
+  await chooseMethod('hrp')
+  await click('历史回测')
+  expect(host.textContent).not.toContain('最小方差 实际持仓')
+})
 
 it('runs the fixed Angel Devil close-price rule with explicit fee units', async () => {
   await selectSaved()
   await click('历史回测')
   expect(host.textContent).toContain('首日没有进攻信号就保持现金')
   expect(host.querySelector('[aria-label="调仓规则"]')).toBeNull()
-  const fill = async (label: string, value: string) => {
-    const input = host.querySelector<HTMLInputElement>(`[aria-label="${label}"]`)!
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
-      input.dispatchEvent(new Event('input', { bubbles: true }))
-      input.dispatchEvent(new Event('change', { bubbles: true }))
-    })
-  }
   await fill('开始日期', '2026-06-01')
   await fill('结束日期', '2026-11-07')
   await fill('单边费率', '0.02')
   await click('运行历史回测')
   expect(calls.payloads.at(-1)).toMatchObject({
-    mode: 'backtest', body: { rebalance: 'angel_devil', start: '2026-06-01', end: '2026-11-07', fee: .0002 },
+    mode: 'backtest', body: { initial_capital: 100000, rebalance: 'angel_devil', start: '2026-06-01', end: '2026-11-07', fee: .0002 },
   })
   expect(host.textContent).toContain('天使魔鬼信号与动态配比回测')
+  const tradesSummary = [...document.body.querySelectorAll<HTMLElement>('details summary')].find(summary => summary.textContent?.startsWith('成交明细'))!
+  await act(async () => tradesSummary.click())
+  expect(host.textContent).toContain('¥20,000.00 / 20.00%')
+  expect(host.textContent).toContain('¥100.00 / 0.10%')
+  const accountSummary = [...document.body.querySelectorAll<HTMLElement>('details summary')].find(summary => summary.textContent?.startsWith('每日配比与持仓'))!
+  await act(async () => accountSummary.click())
+  expect(host.textContent).toContain('¥90,000.00')
+  expect(host.textContent).toContain('¥20,000.00')
+  expect(host.textContent).toContain('¥110,000.00')
 })

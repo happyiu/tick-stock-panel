@@ -3,33 +3,50 @@
 
 import json
 import sys
+from contextlib import redirect_stdout
 
 import numpy as np
 import pandas as pd
 import riskfolio as rp
 
+METHOD_LABELS = {"hrp": "HRP", "herc": "HERC", "min_variance": "最小方差"}
 
-def weights(returns, cap):
+
+def weights(returns, cap, method="hrp"):
+    label = METHOD_LABELS[method]
     n = returns.shape[1]
     if n * cap < 1 - 1e-9:
         raise ValueError(f"最多只能配置 {n * cap:.0%}，请提高单只上限或增加标的")
     if n == 1:
         return np.ones(1)
     if (returns.std() <= 1e-12).any():
-        raise ValueError("存在零波动标的，无法计算 HRP")
-    result = rp.HCPortfolio(returns=returns, w_min=0.0, w_max=cap).optimization(
-        model="HRP", codependence="pearson", linkage="single", rm="MV"
-    )
-    if result is None:
-        raise ValueError("HRP 未返回可行结果")
-    w = result.weights.reindex(returns.columns).to_numpy()
+        raise ValueError(f"存在零波动标的，无法计算{label}")
+    try:
+        if method == "min_variance":
+            portfolio = rp.Portfolio(returns=returns, sht=False, upperlng=cap, budget=1.0)
+            portfolio.assets_stats(method_mu="hist", method_cov="hist")
+            result = portfolio.optimization(model="Classic", rm="MV", obj="MinRisk", hist=True)
+        else:
+            portfolio = rp.HCPortfolio(returns=returns, w_min=0.0, w_max=cap)
+            result = portfolio.optimization(
+                model=label, codependence="pearson", linkage="single", rm="MV",
+                k=2 if method == "herc" and n == 2 else None,
+            )
+        if result is None:
+            raise ValueError("未返回可行结果")
+        w = result.weights.reindex(returns.columns).to_numpy()
+    except Exception as exc:
+        raise ValueError(f"{label} 求解失败：{exc}") from exc
     if not (
         np.isfinite(w).all()
         and abs(w.sum() - 1) < 1e-6
         and w.min() >= -1e-7
         and w.max() <= cap + 1e-6
     ):
-        raise ValueError("引擎结果违反仓位约束")
+        raise ValueError(f"{label} 求解结果违反仓位约束")
+    if w.min() < 0:
+        w = w.clip(min=0)
+        w /= w.sum()
     return w
 
 
@@ -56,17 +73,18 @@ def calculate(p):
     if not np.isfinite(returns.to_numpy()).all() or (returns <= -1).any().any():
         raise ValueError("收益序列无效")
     window, cap = p["lookback"], p["max_weight"]
+    method = p.get("method", "hrp")
     if len(returns) < window:
         raise ValueError(f"历史不足，需要 {window + 1} 个收盘价，当前 {len(close)} 个")
     equal = np.ones(len(symbols)) / len(symbols)
     if p["mode"] == "optimize":
         sample = returns.tail(window)
-        w = weights(sample, cap)
+        w = weights(sample, cap, method)
         cov = sample.cov().to_numpy()
         variance = w @ cov @ w
         rc = w * (cov @ w) / variance if variance > 0 else np.zeros(len(w))
         paths = {}
-        for name, allocation in [("hrp", w), ("equal", equal)]:
+        for name, allocation in [(method, w), ("equal", equal)]:
             nav = np.r_[1.0, (1 + sample).cumprod().to_numpy() @ allocation]
             paths[name] = performance(nav, dates[-window - 1 :])
         return {
@@ -80,6 +98,7 @@ def calculate(p):
 
 
 def signal_backtest(p, dates, close, dividend, split, returns, window, cap, equal):
+    method = p.get("method", "hrp")
     start, end = pd.Timestamp(p["start"]), pd.Timestamp(p["end"])
     signals = np.asarray(p.get("signals", []), dtype=object)
     if signals.shape != close.shape or any(
@@ -95,7 +114,10 @@ def signal_backtest(p, dates, close, dividend, split, returns, window, cap, equa
     targets = {}
     for i in formal:
         # User-selected same-close simulation: include this completed day's return.
-        target = weights(returns.iloc[i - window : i], cap)
+        try:
+            target = weights(returns.iloc[i - window : i], cap, method)
+        except ValueError as exc:
+            raise ValueError(f"{dates[i].date()}：{exc}") from exc
         targets[i] = target
         schedules.append(
             {
@@ -106,7 +128,7 @@ def signal_backtest(p, dates, close, dividend, split, returns, window, cap, equa
             }
         )
     rate = p["fee"] + p["slippage"]
-    for model in ("hrp", "equal"):
+    for model in (method, "equal"):
         shares, cash = np.zeros(len(equal)), 1.0
         nav, timeline = [1.0], [dates[formal[0] - 1]]
         daily_accounts = []
@@ -114,7 +136,7 @@ def signal_backtest(p, dates, close, dividend, split, returns, window, cap, equa
             cash += shares @ dividend[i]
             shares *= split[i]
             prices = close[i]
-            target = targets[i] if model == "hrp" else equal
+            target = targets[i] if model == method else equal
             equity = float(cash + shares @ prices)
             amounts = shares * prices
             deviation = float(np.max(np.abs(amounts / equity - target)))
@@ -216,7 +238,8 @@ def signal_backtest(p, dates, close, dividend, split, returns, window, cap, equa
 if __name__ == "__main__":
     for line in sys.stdin:
         try:
-            response = {"result": calculate(json.loads(line))}
+            with redirect_stdout(sys.stderr):
+                response = {"result": calculate(json.loads(line))}
         except Exception as exc:
             response = {"error": str(exc)}
         print(json.dumps(response, allow_nan=False), flush=True)
