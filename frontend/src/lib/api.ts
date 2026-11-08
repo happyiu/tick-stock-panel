@@ -3599,6 +3599,7 @@ export const api = {
   etfRadar: (date = '') => request<EtfRadarResponse>(`/api/kline/etf-pool/radar${date ? `?date=${encodeURIComponent(date)}` : ''}`),
   etfRadarScan: (date = '', force = false) => request<{ job_id: string; date?: string }>(`/api/kline/etf-pool/radar/scan?force=${force}${date ? `&date=${encodeURIComponent(date)}` : ''}`, { method: 'POST' }),
   etfRadarJob: (id: string) => request<{ status: string; error?: string; log: { msg: string }[] }>(`/api/kline/etf-pool/radar/jobs/${encodeURIComponent(id)}`),
+  allocationSchemes: () => request<{ default_scheme_id: string; schemes: Record<string, { name: string; ready: boolean; position_ready?: boolean }> }>('/api/asset-allocation/schemes'),
   allocationTracking: () => request<Record<string, AllocationTracking>>('/api/asset-allocation/tracking'),
   allocationRefresh: (id: string) => request<AllocationTracking>(`/api/asset-allocation/portfolios/${id}/refresh`, { method: 'POST' }),
   allocationConfirm: (id: string, checkedAt: string) => request<AllocationTracking>(`/api/asset-allocation/portfolios/${id}/confirm`, { method: 'POST', body: JSON.stringify({ checked_at: checkedAt }) }),
@@ -5647,14 +5648,13 @@ export interface AnalysisMenu {
 }
 
 
-export type AllocationMethod = 'hrp' | 'herc' | 'min_variance'
-type AllocationModel = AllocationMethod | 'equal'
-type AllocationComparison<T> = { equal: T } & Partial<Record<AllocationMethod, T>>
+type AllocationModel = 'scheme' | 'equal'
+type AllocationComparison<T> = Record<AllocationModel, T>
 
 export interface AllocationPortfolio {
   name: string
   symbols: string[]
-  method?: AllocationMethod
+  scheme_id?: string | null
   initial_capital?: number | null
   lookback: number
   max_weight: number
@@ -5672,12 +5672,15 @@ export interface AllocationResult {
   weights?: number[]
   risk_contribution?: number[]
   target_amounts?: AllocationComparison<number[]>
-  history: AllocationComparison<AllocationPerformance>
+  history?: AllocationComparison<AllocationPerformance>
+  total_position?: number
+  market_score?: number
+  market_regime?: string
+  position_history?: { date: string; score: number | null; regime: string | null; total_position: number | null }[]
   sample_start?: string
   samples: number
   as_of: string
   data_version: string
-  engine_version: string
   parameters: AllocationPortfolio
   names: Record<string, string>
   trades?: { model: AllocationModel; date: string; weights: number[]; turnover: number; cost: number; reason?: string; deviation?: number; symbol?: string; side?: 'buy' | 'sell'; price?: number; amount?: number }[]
@@ -5688,7 +5691,7 @@ export interface AllocationResult {
 
 
 export interface AllocationTracking {
-  method?: AllocationMethod
+  scheme_id?: string | null
   status: 'initial' | 'rebalance' | 'hold' | 'error'
   as_of?: string
   checked_at: string

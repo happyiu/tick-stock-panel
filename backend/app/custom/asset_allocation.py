@@ -1,21 +1,17 @@
 # ruff: noqa: RUF001
-"""Portfolio extension. Repository data stays outside the isolated optimizer."""
+"""ETF allocation schemes, tracking and backtests."""
 
 from __future__ import annotations
 
-import atexit
 import hashlib
 import json
 import math
 import os
-import subprocess
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from datetime import date, timedelta
 from decimal import Decimal
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal
 
@@ -24,6 +20,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 from requests import RequestException
 
+from app.custom import _allocation_calculation
 from app.data_providers import get_provider
 from app.extensions import BACKEND_EXTENSION_API_VERSION, BackendExtensionRegistrar
 from app.market_time import cn_now
@@ -32,8 +29,6 @@ EXTENSION_ID = "portfolio.asset-allocation"
 EXTENSION_API_VERSION = BACKEND_EXTENSION_API_VERSION
 router = APIRouter(prefix="/api/asset-allocation", tags=["asset-allocation"])
 _lock = threading.RLock()
-_engine_lock = threading.RLock()
-_process = None
 _cache = {}
 _events = {}
 
@@ -41,7 +36,7 @@ _events = {}
 class Portfolio(BaseModel):
     name: str = Field(default="新组合", min_length=1, max_length=100)
     symbols: list[str] = Field(default_factory=list)
-    method: Literal["hrp", "herc", "min_variance"] = "hrp"
+    scheme_id: str = Field(default=_allocation_calculation.DEFAULT_SCHEME_ID, min_length=1)
     initial_capital: int | None = Field(default=None, ge=1, lt=1_000_000_000_000)
     lookback: int = Field(default=252, ge=2)
     max_weight: float = Field(default=0.35, gt=0, le=1)
@@ -49,11 +44,16 @@ class Portfolio(BaseModel):
     rebalance: Literal["monthly", "daily_threshold", "angel_devil"] = "monthly"
     threshold: float = Field(default=0.05, gt=0, le=1)
 
+    @field_validator("scheme_id", mode="before")
+    @classmethod
+    def default_scheme(cls, value):
+        return _allocation_calculation.DEFAULT_SCHEME_ID if value is None else value
+
     @field_validator("initial_capital", mode="before")
     @classmethod
     def reject_boolean_capital(cls, value):
         if isinstance(value, bool):
-            raise ValueError("初始资金必须为整数元")
+            raise ValueError("资金必须为整数元")
         return value
 
 
@@ -69,7 +69,7 @@ def allocate_amounts(weights, initial_capital):
     precise_weights = [max(Decimal(0), Decimal(str(weight))) for weight in weights]
     total_weight = sum(precise_weights)
     if total_weight <= 0:
-        raise ValueError("目标权重无效，无法分配初始资金")
+        raise ValueError("目标权重无效，无法分配资金")
     exact_cents = [weight / total_weight * cents for weight in precise_weights]
     amounts = [int(value) for value in exact_cents]
     remainder = cents - sum(amounts)
@@ -77,52 +77,6 @@ def allocate_amounts(weights, initial_capital):
     for index in order[:remainder]:
         amounts[index] += 1
     return [amount / 100 for amount in amounts]
-
-
-def stop_worker():
-    global _process
-    if _process is not None:
-        _process.kill()
-        _process.wait()
-        _process = None
-
-
-atexit.register(stop_worker)
-router.add_event_handler("shutdown", stop_worker)
-
-
-def run_engine(payload):
-    global _process
-    with _engine_lock:
-        if _process is None or _process.poll() is not None:
-            python = os.getenv("ALLOCATION_PYTHON") or str(
-                Path(__file__).resolve().parents[2]
-                / "allocation-engine/.venv"
-                / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-            )
-            if not Path(python).exists():
-                raise ValueError("请先运行 uv sync --project backend/allocation-engine --frozen")
-            _process = subprocess.Popen(
-                [python, str(Path(__file__).with_name("_allocation_worker.py"))],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                text=True,
-            )
-        _process.stdin.write(json.dumps(payload) + "\n")
-        _process.stdin.flush()
-        executor = ThreadPoolExecutor(1)
-        future = executor.submit(_process.stdout.readline)
-        try:
-            line = future.result(timeout=120)
-            response = json.loads(line)
-        except (TimeoutError, ValueError):
-            stop_worker()
-            raise ValueError("配置引擎超时或退出，请重试") from None
-        finally:
-            executor.shutdown(wait=False)
-        if "error" in response:
-            raise ValueError(response["error"])
-        return response["result"]
 
 
 def portfolio_file(request):
@@ -134,6 +88,21 @@ def read_portfolios(request):
     return json.loads(path.read_text()) if path.exists() else {}
 
 
+@router.get("/schemes")
+def schemes():
+    return {
+        "default_scheme_id": _allocation_calculation.DEFAULT_SCHEME_ID,
+        "schemes": {
+            key: {
+                "name": name,
+                "ready": allocate is not None,
+                "position_ready": key in _allocation_calculation.POSITION_ONLY_SCHEMES,
+            }
+            for key, (name, allocate) in _allocation_calculation.SCHEMES.items()
+        },
+    }
+
+
 @router.get("/portfolios")
 def portfolios(request: Request):
     with _lock:
@@ -142,16 +111,17 @@ def portfolios(request: Request):
 
 @router.put("/portfolios/{portfolio_id}")
 def save(portfolio_id: uuid.UUID, body: Portfolio, request: Request):
+    if body.scheme_id not in _allocation_calculation.SCHEMES:
+        raise HTTPException(422, "所选配置方案不可用")
     with _lock:
         items = read_portfolios(request)
         key = str(portfolio_id)
         previous = items.get(key, {})
         record = {**body.model_dump(), "updated_at": cn_now().isoformat()}
-        if previous and previous.get("method", "hrp") != body.method:
-            # Save the reset with the new method in one atomic file replacement.
-            record["method_revision"] = uuid.uuid4().hex
-        elif "method_revision" in previous:
-            record["method_revision"] = previous["method_revision"]
+        revision = previous.get("allocation_revision")
+        if not revision or config_signature(previous) != config_signature(record):
+            revision = uuid.uuid4().hex
+        record["allocation_revision"] = revision
         items[key] = record
         write_portfolios(request, items)
         return items
@@ -163,6 +133,153 @@ def write_portfolios(request, items):
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(items, ensure_ascii=False))
     temporary.replace(path)
+
+
+def market_environment_position_history(request, start=None, end=None):
+    """Return closed daily composite scores and Devil Trader total exposures."""
+    import polars as pl
+
+    from app.services.chart_candles import chart_snapshot
+    from app.services.kline_periods import (
+        aggregate_daily_period,
+        annotate_bar_closure,
+        prepare_native_30m,
+    )
+    from app.services.technical_scoring import score_technical_frame, technical_score_payload
+    from app.services.watchlist_market_trends import angel_devil_signals
+
+    now = cn_now()
+    latest_end = now.date() if now.hour >= 16 else now.date() - timedelta(days=1)
+    requested_start = start or end or latest_end
+    # Keep the same three-year warmup as the market-trend panel so weekly EMA signals converge.
+    history_start = requested_start - timedelta(days=1100)
+    symbol = "000001.SH"
+    state = request.app.state
+    daily = chart_snapshot(state, symbol, "index", "1d", history_start, latest_end).frame
+    if daily.is_empty():
+        daily = state.repo.get_index_daily(symbol, history_start, latest_end)
+    if daily.is_empty():
+        raise ValueError("上证指数日线数据不足，无法计算市场环境得分")
+    if "symbol" not in daily.columns:
+        daily = daily.with_columns(pl.lit(symbol).alias("symbol"))
+    required = {"symbol", "date", "open", "high", "low", "close", "volume"}
+    if not required <= set(daily.columns):
+        raise ValueError("上证指数日线缺少技术评分所需的 OHLCV 数据")
+    daily = (
+        daily.with_columns(pl.col("date").cast(pl.Date, strict=False))
+        .drop_nulls("date")
+        .filter(pl.col("date") <= latest_end)
+        .sort("date")
+    )
+    closed_daily_rows = [
+        row for row in annotate_bar_closure(daily.to_dicts(), "1d", latest_end, now=now)
+        if row["is_closed"]
+    ]
+    if not closed_daily_rows:
+        raise ValueError("上证指数没有可用的完整日线")
+    daily = pl.DataFrame(closed_daily_rows, infer_schema_length=None)
+    technical_rows = technical_score_payload(score_technical_frame(daily, assume_sorted=True))["rows"]
+
+    def signal_events(rows, period):
+        values = angel_devil_signals(rows)
+        width = 16 if period == "30m" else 10
+        return [
+            (str(row["date"]).replace("T", " ")[:width], signal)
+            for row, signal in zip(rows, values, strict=True)
+            if signal is not None
+        ]
+
+    daily_rows = daily.to_dicts()
+    daily_events = signal_events(daily_rows, "1d")
+    weekly_frame = aggregate_daily_period(daily, "1w")
+    weekly_rows = [
+        row for row in annotate_bar_closure(weekly_frame.to_dicts(), "1w", latest_end, now=now)
+        if row["is_closed"]
+    ]
+    weekly_events = signal_events(weekly_rows, "1w")
+
+    minute_start = history_start
+    minute_frame = chart_snapshot(state, symbol, "index", "30m", minute_start, latest_end).frame
+    minute_events = []
+    if not minute_frame.is_empty():
+        minute_rows = prepare_native_30m(minute_frame).to_dicts()
+        minute_rows = [
+            row for row in annotate_bar_closure(minute_rows, "30m", latest_end, now=now)
+            if row["is_closed"]
+        ]
+        minute_events = signal_events(minute_rows, "30m")
+
+    def category(row, category_id):
+        return next((item for item in row.get("categories", []) if item.get("id") == category_id), None)
+
+    def indicator(category_row, indicator_id):
+        return next((item for item in (category_row or {}).get("indicators", []) if item.get("id") == indicator_id), None)
+
+    def valid_score(value):
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and 0 <= value <= 100
+
+    def daily_factor_scores(row):
+        momentum = category(row, "momentum")
+        macd = indicator(momentum, "macd")
+        rsi = indicator(momentum, "rsi")
+        position = category(row, "price_position")
+        atr_values = (indicator(position, "ma20_atr_position") or {}).get("raw_values") or {}
+        macd_values = (macd or {}).get("raw_values") or {}
+        dif, hist, previous_hist = (macd_values.get(key) for key in ("dif", "hist", "previous_hist"))
+        atr = atr_values.get("atr14")
+        macd_score = None
+        if all(isinstance(value, (int, float)) and math.isfinite(value) for value in (dif, hist, previous_hist, atr)) and atr > 0:
+            macd_score = 50 + 50 * (
+                0.5 * math.tanh(2 * hist / atr)
+                + 0.3 * math.tanh(dif / atr)
+                + 0.2 * math.tanh(8 * (hist - previous_hist) / atr)
+            )
+
+        rsi_values = (rsi or {}).get("raw_values") or {}
+        rsi_value = rsi_values.get("rsi14")
+        rsi_score = None
+        if valid_score(rsi_value) and (rsi or {}).get("direction") in {"RISING", "FALLING", "FLAT"}:
+            rsi_score = max(0.0, min(100.0, 50 + 0.8 * (rsi_value - 50)
+                + (10 if rsi["direction"] == "RISING" else -10 if rsi["direction"] == "FALLING" else 0)
+                + (10 if rsi.get("divergence") == "BOTTOM_DIVERGENCE" else -10 if rsi.get("divergence") == "TOP_DIVERGENCE" else 0)))
+
+        volume = category(row, "volume_price")
+        volume_score = volume.get("score") if volume and volume.get("available") is True and volume.get("coverage", 0) >= 100 and valid_score(volume.get("score")) else None
+        return macd_score, rsi_score, volume_score
+
+    def latest(events, cutoff, cursor):
+        while cursor < len(events) and events[cursor][0] <= cutoff:
+            cursor += 1
+        return (events[cursor - 1][1] if cursor else None), cursor
+
+    daily_cursor = weekly_cursor = minute_cursor = 0
+    latest_daily = latest_weekly = latest_minute = None
+    points = []
+    for row in technical_rows:
+        as_of = str(row["as_of"]).replace("T", " ")[:10]
+        if end and as_of > end.isoformat():
+            break
+        latest_daily, daily_cursor = latest(daily_events, as_of, daily_cursor)
+        latest_weekly, weekly_cursor = latest(weekly_events, as_of, weekly_cursor)
+        latest_minute, minute_cursor = latest(minute_events, f"{as_of} 15:00", minute_cursor)
+
+        trend_score = None
+        if latest_weekly is not None and latest_daily is not None:
+            raw_trend = 55 * (latest_weekly == "attack") + 30 * (latest_daily == "attack") + 15 * (0.5 if latest_minute is None else latest_minute == "attack")
+            trend_score = math.floor(raw_trend + 0.5)
+        macd_score, rsi_score, volume_score = daily_factor_scores(row)
+        factors = (trend_score, macd_score, rsi_score, volume_score)
+        score = None if any(value is None for value in factors) else math.floor(
+            trend_score * 0.4 + macd_score * 0.2 + rsi_score * 0.2 + volume_score * 0.2 + 0.5
+        )
+        if start and as_of < start.isoformat():
+            continue
+        position, regime = _allocation_calculation.total_position_for_score(score) if score is not None else (None, None)
+        points.append({"date": as_of, "score": score, "regime": regime, "total_position": position})
+
+    if not points:
+        raise ValueError("所选日期范围内没有完整的市场环境得分")
+    return points
 
 
 @router.delete("/portfolios/{portfolio_id}")
@@ -178,6 +295,8 @@ def delete(portfolio_id: uuid.UUID, request: Request):
 
 
 def prepare(body, repo, mode, basis_date=None):
+    if error := _allocation_calculation.scheme_unavailability(body.scheme_id):
+        raise ValueError(error)
     symbols = body.symbols
     if not symbols or len(set(symbols)) != len(symbols):
         raise ValueError("请选择 ETF，代码不能重复")
@@ -194,6 +313,8 @@ def prepare(body, repo, mode, basis_date=None):
     # The core index supplies the shared exchange-session calendar.
     calendar = repo.get_index_daily("000001.SH", date(2000, 1, 1), end, columns=["date"])
     days = sorted(set(calendar["date"].to_list()))
+    if not days:
+        raise ValueError("交易日历不足，请同步指数历史")
     if basis_date and date.fromisoformat(basis_date) not in days:
         raise ValueError("跟踪基准日期历史缺失，请先补齐数据")
     if mode == "optimize":
@@ -318,7 +439,7 @@ def prepare(body, repo, mode, basis_date=None):
         payload[key] = list(map(list, zip(*arrays, strict=True)))
     if mode == "backtest":
         payload["signals"] = list(map(list, zip(*signals, strict=True)))
-        payload["rule_version"] = "angel_devil_close_v1"
+        payload["rule_version"] = _allocation_calculation.BACKTEST_RULE_VERSION
     return payload
 
 
@@ -328,16 +449,54 @@ def calculate(body, request, mode):
             raise ValueError("请选择有效的回测起止日期")
         if mode == "backtest":
             body = body.model_copy(update={"rebalance": "angel_devil"})
+        if body.scheme_id in _allocation_calculation.POSITION_ONLY_SCHEMES:
+            points = market_environment_position_history(
+                request,
+                start=body.start if mode == "backtest" else None,
+                end=body.end,
+            )
+            if mode == "backtest":
+                unavailable = next((point["date"] for point in points if point["score"] is None), None)
+                if unavailable:
+                    raise ValueError(f"{unavailable} 市场环境评分数据不足，无法回测总仓位")
+            latest_point = points[-1]
+            if latest_point["score"] is None or latest_point["total_position"] is None:
+                raise ValueError(f"{latest_point['date']} 市场环境评分数据不足，无法确定总仓位")
+            position_points = points if mode == "backtest" else [latest_point]
+            signature = hashlib.sha256(json.dumps({
+                "mode": mode,
+                "parameters": body.model_dump(mode="json"),
+                "positions": position_points,
+            }, sort_keys=True).encode()).hexdigest()
+            with _lock:
+                result = _cache.get(signature)
+            if result is None:
+                result = {
+                    "total_position": latest_point["total_position"],
+                    "market_score": latest_point["score"],
+                    "market_regime": latest_point["regime"],
+                    "position_history": position_points,
+                    "samples": len(position_points),
+                    "as_of": latest_point["date"],
+                    "data_version": signature,
+                    "rule_version": "devil_trader_environment_v1",
+                    "parameters": body.model_dump(mode="json"),
+                    "names": {},
+                }
+                with _lock:
+                    if len(_cache) >= 32:
+                        _cache.pop(next(iter(_cache)))
+                    _cache[signature] = result
+            return result
         payload = prepare(body, request.app.state.repo, mode)
         signature = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
         with _lock:
             result = _cache.get(signature)
         if result is None:
-            result = run_engine(payload)
+            result = _allocation_calculation.calculate(payload)
             result.update(
                 {
                     "data_version": signature,
-                    "engine_version": "7.4.1",
                     "event_source": os.getenv("ALLOCATION_ACTION_PROVIDER", "astockdata"),
                     "as_of": payload["dates"][-1],
                     "parameters": body.model_dump(mode="json"),
@@ -346,7 +505,7 @@ def calculate(body, request, mode):
             )
             if body.initial_capital is not None and result.get("weights") is not None:
                 result["target_amounts"] = {
-                    body.method: allocate_amounts(result["weights"], body.initial_capital),
+                    "scheme": allocate_amounts(result["weights"], body.initial_capital),
                     "equal": allocate_amounts(
                         [1 / len(body.symbols)] * len(body.symbols), body.initial_capital
                     ),
@@ -393,15 +552,23 @@ def write_tracking(request, entries):
     temporary.replace(path)
 
 
-def config_signature(body):
+def config_signature(portfolio):
     # Display name and automation switch don't change the tracked holdings.
-    return [body.symbols, body.lookback, body.max_weight, body.threshold]
+    return [
+        portfolio.get("scheme_id"),
+        portfolio.get("symbols"),
+        portfolio.get("lookback", 252),
+        portfolio.get("max_weight", 0.35),
+        portfolio.get("threshold", 0.05),
+    ]
 
 
-def same_tracking_method(entry, portfolio):
+def same_tracking_revision(entry, portfolio):
+    revision = portfolio.get("allocation_revision")
     return (
-        entry.get("method", "hrp") == portfolio.get("method", "hrp")
-        and entry.get("method_revision") == portfolio.get("method_revision")
+        revision is not None
+        and _allocation_calculation.scheme_unavailability(portfolio.get("scheme_id")) is None
+        and entry.get("allocation_revision") == revision
     )
 
 
@@ -425,7 +592,7 @@ def tracking(request: Request):
         return {
             key: entry
             for key, entry in read_tracking(request).items()
-            if key in saved and same_tracking_method(entry, saved[key])
+            if key in saved and same_tracking_revision(entry, saved[key])
         }
 
 
@@ -436,9 +603,11 @@ def refresh_portfolio(portfolio_id, request, require_today=False):
     if raw is None:
         raise HTTPException(404, "组合已删除")
     body = Calculation(**raw)
-    if not same_tracking_method(previous, raw):
+    if error := _allocation_calculation.scheme_unavailability(body.scheme_id):
+        raise HTTPException(422, error)
+    if not same_tracking_revision(previous, raw):
         previous = {}
-    signature = config_signature(body)
+    signature = config_signature(raw)
     basis = previous.get("basis") if previous.get("config") == signature else None
     try:
         payload = prepare(
@@ -446,7 +615,7 @@ def refresh_portfolio(portfolio_id, request, require_today=False):
         )
         if require_today and payload["dates"][-1] != cn_now().date().isoformat():
             raise ValueError(f"今日收盘数据尚未就绪，最新数据截至 {payload['dates'][-1]}")
-        result = run_engine(payload)
+        result = _allocation_calculation.calculate(payload)
         current = tracked_weights(payload, basis) if basis else None
         deviation = (
             max(abs(a - b) for a, b in zip(current, result["weights"], strict=True))
@@ -477,7 +646,7 @@ def refresh_portfolio(portfolio_id, request, require_today=False):
         # A concurrent edit/delete must not publish a result for an old definition.
         if read_portfolios(request).get(portfolio_id) != raw:
             return None
-        record.update(method=body.method, method_revision=raw.get("method_revision"))
+        record.update(scheme_id=body.scheme_id, allocation_revision=raw.get("allocation_revision"))
         entries = read_tracking(request)
         entries[portfolio_id] = record
         write_tracking(request, entries)
@@ -503,12 +672,12 @@ def confirm(portfolio_id: uuid.UUID, body: Confirmation, request: Request):
             not entry
             or entry.get("status") == "error"
             or raw is None
-            or not same_tracking_method(entry, raw)
+            or not same_tracking_revision(entry, raw)
         ):
             raise HTTPException(422, "请先重算组合")
         if entry["checked_at"] != body.checked_at:
             raise HTTPException(409, "建议已经更新，请刷新后确认")
-        if entry["config"] != config_signature(Calculation(**raw)):
+        if entry["config"] != config_signature(raw):
             raise HTTPException(422, "参数已变化，请先重算")
         entry["basis"] = {
             "date": entry["as_of"],
@@ -531,7 +700,11 @@ def refresh_saved(repo):
     with _lock:
         saved = read_portfolios(request)
     for key, raw in saved.items():
-        if raw.get("auto_refresh") and raw.get("symbols"):
+        if (
+            raw.get("auto_refresh")
+            and raw.get("symbols")
+            and _allocation_calculation.scheme_unavailability(raw.get("scheme_id")) is None
+        ):
             refresh_portfolio(key, request, require_today=True)
 
 

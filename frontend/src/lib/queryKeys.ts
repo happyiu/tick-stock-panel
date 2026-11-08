@@ -13,6 +13,7 @@ const indicatorQuerySuffix = (value?: ChartIndicatorRequest) => value?.ids.lengt
 // ===== Query Key 工厂 =====
 
 export const QK = {
+  allocationSchemes: ['allocation-schemes'] as const,
   allocationTracking: ['allocation-tracking'] as const,
   allocationPortfolios: ['allocation-portfolios'] as const,
 

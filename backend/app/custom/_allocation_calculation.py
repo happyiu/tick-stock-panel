@@ -1,53 +1,54 @@
 # ruff: noqa: RUF001
-"""JSON-lines allocation worker, executed by the isolated engine interpreter."""
+"""Allocation schemes and their shared historical simulation."""
 
-import json
-import sys
-from contextlib import redirect_stdout
+from collections.abc import Callable, Sequence
 
 import numpy as np
-import pandas as pd
-import riskfolio as rp
 
-METHOD_LABELS = {"hrp": "HRP", "herc": "HERC", "min_variance": "最小方差"}
+BACKTEST_RULE_VERSION = "angel_devil_scheme_close_v1"
+
+# Map a stable scheme ID to its display name and weight function.
+AllocationFunction = Callable[[list[str], np.ndarray, float], Sequence[float] | np.ndarray]
+DEFAULT_SCHEME_ID = "devil_trader"
+POSITION_ONLY_SCHEMES = frozenset({DEFAULT_SCHEME_ID})
+SCHEMES: dict[str, tuple[str, AllocationFunction | None]] = {
+    DEFAULT_SCHEME_ID: ("魔鬼操盘手", None),
+}
 
 
-def weights(returns, cap, method="hrp"):
-    label = METHOD_LABELS[method]
-    n = returns.shape[1]
-    if n * cap < 1 - 1e-9:
-        raise ValueError(f"最多只能配置 {n * cap:.0%}，请提高单只上限或增加标的")
-    if n == 1:
-        return np.ones(1)
-    if (returns.std() <= 1e-12).any():
-        raise ValueError(f"存在零波动标的，无法计算{label}")
-    try:
-        if method == "min_variance":
-            portfolio = rp.Portfolio(returns=returns, sht=False, upperlng=cap, budget=1.0)
-            portfolio.assets_stats(method_mu="hist", method_cov="hist")
-            result = portfolio.optimization(model="Classic", rm="MV", obj="MinRisk", hist=True)
-        else:
-            portfolio = rp.HCPortfolio(returns=returns, w_min=0.0, w_max=cap)
-            result = portfolio.optimization(
-                model=label, codependence="pearson", linkage="single", rm="MV",
-                k=2 if method == "herc" and n == 2 else None,
-            )
-        if result is None:
-            raise ValueError("未返回可行结果")
-        w = result.weights.reindex(returns.columns).to_numpy()
-    except Exception as exc:
-        raise ValueError(f"{label} 求解失败：{exc}") from exc
-    if not (
-        np.isfinite(w).all()
-        and abs(w.sum() - 1) < 1e-6
-        and w.min() >= -1e-7
-        and w.max() <= cap + 1e-6
+def total_position_for_score(score):
+    if isinstance(score, bool) or not isinstance(score, (int, float)) or not np.isfinite(score) or not 0 <= score <= 100:
+        raise ValueError("市场环境得分不可用，无法确定总仓位")
+    if score < 35:
+        return 0.5, "熊市"
+    if score < 65:
+        return 0.7, "中性"
+    return 0.9, "牛市"
+
+
+def scheme_unavailability(scheme_id):
+    scheme = SCHEMES.get(scheme_id)
+    if scheme is None:
+        return "请选择可用的配置方案"
+    if scheme[1] is None:
+        return f"{scheme[0]}的规则待补充"
+    return None
+
+
+def weights(symbols, returns, cap, scheme_id):
+    if error := scheme_unavailability(scheme_id):
+        raise ValueError(error)
+    label, allocate = SCHEMES[scheme_id]
+    result = np.array(allocate(list(symbols), returns, cap), dtype=float)
+    if (
+        result.shape != (len(symbols),)
+        or not np.isfinite(result).all()
+        or (result < 0).any()
+        or (result > cap + 1e-9).any()
+        or abs(result.sum() - 1) > 1e-9
     ):
-        raise ValueError(f"{label} 求解结果违反仓位约束")
-    if w.min() < 0:
-        w = w.clip(min=0)
-        w /= w.sum()
-    return w
+        raise ValueError(f"{label} 返回的目标仓位违反配置约束")
+    return result
 
 
 def performance(nav, dates):
@@ -56,50 +57,46 @@ def performance(nav, dates):
         "return": float(values[-1] - 1),
         "drawdown": float((values / np.maximum.accumulate(values) - 1).min()),
         "points": [
-            {"date": str(d)[:10], "value": float(v)} for d, v in zip(dates, values, strict=True)
+            {"date": d, "value": float(v)} for d, v in zip(dates, values, strict=True)
         ],
     }
 
 
 def calculate(p):
     symbols = p["symbols"]
-    dates = pd.to_datetime(p["dates"])
+    dates = p["dates"]
     close = np.asarray(p["close"])
     dividend = np.asarray(p["dividend"])
     split = np.asarray(p["split"])
-    returns = pd.DataFrame(
-        (close[1:] * split[1:] + dividend[1:]) / close[:-1] - 1, index=dates[1:], columns=symbols
-    )
-    if not np.isfinite(returns.to_numpy()).all() or (returns <= -1).any().any():
+    returns = (close[1:] * split[1:] + dividend[1:]) / close[:-1] - 1
+    if not np.isfinite(returns).all() or (returns <= -1).any():
         raise ValueError("收益序列无效")
     window, cap = p["lookback"], p["max_weight"]
-    method = p.get("method", "hrp")
     if len(returns) < window:
         raise ValueError(f"历史不足，需要 {window + 1} 个收盘价，当前 {len(close)} 个")
     equal = np.ones(len(symbols)) / len(symbols)
     if p["mode"] == "optimize":
-        sample = returns.tail(window)
-        w = weights(sample, cap, method)
-        cov = sample.cov().to_numpy()
+        sample = returns[-window:]
+        w = weights(symbols, sample, cap, p["scheme_id"])
+        cov = np.atleast_2d(np.cov(sample, rowvar=False))
         variance = w @ cov @ w
         rc = w * (cov @ w) / variance if variance > 0 else np.zeros(len(w))
         paths = {}
-        for name, allocation in [(method, w), ("equal", equal)]:
-            nav = np.r_[1.0, (1 + sample).cumprod().to_numpy() @ allocation]
+        for name, allocation in (("scheme", w), ("equal", equal)):
+            nav = np.r_[1.0, (1 + sample).cumprod(axis=0) @ allocation]
             paths[name] = performance(nav, dates[-window - 1 :])
         return {
             "weights": w.tolist(),
             "risk_contribution": rc.tolist(),
             "history": paths,
-            "sample_start": str(dates[-window - 1].date()),
+            "sample_start": dates[-window - 1],
             "samples": window,
         }
     return signal_backtest(p, dates, close, dividend, split, returns, window, cap, equal)
 
 
 def signal_backtest(p, dates, close, dividend, split, returns, window, cap, equal):
-    method = p.get("method", "hrp")
-    start, end = pd.Timestamp(p["start"]), pd.Timestamp(p["end"])
+    start, end = p["start"], p["end"]
     signals = np.asarray(p.get("signals", []), dtype=object)
     if signals.shape != close.shape or any(
         value not in (None, "attack", "retreat") for value in signals.flat
@@ -115,20 +112,20 @@ def signal_backtest(p, dates, close, dividend, split, returns, window, cap, equa
     for i in formal:
         # User-selected same-close simulation: include this completed day's return.
         try:
-            target = weights(returns.iloc[i - window : i], cap, method)
+            target = weights(p["symbols"], returns[i - window : i], cap, p["scheme_id"])
         except ValueError as exc:
-            raise ValueError(f"{dates[i].date()}：{exc}") from exc
+            raise ValueError(f"{dates[i]}：{exc}") from exc
         targets[i] = target
         schedules.append(
             {
-                "date": str(dates[i].date()),
-                "as_of": str(dates[i].date()),
+                "date": dates[i],
+                "as_of": dates[i],
                 "weights": target.tolist(),
                 "signals": signals[i].tolist(),
             }
         )
     rate = p["fee"] + p["slippage"]
-    for model in (method, "equal"):
+    for model in ("scheme", "equal"):
         shares, cash = np.zeros(len(equal)), 1.0
         nav, timeline = [1.0], [dates[formal[0] - 1]]
         daily_accounts = []
@@ -136,7 +133,7 @@ def signal_backtest(p, dates, close, dividend, split, returns, window, cap, equa
             cash += shares @ dividend[i]
             shares *= split[i]
             prices = close[i]
-            target = targets[i] if model == method else equal
+            target = targets[i] if model == "scheme" else equal
             equity = float(cash + shares @ prices)
             amounts = shares * prices
             deviation = float(np.max(np.abs(amounts / equity - target)))
@@ -199,14 +196,14 @@ def signal_backtest(p, dates, close, dividend, split, returns, window, cap, equa
                     )
             if cash < -1e-8 or (shares < -1e-10).any():
                 raise ValueError("回测资金或份额为负")
-            cash = max(0.0, cash)
+            cash = max(0.0, float(cash))
             value = float(cash + shares @ prices)
             for trade in day_logs:
                 logs.append(
                     {
                         **trade,
                         "model": model,
-                        "date": str(dates[i].date()),
+                        "date": dates[i],
                         "weights": target.tolist(),
                         "turnover": trade["amount"] / equity,
                         "deviation": deviation,
@@ -216,7 +213,7 @@ def signal_backtest(p, dates, close, dividend, split, returns, window, cap, equa
             timeline.append(dates[i])
             daily_accounts.append(
                 {
-                    "date": str(dates[i].date()),
+                    "date": dates[i],
                     "cash": cash,
                     "value": value,
                     "weights": (shares * prices / value).tolist(),
@@ -231,15 +228,5 @@ def signal_backtest(p, dates, close, dividend, split, returns, window, cap, equa
         "samples": window,
         "schedule": schedules,
         "accounts": accounts,
-        "rule_version": "angel_devil_close_v1",
+        "rule_version": BACKTEST_RULE_VERSION,
     }
-
-
-if __name__ == "__main__":
-    for line in sys.stdin:
-        try:
-            with redirect_stdout(sys.stderr):
-                response = {"result": calculate(json.loads(line))}
-        except Exception as exc:
-            response = {"error": str(exc)}
-        print(json.dumps(response, allow_nan=False), flush=True)

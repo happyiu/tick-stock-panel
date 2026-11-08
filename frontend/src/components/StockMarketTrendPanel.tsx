@@ -1,7 +1,13 @@
-import type { MarketTrendComposite } from '@/lib/marketTrendComposite'
-import { useState } from 'react'
+import { useQueries, useQuery } from '@tanstack/react-query'
+import type { KlinePeriod } from '@/lib/api'
+import { DEFAULT_30M_DAYS, defaultKlineRange, klineDailyQueryOptions, klinePeriodQueryOptions } from '@/lib/kline'
+import { assessMarketTrendComposite, type MarketTrendComposite } from '@/lib/marketTrendComposite'
+import { Modal } from '@/components/Modal'
+import { Fragment, useId, useState } from 'react'
 import {
+  MARKET_TREND_PERIODS,
   latestAngelDevilSignal,
+  marketTrendRowsThrough,
   marketTrendAssessment,
   summarizeDailyMarketTrendHistory,
   summarizeThirtyMinuteMarketTrendHistory,
@@ -148,69 +154,166 @@ function MarketTrendHistorySummary({ weeklyItem, dailyItem, thirtyMinuteItem }: 
   )
 }
 
-export function StockMarketTrendPanel({ items, composite, compositeLoading, compositeError, onRefreshComposite }: { items: StockMarketTrendItem[]; composite?: MarketTrendComposite; compositeLoading?: boolean; compositeError?: boolean; onRefreshComposite?: () => void }) {
+export function StockMarketTrendPanel({ items, composite, compositeLoading, compositeError, onRefreshComposite, compact = false }: { items: StockMarketTrendItem[]; composite?: MarketTrendComposite; compositeLoading?: boolean; compositeError?: boolean; onRefreshComposite?: () => void; compact?: boolean }) {
+  const [scoreDetailsOpen, setScoreDetailsOpen] = useState(false)
+  const scoreDetailsTitleId = useId()
   const summaries = items.map(item => ({ ...item, ...latestAngelDevilSignal(item.rows) }))
   const weeklyItem = summaries.find(item => item.period === '1w')
   const dailyItem = summaries.find(item => item.period === '1d')
   const thirtyMinuteItem = summaries.find(item => item.period === '30m')
   const signalFor = (period: MarketTrendPeriod) => summaries.find(item => item.period === period)?.latest?.signal ?? null
   const thirtyMinuteLoading = summaries.find(item => item.period === '30m')?.loading === true
-  const assessment = thirtyMinuteLoading ? null : marketTrendAssessment(signalFor('1w'), signalFor('1d'), signalFor('30m'))
+  const assessment = compact || thirtyMinuteLoading ? null : marketTrendAssessment(signalFor('1w'), signalFor('1d'), signalFor('30m'))
+  const factorRows = composite?.factors.map(factor => <div key={factor.name} className="flex flex-wrap justify-between gap-x-2"><span>{factor.name} · {factor.weight}%</span><span className="font-mono">{factor.score == null ? '数据不足' : `${factor.score.toFixed(1)} × ${factor.weight}% = ${factor.contribution!.toFixed(2)}`}</span></div>)
+  const scoreToggle = composite && <button type="button" className={`${composite.score == null || compositeLoading ? 'cursor-pointer bg-transparent p-0 text-[11px]' : 'inline-flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full border-[3px] border-accent bg-transparent p-0 text-lg'} font-mono text-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent`} aria-label="查看评分明细" aria-haspopup="dialog" onClick={() => setScoreDetailsOpen(true)}>{compositeLoading ? '计算中…' : composite.score == null ? '数据不足' : composite.score}</button>
+  const signalCards = summaries.map((item, index) => {
+    const signal = item.latest
+    const label = PERIOD_LABELS[item.period]
+    const state = item.loading ? '计算中…'
+      : item.error && item.rows.length === 0 ? '加载失败'
+        : item.rows.length === 0 ? '暂无K线'
+          : !item.hasComparableBars ? '样本不足'
+            : signal ? signal.signal === 'attack' ? '进攻' : '撤退' : '暂无交叉'
+    const signalDate = signal ? formatSignalDate(signal.date, item.period) : null
+    return (
+      <Fragment key={item.period}>
+      <div className={compact ? 'min-w-0 flex-1 text-center' : 'min-w-0 rounded border border-border p-2 text-center'}>
+        <div className={compact ? 'flex items-center justify-center gap-1 whitespace-nowrap' : ''}>
+          <span className="text-muted">{label}</span>
+          <strong className={`${compact ? 'min-w-0 truncate' : 'mt-1 block truncate'} ${signal ? signal.signal === 'attack' ? 'text-bull' : 'text-bear' : 'text-secondary'}`}>
+            {state}
+          </strong>
+          {compact && signal && item.changePercent !== null && <span className={`shrink-0 font-mono text-[10px] ${item.changePercent > 0 ? 'text-bull' : item.changePercent < 0 ? 'text-bear' : 'text-muted'}`}>{formatPercent(item.changePercent)}</span>}
+        </div>
+        {signal && <span title={`${signalDate}${compact && item.barCount !== null ? ` · ${item.barCount} k` : ''}`} className={`mt-1 block text-[10px] text-muted ${compact ? 'truncate' : ''}`}>
+          {signalDate}{compact && item.barCount !== null ? ` · ${item.barCount} k` : ''}
+        </span>}
+        {signal && !compact && item.changePercent !== null && (
+          <span className={`mt-1 block truncate text-[10px] ${item.changePercent > 0 ? 'text-bull' : item.changePercent < 0 ? 'text-bear' : 'text-muted'}`}>
+            {item.changePercent > 0 ? '+' : ''}{item.changePercent.toFixed(2)}% · {item.barCount} k
+          </span>
+        )}
+        {item.error && item.rows.length > 0 && <span className="mt-1 block text-[10px] text-muted">刷新失败，保留已有结果</span>}
+        {item.error && item.rows.length === 0 && (
+          <button type="button" className="mt-1 text-accent" onClick={item.retry}>重试</button>
+        )}
+      </div>
+      {compact && index < summaries.length - 1 && <span className="shrink-0 px-2 text-muted" aria-hidden="true">|</span>}
+      </Fragment>
+    )
+  })
 
   return (
-    <section aria-label="市场趋势分析" className="space-y-4 p-3 text-xs leading-relaxed">
-      {composite && <div className="space-y-2 rounded border border-border p-3" aria-label="综合趋势评分">
-        <div className="flex flex-wrap items-center justify-between gap-2"><div><strong>综合趋势分</strong>{onRefreshComposite && <button type="button" className="ml-2 text-[10px] text-accent" onClick={onRefreshComposite} disabled={compositeLoading}>刷新评分</button>}</div><strong className="font-mono text-2xl text-accent">{compositeLoading ? '计算中…' : composite.score == null ? '数据不足' : `${composite.score}/100`}</strong></div>
-        <p className="text-[10px] text-muted">多空强弱评分 · 越高越偏多 · 非上涨概率 · 日线截止 {composite.asOf ?? '—'}</p>
-        {composite.factors.map(factor => <div key={factor.name} className="flex flex-wrap justify-between gap-x-2"><span>{factor.name} · {factor.weight}%</span><span className="font-mono">{factor.score == null ? '数据不足' : `${factor.score.toFixed(1)} × ${factor.weight}% = ${factor.contribution!.toFixed(2)}`}</span></div>)}
-        <p className="text-[10px] text-muted">30F仅提供短周期提示，波段转折以日线结构确认。</p>
+    <section aria-label="市场趋势分析" className={`${compact ? 'space-y-1 px-3 py-2' : 'space-y-4 p-3'} text-xs leading-relaxed`}>
+      {compact ? <>
+        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
+          <div className="flex min-w-0 items-center">{signalCards}</div>
+          <div className="relative flex w-28 shrink-0 items-center justify-center">
+            {composite && <span className="absolute left-0 text-muted" aria-hidden="true">|</span>}
+            {scoreToggle ?? <span className="h-9 w-9" aria-hidden="true" />}
+          </div>
+        </div>
         {compositeError && <p role="status" className="text-muted">刷新失败；已有结果保留，缺失项暂不可计算。</p>}
-      </div>}
-      <div>
-        <h3 className="font-medium text-muted">各周期最近信号</h3>
-        <div className="mt-2 flex min-w-0 items-center gap-2">
-          <h3 className="shrink-0 font-medium text-muted">市场环境</h3>
-          <p className="min-w-0 truncate text-sm font-semibold" title={assessment?.environment}>
-            {assessment?.environment ?? '等待三周期有效信号'}
+        {composite && scoreDetailsOpen && <Modal onClose={() => setScoreDetailsOpen(false)} labelledBy={scoreDetailsTitleId} panelClassName="w-[92vw] max-w-lg rounded-xl border border-border bg-surface shadow-xl">
+          <div className="space-y-4 p-5">
+            <div className="flex items-center justify-between gap-3">
+              <h2 id={scoreDetailsTitleId} className="text-sm font-semibold">评分明细</h2>
+              <button type="button" className="rounded-md px-2 py-1 text-muted hover:bg-elevated hover:text-foreground" aria-label="关闭评分明细" onClick={() => setScoreDetailsOpen(false)}>×</button>
+            </div>
+            <div className="space-y-2">{factorRows}</div>
+          </div>
+        </Modal>}
+      </> : <>
+        {composite && <div className="space-y-2 rounded border border-border p-3" aria-label="综合趋势评分">
+          <div className="flex flex-wrap items-center justify-between gap-2"><div><strong>综合趋势分</strong>{onRefreshComposite && <button type="button" className="ml-2 text-[10px] text-accent" onClick={onRefreshComposite} disabled={compositeLoading}>刷新评分</button>}</div><strong className="font-mono text-2xl text-accent">{compositeLoading ? '计算中…' : composite.score == null ? '数据不足' : `${composite.score}/100`}</strong></div>
+          <p className="text-[10px] text-muted">多空强弱评分 · 越高越偏多 · 非上涨概率 · 日线截止 {composite.asOf ?? '—'}</p>
+          {factorRows}
+          <p className="text-[10px] text-muted">30F仅提供短周期提示，波段转折以日线结构确认。</p>
+          {compositeError && <p role="status" className="text-muted">刷新失败；已有结果保留，缺失项暂不可计算。</p>}
+        </div>}
+        <div>
+          <h3 className="font-medium text-muted">各周期最近信号</h3>
+          <div className="mt-2 flex min-w-0 items-center gap-2">
+            <h3 className="shrink-0 font-medium text-muted">市场环境</h3>
+            <p className="min-w-0 truncate text-sm font-semibold" title={assessment?.environment}>
+              {assessment?.environment ?? '等待三周期有效信号'}
+            </p>
+          </div>
+          <p className="mt-1 text-[11px] text-muted">
+            {assessment?.explanation ?? '周线或日线尚无有效信号，暂不能评分。'}
           </p>
+          <div className="mt-2 grid grid-cols-3 gap-2">{signalCards}</div>
         </div>
-        <p className="mt-1 text-[11px] text-muted">
-          {assessment?.explanation ?? '周线或日线尚无有效信号，暂不能评分。'}
-        </p>
-        <div className="mt-2 grid grid-cols-3 gap-2">
-          {summaries.map(item => {
-            const signal = item.latest
-            const label = PERIOD_LABELS[item.period]
-            const state = item.loading ? '计算中…'
-              : item.error && item.rows.length === 0 ? '加载失败'
-                : item.rows.length === 0 ? '暂无K线'
-                  : !item.hasComparableBars ? '样本不足'
-                    : signal ? signal.signal === 'attack' ? '进攻' : '撤退' : '暂无交叉'
-            return (
-              <div key={item.period} className="min-w-0 rounded border border-border p-2 text-center">
-                <span className="text-muted">{label}</span>
-                <strong className={`mt-1 block truncate ${signal ? signal.signal === 'attack' ? 'text-bull' : 'text-bear' : 'text-secondary'}`}>
-                  {state}
-                </strong>
-                {signal && <span className="mt-1 block truncate text-[10px] text-muted">{formatSignalDate(signal.date, item.period)}</span>}
-                {signal && item.changePercent !== null && (
-                  <span className={`mt-1 block truncate text-[10px] ${item.changePercent > 0 ? 'text-bull' : item.changePercent < 0 ? 'text-bear' : 'text-muted'}`}>
-                    {item.changePercent > 0 ? '+' : ''}{item.changePercent.toFixed(2)}% · {item.barCount} k
-                  </span>
-                )}
-                {item.error && item.rows.length > 0 && <span className="mt-1 block text-[10px] text-muted">刷新失败，保留已有结果</span>}
-                {item.error && item.rows.length === 0 && (
-                  <button type="button" className="mt-1 text-accent" onClick={item.retry}>重试</button>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      </div>
-      {!assessment && <p className="text-[11px] text-muted">{thirtyMinuteLoading
-            ? '正在计算周线、日线和30F最近信号。'
-            : '周线、日线和30F按各自最近的天使魔鬼交叉统计。'}</p>}
-      <MarketTrendHistorySummary weeklyItem={weeklyItem} dailyItem={dailyItem} thirtyMinuteItem={thirtyMinuteItem} />
+        {!assessment && <p className="text-[11px] text-muted">{thirtyMinuteLoading
+          ? '正在计算周线、日线和30F最近信号。'
+          : '周线、日线和30F按各自最近的天使魔鬼交叉统计。'}</p>}
+        <MarketTrendHistorySummary weeklyItem={weeklyItem} dailyItem={dailyItem} thirtyMinuteItem={thirtyMinuteItem} />
+      </>}
     </section>
+  )
+}
+
+export function StockMarketTrendAnalysis({ symbol, asOf, chartPeriod = '1d', periodDays = DEFAULT_30M_DAYS, assetType, compact }: {
+  symbol: string
+  asOf: string
+  chartPeriod?: KlinePeriod
+  periodDays?: number
+  assetType?: 'stock' | 'etf' | 'index'
+  compact?: boolean
+}) {
+  const marketTrendEnd = new Date(`${asOf.slice(0, 10)}T12:00:00`)
+  const marketTrendHistoryRange = defaultKlineRange('1w', marketTrendEnd, periodDays, assetType)
+  const marketTrendQueries = useQueries({
+    queries: MARKET_TREND_PERIODS.map(candidatePeriod => {
+      const historyDays = candidatePeriod === '30m' ? 120 : periodDays
+      return {
+        ...klinePeriodQueryOptions(
+          symbol,
+          candidatePeriod,
+          candidatePeriod === '1d' ? marketTrendHistoryRange : defaultKlineRange(candidatePeriod, marketTrendEnd, historyDays, assetType),
+          historyDays,
+          undefined,
+          false,
+        ),
+        placeholderData: undefined,
+        enabled: !!symbol,
+        staleTime: 30_000,
+      }
+    }),
+  })
+  const marketTrendItems = MARKET_TREND_PERIODS.map((candidatePeriod, index) => {
+    const query = marketTrendQueries[index]
+    return {
+      period: candidatePeriod,
+      rows: marketTrendRowsThrough(query.data?.rows ?? [], candidatePeriod, chartPeriod, asOf).filter(row => row.is_closed === true),
+      loading: query.isLoading && !query.data,
+      error: query.isError,
+      retry: () => { void query.refetch() },
+    }
+  })
+  const marketDailyDate = marketTrendItems.find(item => item.period === '1d')?.rows.at(-1)?.date.slice(0, 10) ?? null
+  const dailyScoreDate = marketDailyDate ?? asOf.slice(0, 10)
+  const marketDailyScoreQuery = useQuery({
+    ...klineDailyQueryOptions(symbol, { start: dailyScoreDate, end: dailyScoreDate }, undefined, true),
+    enabled: !!symbol && !!marketDailyDate,
+    placeholderData: undefined,
+    staleTime: 30_000,
+  })
+  const marketSignals = marketTrendItems.map(item => latestAngelDevilSignal(item.rows).latest?.signal ?? null)
+  const marketOriginal = marketTrendAssessment(marketSignals[0], marketSignals[1], marketSignals[2])
+  const marketDailyScore = marketDailyScoreQuery.data?.technical_scores?.rows.find(row => row.as_of === marketDailyDate)
+  const marketComposite = assessMarketTrendComposite(marketOriginal?.score ?? null, marketDailyScore, undefined, marketDailyDate)
+  return (
+    <StockMarketTrendPanel
+      items={marketTrendItems}
+      composite={marketComposite}
+      compositeLoading={marketTrendQueries.some(query => query.isLoading) || marketDailyScoreQuery.isLoading}
+      compositeError={marketTrendQueries.some(query => query.isError) || marketDailyScoreQuery.isError}
+      onRefreshComposite={() => {
+        marketTrendQueries.forEach(query => { void query.refetch() })
+        if (marketDailyDate) void marketDailyScoreQuery.refetch()
+      }}
+      compact={compact}
+    />
   )
 }
