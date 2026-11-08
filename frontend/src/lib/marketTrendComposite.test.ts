@@ -1,4 +1,5 @@
-import { calculateMarketTrendScoreSeries, type MarketTrendHistory } from './marketTrend'
+import { calculateMarketTrendScoreSeries, marketTrendAssessment, type MarketTrendHistory } from './marketTrend'
+import allocationScoreSample from './fixtures/allocation_score_sample.json'
 import { expect, it } from 'vitest'
 import type { TechnicalScoreRow } from './api'
 import type { DowAnalysis } from './dow'
@@ -22,6 +23,12 @@ it('combines contributions without intermediate rounding', () => {
   expect(result.factors.map(f => f.score)).toEqual([85, 50, 76, 60])
   expect(result.score).toBe(71) // 34 + 10 + 15.2 + 12
   expect(result.available).toBe(true)
+})
+it('matches the backend ETF score for the same daily factors and absent 30F signal', () => {
+  const daily = allocationScoreSample.daily as unknown as TechnicalScoreRow
+  const trend = marketTrendAssessment('retreat', 'attack', null)
+  expect(trend?.score).toBe(allocationScoreSample.trend_score)
+  expect(assess(trend?.score ?? null, daily, undefined, daily.as_of).score).toBe(allocationScoreSample.composite_score)
 })
 it('uses four factors with 40/20/20/20 weights and ignores missing or changed Dow structure', () => {
   const { daily, dow } = sample()

@@ -26,6 +26,7 @@ from app.services.technical_scoring import (
     TECHNICAL_SCORE_COLUMNS,
     TECHNICAL_SCORE_INTERNAL_COLUMNS,
     TECHNICAL_SCORE_VERSION,
+    TECHNICAL_SCORE_WARMUP_DAYS,
     score_technical_frame,
     technical_score_payload,
 )
@@ -33,10 +34,6 @@ from app.services.technical_scoring import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/kline", tags=["kline"])
-
-# 风险评分需要此前最多250根日K的历史分位; 400个自然日为周末和节假日留出余量.
-_TECHNICAL_SCORE_WARMUP_DAYS = 400
-
 
 def _chart_snapshot(request, symbol, asset_type, period, start, end):
     from app.services.chart_candles import chart_snapshot
@@ -566,7 +563,7 @@ def get_daily(
     stock_name = stock_info.get("name")
 
     score_start = start - timedelta(
-        days=_TECHNICAL_SCORE_WARMUP_DAYS if include_technical_scores else 180,
+        days=TECHNICAL_SCORE_WARMUP_DAYS if include_technical_scores else 180,
     )
     snapshot = _chart_snapshot(request, symbol, asset_type, "1d", score_start, end)
     if not snapshot.frame.is_empty():
@@ -611,7 +608,7 @@ def get_daily(
         try:
             raw = kline_sync.sync_daily_batch(
                 [symbol],
-                count=days + (_TECHNICAL_SCORE_WARMUP_DAYS if include_technical_scores else 30),
+                count=days + (TECHNICAL_SCORE_WARMUP_DAYS if include_technical_scores else 30),
             )
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"TickFlow fetch failed: {exc}") from exc

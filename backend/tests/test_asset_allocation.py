@@ -1,4 +1,6 @@
-from datetime import date
+import json
+from datetime import date, datetime
+from pathlib import Path
 from unittest.mock import Mock
 
 import pandas as pd
@@ -134,8 +136,114 @@ def test_devil_trader_backtest_returns_daily_position_from_each_score(monkeypatc
     backtest = service.calculate(body, Mock(), "backtest")
 
     assert preview["total_position"] == 0.9
+    assert preview["etf_allocations"] == []
+    assert preview["cash_weight"] == 1
+    assert "etf_allocations" not in backtest
     assert backtest["position_history"] == points
     assert [point["total_position"] for point in backtest["position_history"]] == [0.5, 0.7, 0.7, 0.9]
+
+
+@pytest.mark.parametrize(
+    ("scores", "cap", "expected"),
+    [
+        ([30, 20, 80], 0.35, [0.7 * 30 / 130, 0.7 * 20 / 130, 0.35]),
+        ([30, 20, 80], 1, [0.7 * 30 / 130, 0.7 * 20 / 130, 0.7 * 80 / 130]),
+        ([None, 20, 80], 0.35, [0, 0.14, 0.35]),
+        ([0, None], 0.35, [0, 0]),
+        ([], 0.35, []),
+    ],
+)
+def test_devil_trader_allocates_scores_without_redistributing_overflow(scores, cap, expected):
+    symbols = [f"ETF{i}" for i in range(len(scores))]
+    result = _allocation_calculation.score_allocation(symbols, scores, 0.7, cap, 100_000)
+    rows = result["etf_allocations"]
+    assert [row["score"] for row in rows] == scores
+    assert [row["weight"] for row in rows] == pytest.approx(expected)
+    assert result["cash_weight"] == pytest.approx(1 - sum(expected))
+    assert sum(row["amount"] for row in rows) + result["cash_amount"] == pytest.approx(100_000)
+    assert all(row["amount"] / 100_000 <= min(row["weight"], cap) for row in rows)
+    assert sum(row["amount"] for row in rows) / 100_000 <= 0.7
+    if scores == [30, 20, 80] and cap == 0.35:
+        assert [row["amount"] for row in rows] == [16153.84, 10769.23, 35000.0]
+        assert result["cash_amount"] == 38076.93
+
+
+def test_current_etf_score_uses_aligned_closed_inputs_and_matches_frontend(monkeypatch):
+    import polars as pl
+
+    from app.services import technical_scoring, watchlist_market_trends
+
+    sample_path = Path(__file__).parents[2] / "frontend/src/lib/fixtures/allocation_score_sample.json"
+    sample = json.loads(sample_path.read_text())
+    as_of = date.fromisoformat(sample["daily"]["as_of"])
+    prices = pl.DataFrame({
+        "date": [date(2026, 10, 30), date(2026, 11, 5), as_of, date(2026, 11, 9)],
+        "open": [1.0] * 4, "high": [3.0] * 4, "low": [1.0] * 4,
+        "close": [1.0, 1.0, 2.0, 3.0], "volume": [100.0] * 4,
+    })
+    request = Mock()
+    repo = request.app.state.repo
+    repo.get_etf_daily.return_value = prices
+    repo.get_minute_range.return_value = pl.DataFrame()
+    request.app.state.chart_data_service = None
+    monkeypatch.setattr(service, "cn_now", lambda: datetime(2026, 11, 9, 10))
+
+    def daily_categories(frame):
+        assert frame["date"][-1] == as_of
+        assert frame["symbol"].unique().to_list() == ["510300.SH"]
+        return sample["daily"]["categories"]
+
+    def signals(rows):
+        if rows and isinstance(rows[0]["date"], date):
+            assert all(row["date"] <= as_of for row in rows)
+        # Week and day both end in the same bar; their independent signals differ.
+        return [
+            "attack" if row["date"] == as_of and len(rows) == 3 else "retreat"
+            for row in rows
+        ]
+
+    monkeypatch.setattr(technical_scoring, "latest_technical_categories", daily_categories)
+    monkeypatch.setattr(watchlist_market_trends, "angel_devil_signals", signals)
+    assert service.etf_composite_score(request, "510300.SH", as_of) == sample["composite_score"]
+    assert service.etf_composite_score(request, "510300.SH", date(2026, 11, 9)) is None
+    repo.get_etf_daily.return_value = prices.filter(pl.col("date") < as_of)
+    assert service.etf_composite_score(request, "510300.SH", as_of) is None
+
+
+def test_optimize_returns_scores_in_portfolio_order_and_invalidates_on_score_change(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    app.include_router(service.router)
+    repo = app.state.repo = Mock()
+    symbols = ["510300.SH", "512000.SH"]
+    repo.get_etf_symbol_set.return_value = set(symbols)
+    repo.get_name_map.return_value = {symbols[0]: "沪深300"}
+    monkeypatch.setattr(service, "market_environment_position_history", lambda *args, **kwargs: [
+        {"date": "2026-11-06", "score": 37, "regime": "中性", "total_position": 0.7},
+    ])
+    scores = {symbols[0]: 70, symbols[1]: None}
+    score = Mock(side_effect=lambda _request, symbol, as_of: scores[symbol] if as_of == date(2026, 11, 6) else None)
+    monkeypatch.setattr(service, "etf_composite_score", score)
+
+    with TestClient(app) as client:
+        capability = client.get("/api/asset-allocation/schemes").json()["schemes"]["devil_trader"]
+        assert capability["current_weights_ready"] and capability["position_ready"] and not capability["ready"]
+        body = {"symbols": symbols, "max_weight": 0.2}
+        first = client.post("/api/asset-allocation/optimize", json=body).json()
+        assert first["etf_allocations"] == [
+            {"symbol": symbols[0], "score": 70, "weight": 0.2},
+            {"symbol": symbols[1], "score": None, "weight": 0},
+        ]
+        assert first["cash_weight"] == 0.8
+        assert "cash_amount" not in first
+        scores[symbols[1]] = 30
+        second = client.post("/api/asset-allocation/optimize", json=body).json()
+        assert second["cash_weight"] == 0.6
+        assert second["data_version"] != first["data_version"]
+        bad = client.post("/api/asset-allocation/optimize", json={"symbols": [symbols[0]] * 2})
+        assert bad.status_code == 422
 
 
 def test_no_initial_position_or_carried_attack():
@@ -246,10 +354,10 @@ def test_api_and_data_validation(tmp_path, monkeypatch):
         schemes = client.get("/api/asset-allocation/schemes").json()
         assert schemes["default_scheme_id"] == "devil_trader"
         assert schemes["schemes"]["devil_trader"] == {
-            "name": "魔鬼操盘手", "ready": False, "position_ready": True
+            "name": "魔鬼操盘手", "ready": False, "position_ready": True, "current_weights_ready": True
         }
         assert schemes["schemes"]["test"] == {
-            "name": "测试方案", "ready": True, "position_ready": False
+            "name": "测试方案", "ready": True, "position_ready": False, "current_weights_ready": False
         }
         response = client.post("/api/asset-allocation/optimize", json=body)
         assert response.status_code == 200, response.text

@@ -97,6 +97,7 @@ def schemes():
                 "name": name,
                 "ready": allocate is not None,
                 "position_ready": key in _allocation_calculation.POSITION_ONLY_SCHEMES,
+                "current_weights_ready": key in _allocation_calculation.CURRENT_SCORE_SCHEMES,
             }
             for key, (name, allocate) in _allocation_calculation.SCHEMES.items()
         },
@@ -135,50 +136,70 @@ def write_portfolios(request, items):
     temporary.replace(path)
 
 
-def market_environment_position_history(request, start=None, end=None):
-    """Return closed daily composite scores and Devil Trader total exposures."""
+def _composite_scores(request, symbol, asset_type, start=None, end=None):
+    """Score index history or a single ETF on the requested closed trading day."""
     import polars as pl
 
     from app.services.chart_candles import chart_snapshot
     from app.services.kline_periods import (
         aggregate_daily_period,
+        aggregate_minute_30m,
         annotate_bar_closure,
         prepare_native_30m,
     )
-    from app.services.technical_scoring import score_technical_frame, technical_score_payload
+    from app.services.technical_scoring import (
+        TECHNICAL_SCORE_WARMUP_DAYS,
+        latest_technical_categories,
+        score_technical_frame,
+        technical_score_payload,
+    )
     from app.services.watchlist_market_trends import angel_devil_signals
 
     now = cn_now()
     latest_end = now.date() if now.hour >= 16 else now.date() - timedelta(days=1)
+    is_etf = asset_type == "etf"
+    if is_etf:
+        latest_end = min(end, latest_end)
     requested_start = start or end or latest_end
     # Keep the same three-year warmup as the market-trend panel so weekly EMA signals converge.
     history_start = requested_start - timedelta(days=1100)
-    symbol = "000001.SH"
     state = request.app.state
-    daily = chart_snapshot(state, symbol, "index", "1d", history_start, latest_end).frame
-    if daily.is_empty():
-        daily = state.repo.get_index_daily(symbol, history_start, latest_end)
-    if daily.is_empty():
-        raise ValueError("上证指数日线数据不足，无法计算市场环境得分")
-    if "symbol" not in daily.columns:
-        daily = daily.with_columns(pl.lit(symbol).alias("symbol"))
-    required = {"symbol", "date", "open", "high", "low", "close", "volume"}
-    if not required <= set(daily.columns):
-        raise ValueError("上证指数日线缺少技术评分所需的 OHLCV 数据")
-    daily = (
-        daily.with_columns(pl.col("date").cast(pl.Date, strict=False))
-        .drop_nulls("date")
-        .filter(pl.col("date") <= latest_end)
-        .sort("date")
-    )
-    closed_daily_rows = [
-        row for row in annotate_bar_closure(daily.to_dicts(), "1d", latest_end, now=now)
-        if row["is_closed"]
-    ]
+
+    def closed_rows(frame):
+        if not {"date", "open", "high", "low", "close", "volume"} <= set(frame.columns):
+            return []
+        if "symbol" not in frame.columns:
+            frame = frame.with_columns(pl.lit(symbol).alias("symbol"))
+        rows = (
+            frame.with_columns(pl.col("date").cast(pl.Date, strict=False))
+            .filter(pl.col("date").is_between(history_start, latest_end))
+            .sort("date")
+            .to_dicts()
+        )
+        return [row for row in annotate_bar_closure(rows, "1d", latest_end, now=now) if row["is_closed"]]
+
+    snapshot = chart_snapshot(state, symbol, asset_type, "1d", history_start, latest_end).frame
+    closed_daily_rows = closed_rows(snapshot)
+    if is_etf:
+        if not closed_daily_rows or closed_daily_rows[-1]["date"] != end:
+            closed_daily_rows = closed_rows(state.repo.get_etf_daily(symbol, history_start, latest_end))
+        if not closed_daily_rows or closed_daily_rows[-1]["date"] != end:
+            return []
+        if any(
+            value is None or not math.isfinite(value) or value <= 0
+            for value in (closed_daily_rows[-1][key] for key in ("open", "high", "low", "close", "volume"))
+        ):
+            return []
+    elif snapshot.is_empty():
+        closed_daily_rows = closed_rows(state.repo.get_index_daily(symbol, history_start, latest_end))
     if not closed_daily_rows:
-        raise ValueError("上证指数没有可用的完整日线")
+        raise ValueError("上证指数没有可用的完整 OHLCV 日线，无法计算市场环境得分")
     daily = pl.DataFrame(closed_daily_rows, infer_schema_length=None)
-    technical_rows = technical_score_payload(score_technical_frame(daily, assume_sorted=True))["rows"]
+    if is_etf:
+        technical_daily = daily.filter(pl.col("date") >= end - timedelta(days=TECHNICAL_SCORE_WARMUP_DAYS))
+        technical_rows = [{"as_of": str(end), "categories": latest_technical_categories(technical_daily)}]
+    else:
+        technical_rows = technical_score_payload(score_technical_frame(daily, assume_sorted=True))["rows"]
 
     def signal_events(rows, period):
         values = angel_devil_signals(rows)
@@ -189,8 +210,7 @@ def market_environment_position_history(request, start=None, end=None):
             if signal is not None
         ]
 
-    daily_rows = daily.to_dicts()
-    daily_events = signal_events(daily_rows, "1d")
+    daily_events = signal_events(closed_daily_rows, "1d")
     weekly_frame = aggregate_daily_period(daily, "1w")
     weekly_rows = [
         row for row in annotate_bar_closure(weekly_frame.to_dicts(), "1w", latest_end, now=now)
@@ -198,16 +218,26 @@ def market_environment_position_history(request, start=None, end=None):
     ]
     weekly_events = signal_events(weekly_rows, "1w")
 
-    minute_start = history_start
-    minute_frame = chart_snapshot(state, symbol, "index", "30m", minute_start, latest_end).frame
-    minute_events = []
+    # Match the chart's 120-trading-day 30F window for current ETF scores.
+    minute_days = 120
+    minute_start = latest_end - timedelta(days=minute_days * 3 + 20) if is_etf else history_start
+    minute_frame = chart_snapshot(state, symbol, asset_type, "30m", minute_start, latest_end).frame
+    minute_rows = []
     if not minute_frame.is_empty():
         minute_rows = prepare_native_30m(minute_frame).to_dicts()
-        minute_rows = [
-            row for row in annotate_bar_closure(minute_rows, "30m", latest_end, now=now)
-            if row["is_closed"]
-        ]
-        minute_events = signal_events(minute_rows, "30m")
+    elif is_etf:
+        minute = state.repo.get_minute_range([symbol], minute_start, latest_end, asset_type="etf")
+        if not minute.is_empty():
+            minute_rows = aggregate_minute_30m(minute).to_dicts()
+    minute_rows = [
+        row for row in annotate_bar_closure(minute_rows, "30m", latest_end, now=now)
+        if row["is_closed"]
+    ]
+    if is_etf:
+        minute_rows = [row for row in minute_rows if str(row["date"]) <= f"{end} 15:00"]
+        trade_dates = set(sorted({str(row["date"])[:10] for row in minute_rows})[-minute_days:])
+        minute_rows = [row for row in minute_rows if str(row["date"])[:10] in trade_dates]
+    minute_events = signal_events(minute_rows, "30m")
 
     def category(row, category_id):
         return next((item for item in row.get("categories", []) if item.get("id") == category_id), None)
@@ -274,12 +304,25 @@ def market_environment_position_history(request, start=None, end=None):
         )
         if start and as_of < start.isoformat():
             continue
-        position, regime = _allocation_calculation.total_position_for_score(score) if score is not None else (None, None)
-        points.append({"date": as_of, "score": score, "regime": regime, "total_position": position})
+        points.append({"date": as_of, "score": score})
+    return points
 
+
+def market_environment_position_history(request, start=None, end=None):
+    """Return closed daily composite scores and Devil Trader total exposures."""
+    points = _composite_scores(request, "000001.SH", "index", start, end)
     if not points:
         raise ValueError("所选日期范围内没有完整的市场环境得分")
+    for point in points:
+        score = point["score"]
+        position, regime = _allocation_calculation.total_position_for_score(score) if score is not None else (None, None)
+        point.update(total_position=position, regime=regime)
     return points
+
+
+def etf_composite_score(request, symbol, as_of):
+    points = _composite_scores(request, symbol, "etf", start=as_of, end=as_of)
+    return points[-1]["score"] if points else None
 
 
 @router.delete("/portfolios/{portfolio_id}")
@@ -463,10 +506,24 @@ def calculate(body, request, mode):
             if latest_point["score"] is None or latest_point["total_position"] is None:
                 raise ValueError(f"{latest_point['date']} 市场环境评分数据不足，无法确定总仓位")
             position_points = points if mode == "backtest" else [latest_point]
+            preview = mode == "optimize" and body.scheme_id in _allocation_calculation.CURRENT_SCORE_SCHEMES
+            etf_scores = []
+            if preview and body.symbols:
+                if len(set(body.symbols)) != len(body.symbols):
+                    raise ValueError("ETF 代码不能重复")
+                repo = request.app.state.repo
+                unknown = set(body.symbols) - repo.get_etf_symbol_set()
+                if unknown:
+                    raise ValueError(f"非 ETF 或未知代码：{', '.join(sorted(unknown))}")
+                as_of = date.fromisoformat(latest_point["date"])
+                etf_scores = [etf_composite_score(request, symbol, as_of) for symbol in body.symbols]
+            rule_version = "devil_trader_etf_scores_v1" if preview else "devil_trader_environment_v1"
             signature = hashlib.sha256(json.dumps({
                 "mode": mode,
                 "parameters": body.model_dump(mode="json"),
                 "positions": position_points,
+                "etf_scores": etf_scores,
+                "rule_version": rule_version,
             }, sort_keys=True).encode()).hexdigest()
             with _lock:
                 result = _cache.get(signature)
@@ -479,10 +536,17 @@ def calculate(body, request, mode):
                     "samples": len(position_points),
                     "as_of": latest_point["date"],
                     "data_version": signature,
-                    "rule_version": "devil_trader_environment_v1",
+                    "rule_version": rule_version,
                     "parameters": body.model_dump(mode="json"),
                     "names": {},
                 }
+                if preview:
+                    result.update(_allocation_calculation.score_allocation(
+                        body.symbols, etf_scores, latest_point["total_position"],
+                        body.max_weight, body.initial_capital,
+                    ))
+                    if body.symbols:
+                        result["names"] = repo.get_name_map(body.symbols)
                 with _lock:
                     if len(_cache) >= 32:
                         _cache.pop(next(iter(_cache)))

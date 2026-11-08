@@ -19,6 +19,8 @@ import polars as pl
 from app.indicators.pipeline import compute_indicators
 
 TECHNICAL_SCORE_VERSION = "technical-score-v10"
+# Up to 250 historical daily bars for risk percentiles, plus weekends and holidays.
+TECHNICAL_SCORE_WARMUP_DAYS = 400
 
 # 供 API/前端使用的运行时列. 列名带 technical_ 前缀, 避免与策略 score 混淆.
 TECHNICAL_SCORE_COLUMNS = (
@@ -4593,6 +4595,26 @@ def _empty_score_columns(frame: pl.DataFrame) -> pl.DataFrame:
     ])
 
 
+def _prepare_score_frame(frame: pl.DataFrame, assume_sorted: bool) -> pl.DataFrame:
+    sort_columns = [column for column in ("symbol", "date") if column in frame.columns]
+    working = frame if assume_sorted or not sort_columns else frame.sort(sort_columns)
+    missing = _REQUIRED_INDICATORS - set(working.columns)
+    if missing and {"symbol", "date", "open", "high", "low", "close", "volume"} <= set(working.columns):
+        working = compute_indicators(working, needed=_REQUIRED_INDICATORS, assume_sorted=True)
+    return working
+
+
+def latest_technical_categories(frame: pl.DataFrame) -> list[dict]:
+    """Score only the final bar of a sorted, single-symbol frame."""
+    if frame.is_empty():
+        return []
+    records = _prepare_score_frame(frame, assume_sorted=True).to_dicts()
+    index = len(records) - 1
+    return _category_scores(
+        records, index, _build_roc_context(records), obv_values=_obv_series(records, index),
+    )["categories"]
+
+
 def score_technical_frame(
     frame: pl.DataFrame,
     *,
@@ -4605,11 +4627,7 @@ def score_technical_frame(
     """
     if frame.is_empty():
         return _empty_score_columns(frame)
-    sort_columns = [column for column in ("symbol", "date") if column in frame.columns]
-    working = frame if assume_sorted or not sort_columns else frame.sort(sort_columns)
-    missing = _REQUIRED_INDICATORS - set(working.columns)
-    if missing and {"symbol", "date", "open", "high", "low", "close", "volume"} <= set(working.columns):
-        working = compute_indicators(working, needed=_REQUIRED_INDICATORS, assume_sorted=True)
+    working = _prepare_score_frame(frame, assume_sorted)
 
     grouped = working.partition_by("symbol", maintain_order=True) if "symbol" in working.columns else [working]
     all_scores: list[dict[str, float | bool | None]] = []

@@ -2,6 +2,7 @@
 """Allocation schemes and their shared historical simulation."""
 
 from collections.abc import Callable, Sequence
+from decimal import Decimal
 
 import numpy as np
 
@@ -11,6 +12,7 @@ BACKTEST_RULE_VERSION = "angel_devil_scheme_close_v1"
 AllocationFunction = Callable[[list[str], np.ndarray, float], Sequence[float] | np.ndarray]
 DEFAULT_SCHEME_ID = "devil_trader"
 POSITION_ONLY_SCHEMES = frozenset({DEFAULT_SCHEME_ID})
+CURRENT_SCORE_SCHEMES = frozenset({DEFAULT_SCHEME_ID})
 SCHEMES: dict[str, tuple[str, AllocationFunction | None]] = {
     DEFAULT_SCHEME_ID: ("魔鬼操盘手", None),
 }
@@ -24,6 +26,29 @@ def total_position_for_score(score):
     if score < 65:
         return 0.7, "中性"
     return 0.9, "牛市"
+
+
+def score_allocation(symbols, scores, total_position, max_weight, capital):
+    """Allocate against total capital; capped weights and fractional cents stay in cash."""
+    score_sum = sum(score for score in scores if score is not None)
+    budget, cap = Decimal(str(total_position)), Decimal(str(max_weight))
+    weights = [
+        min(cap, budget * score / score_sum) if score is not None and score_sum else Decimal(0)
+        for score in scores
+    ]
+    rows = [
+        {"symbol": symbol, "score": score, "weight": float(weight)}
+        for symbol, score, weight in zip(symbols, scores, weights, strict=True)
+    ]
+    result = {"etf_allocations": rows, "cash_weight": float(1 - sum(weights))}
+    if capital is not None:
+        remaining_cents = capital * 100
+        for row, weight in zip(rows, weights, strict=True):
+            cents = int(weight * capital * 100)
+            row["amount"] = cents / 100
+            remaining_cents -= cents
+        result["cash_amount"] = remaining_cents / 100
+    return result
 
 
 def scheme_unavailability(scheme_id):

@@ -819,6 +819,14 @@ def _raw_frame(count: int = 100, *, slope: float = 0.25, volume: float = 1000.0)
     return pl.DataFrame(rows)
 
 
+def test_latest_categories_match_full_series_for_the_same_ohlcv():
+    from app.services.technical_scoring import latest_technical_categories
+
+    frame = _raw_frame(160)
+    expected = technical_score_payload(score_technical_frame(frame))["rows"][-1]
+    assert latest_technical_categories(frame) == expected["categories"]
+
+
 def _volume_records(closes: list[float], volumes: list[float]) -> list[dict]:
     return [
         {

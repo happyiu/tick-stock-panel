@@ -1,0 +1,18 @@
+{
+  "daily": {
+    "as_of": "2026-11-06",
+    "categories": [
+      {
+        "id": "momentum",
+        "indicators": [
+          {"id": "macd", "raw_values": {"dif": -0.3, "hist": 0.2, "previous_hist": 0.1}},
+          {"id": "rsi", "direction": "RISING", "divergence": "BOTTOM_DIVERGENCE", "raw_values": {"rsi14": 65}}
+        ]
+      },
+      {"id": "price_position", "indicators": [{"id": "ma20_atr_position", "raw_values": {"atr14": 1.5}}]},
+      {"id": "volume_price", "available": true, "coverage": 100, "score": 60, "indicators": []}
+    ]
+  },
+  "trend_score": 38,
+  "composite_score": 55
+}

@@ -38,6 +38,39 @@ function hasPerformanceHistory(result: AllocationResult | undefined): result is 
   return result?.history != null
 }
 
+function ScoreAllocation({ result, totalPosition }: { result: AllocationResult; totalPosition: number }) {
+  const rows = result.etf_allocations
+  const cash = result.cash_weight
+  const showAmounts = result.cash_amount != null
+  return <section className={card} aria-label="魔鬼操盘手总仓位">
+    <div className="flex flex-wrap items-center justify-between gap-4 p-5">
+      <div>
+        <h2 className="text-sm font-semibold">魔鬼操盘手 · 总仓位上限</h2>
+        <p className="mt-1 text-xs text-muted">市场环境得分 {result.market_score} · {result.market_regime} · 截至 {result.as_of}</p>
+        <p className="mt-1 text-[11px] text-muted">环境分 &lt; 35：50% · 35 至 &lt; 65：70% · ≥ 65：90%</p>
+      </div>
+      <strong className="font-mono text-3xl text-accent">{pct(totalPosition)}</strong>
+    </div>
+    {rows && cash != null && <div className="border-t border-border">
+      <div className="flex flex-wrap gap-x-5 gap-y-2 px-5 py-3 text-xs">
+        <span>ETF 合计 <strong className="font-mono">{pct(1 - cash)}</strong></span>
+        <span>现金 <strong className="font-mono">{pct(cash)}</strong>{result.cash_amount != null && <span className="ml-2 font-mono text-muted">{money.format(result.cash_amount)}</span>}</span>
+      </div>
+      {rows.length ? <div className="overflow-x-auto">
+        <table className={tableStyle + ' [&_th]:px-4 [&_td]:px-4'} aria-label="ETF 目标配比">
+          <thead><tr><th>ETF</th><th>综合得分</th><th>目标仓位</th>{showAmounts && <th>目标金额</th>}</tr></thead>
+          <tbody>{rows.map(row => <tr key={row.symbol}>
+            <td>{result.names[row.symbol] ?? row.symbol}<p className="mt-1 font-mono text-[10px] text-muted">{row.symbol}</p></td>
+            <td className="whitespace-nowrap font-mono">{row.score ?? <span className="text-muted">数据不足</span>}</td>
+            <td className="font-mono font-semibold text-accent">{pct(row.weight)}</td>
+            {showAmounts && <td className="whitespace-nowrap font-mono">{row.amount == null ? '—' : money.format(row.amount)}</td>}
+          </tr>)}</tbody>
+        </table>
+      </div> : <p className="px-5 pb-4 text-xs text-muted">添加 ETF 后可计算目标配比。</p>}
+    </div>}
+  </section>
+}
+
 function Performance({ result, title, schemeName }: { result: AllocationResult & { history: NonNullable<AllocationResult['history']> }; title: string; schemeName: string }) {
   const ref = useRef<HTMLDivElement>(null)
   const initialCapital = result.parameters.initial_capital
@@ -216,8 +249,10 @@ export default function AssetAllocation() {
   const scheme = Object.hasOwn(schemeOptions, schemeId) ? schemeOptions[schemeId] : undefined
   const schemeReady = scheme?.ready === true
   const schemePositionReady = scheme?.position_ready === true
+  const currentWeightsReady = scheme?.current_weights_ready === true
   const schemeName = scheme?.name ?? '未选择方案'
   const schemeHint = schemes.isLoading ? '正在加载方案…'
+    : currentWeightsReady ? undefined
     : scheme && schemePositionReady && !schemeReady ? `${schemeName}当前先按环境得分确定总仓位，ETF拆分规则待补充。`
     : scheme && !schemeReady ? `${schemeName}的规则待补充。`
     : !scheme ? '请选择可用的配置方案。' : undefined
@@ -229,7 +264,8 @@ export default function AssetAllocation() {
   const feasible = draft.symbols.length * draft.max_weight >= 1 - 1e-9
   const capitalReady = id ? draft.initial_capital == null || validCapital(draft.initial_capital) : validCapital(draft.initial_capital)
   const canAllocate = draft.symbols.length > 0 && feasible && capitalReady && schemeReady
-  const canCalculate = schemePositionReady || canAllocate
+  const canBacktest = schemePositionReady || canAllocate
+  const canCalculate = currentWeightsReady ? capitalReady && draft.max_weight > 0 && draft.max_weight <= 1 : canBacktest
   const calculateTargets = useCallback(async () => {
     setAllocationCalculating(true)
     try {
@@ -386,7 +422,7 @@ export default function AssetAllocation() {
                   <input aria-label="单只上限" className={control + ' font-mono'} type="number" min="1" max="100" value={draft.max_weight * 100} onChange={e => update({ ...draft, max_weight: Number(e.target.value) / 100 })} />
                 </Field>
               </div>
-              {!feasible && draft.symbols.length > 0 && <p className="rounded-lg bg-warning/10 p-3 text-xs leading-5 text-warning">当前最多配置 {pct(draft.symbols.length * draft.max_weight)}，请增加 ETF 或提高单只上限，使合计可达到 100%。</p>}
+              {!currentWeightsReady && !feasible && draft.symbols.length > 0 && <p className="rounded-lg bg-warning/10 p-3 text-xs leading-5 text-warning">当前最多配置 {pct(draft.symbols.length * draft.max_weight)}，请增加 ETF 或提高单只上限，使合计可达到 100%。</p>}
               <Field label="配置方案" hint={schemeHint}>
                 <select aria-label="配置方案" className={control} value={schemeId} onChange={e => update({ ...draft, scheme_id: e.target.value || null })}>
                   <option value="" disabled>请选择配置方案</option>
@@ -400,19 +436,13 @@ export default function AssetAllocation() {
               <p className="text-[11px] leading-5 text-muted">使用最近完整收盘数据。调整标的或参数后，点击“更新目标仓位”刷新结果。</p>
             </div>
           </section>
-          <div className="min-w-0 space-y-4">
+          <section className="min-w-0 space-y-4" aria-label="仓位结果">
             {allocationCalculating ? <div role="status" className={card + ' flex min-h-[360px] flex-col items-center justify-center px-6 py-12 text-center'}>
               <div className="mb-5 rounded-2xl bg-accent/10 p-4 text-accent"><Loader2 size={28} className="animate-spin" strokeWidth={1.5} /></div>
               <h2 className="text-sm font-semibold">正在计算目标仓位</h2>
               <p className="mt-2 max-w-sm text-xs leading-6 text-muted">正在根据最近完整收盘数据计算，请稍候…</p>
-            </div> : result && result.total_position != null ? <section className={card + ' flex flex-wrap items-center justify-between gap-4 p-5'} aria-label="魔鬼操盘手总仓位">
-              <div>
-                <h2 className="text-sm font-semibold">魔鬼操盘手 · 当前总仓位</h2>
-                <p className="mt-1 text-xs text-muted">市场环境得分 {result.market_score} · {result.market_regime} · 截至 {result.as_of}</p>
-                <p className="mt-1 text-[11px] text-muted">环境分 &lt; 35：50% · 35 至 &lt; 65：70% · ≥ 65：90%</p>
-              </div>
-              <strong className="font-mono text-3xl text-accent">{pct(result.total_position)}</strong>
-            </section> : hasPerformanceHistory(result) && result.weights && result.risk_contribution ? <>
+            </div> : result && result.total_position != null ? <ScoreAllocation result={result} totalPosition={result.total_position} />
+              : hasPerformanceHistory(result) && result.weights && result.risk_contribution ? <>
               <section className={card}>
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
                   <div>
@@ -447,10 +477,10 @@ export default function AssetAllocation() {
               <button className={button} onClick={() => setTab('backtest')}><History size={14} />去做历史回测<ArrowRight size={14} /></button>
             </> : <div className={card + ' flex min-h-[360px] flex-col items-center justify-center px-6 py-12 text-center'}>
               <div className="mb-5 rounded-2xl bg-accent/10 p-4 text-accent"><PieChart size={28} strokeWidth={1.5} /></div>
-              <h2 className="text-sm font-semibold">{result ? '计算结果暂不可用' : schemePositionReady ? '等待总仓位' : '等待目标仓位'}</h2>
-              <p className="mt-2 max-w-sm text-xs leading-6 text-muted">{result ? '请点击“更新目标仓位”重试，或检查配置方案是否完整。' : schemePositionReady ? '加载已保存配置后会自动根据上证指数市场环境得分确定魔鬼操盘手的总仓位；修改配置后可点击“更新目标仓位”。ETF 拆分规则后续补充。' : '选择 ETF 和规则完整的配置方案后会自动计算目标仓位；调整标的或参数后，点击“更新目标仓位”。这里会显示资金配比、风险贡献和历史表现。'}</p>
+              <h2 className="text-sm font-semibold">{result ? '计算结果暂不可用' : schemePositionReady && !currentWeightsReady ? '等待总仓位' : '等待目标仓位'}</h2>
+              <p className="mt-2 max-w-sm text-xs leading-6 text-muted">{result ? '请点击“更新目标仓位”重试，或检查配置方案是否完整。' : currentWeightsReady ? '加载已保存配置后会自动计算仓位。添加 ETF 或调整参数后，点击“更新目标仓位”。' : schemePositionReady ? '加载已保存配置后会自动计算总仓位；修改配置后可点击“更新目标仓位”。' : '选择 ETF 和规则完整的配置方案后会自动计算目标仓位；调整标的或参数后，点击“更新目标仓位”。这里会显示资金配比、风险贡献和历史表现。'}</p>
             </div>}
-          </div>
+          </section>
         </div>}
 
         {tab === 'tracking' && <section id="allocation-tracking" role="tabpanel" aria-labelledby="tab-tracking" className={card + ' p-4 sm:p-5 space-y-5'}>
@@ -461,7 +491,7 @@ export default function AssetAllocation() {
               <input aria-label="触发偏离" className={control} type="number" min=".1" max="100" step=".1" value={(draft.threshold ?? .05) * 100} onChange={e => update({ ...draft, threshold: Number(e.target.value) / 100 })} />
             </Field>
           </div>
-          {schemeHint && <p className="text-xs text-warning">{schemeHint}</p>}
+          {(schemeHint || (currentWeightsReady && !schemeReady)) && <p className="text-xs text-warning">{schemeHint ?? '当前方案暂未开放调仓跟踪。'}</p>}
           {dirty && <p className="rounded-lg bg-warning/10 p-3 text-xs text-warning">请先保存配置，再更新调仓建议。</p>}
           <button className={primary} disabled={busy || dirty || !canAllocate} onClick={() => action(async () => { await api.allocationRefresh(id); await refreshTracking() })}><RefreshCw size={14} />更新调仓建议</button>
           {!tracked && <p className="text-xs text-muted">首次使用，先更新建议，再将目标仓位确认为模拟跟踪基准。</p>}
@@ -495,8 +525,8 @@ export default function AssetAllocation() {
                 <Field label="强制减仓触发偏离（百分点）" hint="任意 ETF 偏离达标后，仅将超配持仓减至目标；低配部分等进攻信号。"><input aria-label="回测触发偏离" className={control} type="number" min=".1" max="100" step=".1" value={(draft.threshold ?? .05) * 100} onChange={e => update({ ...draft, threshold: Number(e.target.value) / 100 })} /></Field>
               </>}
             </div>
-            <div className="flex flex-wrap items-center gap-3"><button className={primary} disabled={busy || !start || !end || start > end || !canCalculate} onClick={() => action(async () => { setBacktest(undefined); setBacktest(await api.allocationCalculate('backtest', { ...draft, scheme_id: schemeId, rebalance: 'angel_devil', start, end, fee: fee / 100, slippage: slippage / 100 })) })}><History size={14} />运行历史回测</button><span className="text-[11px] text-muted">{schemePositionReady ? `${schemeName} · 逐日使用历史环境得分` : `${schemeName} · ${draft.symbols.length} 只 ETF · 回看 ${draft.lookback} 个交易日 · 可分割份额估算`}</span></div>
-            {!canCalculate && <p className="text-xs text-warning">{schemeHint ?? '请先在“配置仓位”中添加 ETF，并检查单只仓位上限。'}</p>}
+            <div className="flex flex-wrap items-center gap-3"><button className={primary} disabled={busy || !start || !end || start > end || !canBacktest} onClick={() => action(async () => { setBacktest(undefined); setBacktest(await api.allocationCalculate('backtest', { ...draft, scheme_id: schemeId, rebalance: 'angel_devil', start, end, fee: fee / 100, slippage: slippage / 100 })) })}><History size={14} />运行历史回测</button><span className="text-[11px] text-muted">{schemePositionReady ? `${schemeName} · 逐日使用历史环境得分` : `${schemeName} · ${draft.symbols.length} 只 ETF · 回看 ${draft.lookback} 个交易日 · 可分割份额估算`}</span></div>
+            {!canBacktest && <p className="text-xs text-warning">{schemeHint ?? '请先在“配置仓位”中添加 ETF，并检查单只仓位上限。'}</p>}
             {start && end && start > end && <p role="alert" className="text-xs text-danger">结束日期应晚于或等于开始日期。</p>}
           </section>
           {backtest?.position_history ? <section className={card}>

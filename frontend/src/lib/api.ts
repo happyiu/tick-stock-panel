@@ -3599,7 +3599,7 @@ export const api = {
   etfRadar: (date = '') => request<EtfRadarResponse>(`/api/kline/etf-pool/radar${date ? `?date=${encodeURIComponent(date)}` : ''}`),
   etfRadarScan: (date = '', force = false) => request<{ job_id: string; date?: string }>(`/api/kline/etf-pool/radar/scan?force=${force}${date ? `&date=${encodeURIComponent(date)}` : ''}`, { method: 'POST' }),
   etfRadarJob: (id: string) => request<{ status: string; error?: string; log: { msg: string }[] }>(`/api/kline/etf-pool/radar/jobs/${encodeURIComponent(id)}`),
-  allocationSchemes: () => request<{ default_scheme_id: string; schemes: Record<string, { name: string; ready: boolean; position_ready?: boolean }> }>('/api/asset-allocation/schemes'),
+  allocationSchemes: () => request<{ default_scheme_id: string; schemes: Record<string, { name: string; ready: boolean; position_ready?: boolean; current_weights_ready?: boolean }> }>('/api/asset-allocation/schemes'),
   allocationTracking: () => request<Record<string, AllocationTracking>>('/api/asset-allocation/tracking'),
   allocationRefresh: (id: string) => request<AllocationTracking>(`/api/asset-allocation/portfolios/${id}/refresh`, { method: 'POST' }),
   allocationConfirm: (id: string, checkedAt: string) => request<AllocationTracking>(`/api/asset-allocation/portfolios/${id}/confirm`, { method: 'POST', body: JSON.stringify({ checked_at: checkedAt }) }),
@@ -5676,6 +5676,9 @@ export interface AllocationResult {
   total_position?: number
   market_score?: number
   market_regime?: string
+  etf_allocations?: { symbol: string; score: number | null; weight: number; amount?: number }[]
+  cash_weight?: number
+  cash_amount?: number
   position_history?: { date: string; score: number | null; regime: string | null; total_position: number | null }[]
   sample_start?: string
   samples: number

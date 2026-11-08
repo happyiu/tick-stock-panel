@@ -7,6 +7,7 @@ import AssetAllocation from './AssetAllocation'
 
 const calls = vi.hoisted(() => ({
   calculations: 0,
+  devilPreview: false,
   daily: vi.fn(async () => ({ rows: [] })),
   period: vi.fn(async () => ({ rows: [] })),
   payloads: [] as { mode: string; body: Record<string, unknown> }[],
@@ -25,13 +26,15 @@ vi.mock('@/lib/api', () => ({ api: {
   allocationSchemes: async () => ({
     default_scheme_id: 'devil_trader',
     schemes: {
-      devil_trader: { name: '魔鬼操盘手', ready: false },
+      devil_trader: { name: '魔鬼操盘手', ready: false, position_ready: calls.devilPreview, current_weights_ready: calls.devilPreview },
       first: { name: '测试方案甲', ready: true },
       second: { name: '测试方案乙', ready: true },
       third: { name: '测试方案丙', ready: true },
     },
   }),
-  allocationPortfolios: async () => ({ one: { name: '已保存', symbols: ['510300.SH'], lookback: 126, max_weight: 1, initial_capital: 100000, scheme_id: 'first' } }),
+  allocationPortfolios: async () => ({ one: calls.devilPreview
+    ? { name: '已保存', symbols: ['510300.SH', '512000.SH', '159992.SZ'], lookback: 126, max_weight: .3, initial_capital: 100000, scheme_id: 'devil_trader' }
+    : { name: '已保存', symbols: ['510300.SH'], lookback: 126, max_weight: 1, initial_capital: 100000, scheme_id: 'first' } }),
   allocationSave: async (id: string, body: Record<string, unknown>) => {
     calls.saved.push({ id, body })
     return { [id]: body }
@@ -39,6 +42,18 @@ vi.mock('@/lib/api', () => ({ api: {
   allocationCalculate: async (mode: string, body: Record<string, unknown>) => {
     calls.calculations++
     calls.payloads.push({ mode, body })
+    if (calls.devilPreview && body.scheme_id === 'devil_trader') {
+      return {
+        parameters: body, names: { '510300.SH': '沪深300 ETF' }, as_of: '2026-11-06',
+        total_position: .7, market_score: 37, market_regime: '中性',
+        etf_allocations: [
+          { symbol: '510300.SH', score: 85, weight: .3, amount: 30000 },
+          { symbol: '512000.SH', score: 15, weight: .105, amount: 10500 },
+          { symbol: '159992.SZ', score: null, weight: 0, amount: 0 },
+        ],
+        cash_weight: .595, cash_amount: 59500,
+      }
+    }
     const history = { return: .1, drawdown: -.05, points: [{ date: '2026-01-01', value: 1 }, { date: '2026-11-06', value: 1.1 }] }
     const initialCapital = Number(body.initial_capital)
     const account = [{ date: '2026-06-01', cash: .2, value: 1.1, weights: [.8], target: [1] }]
@@ -59,6 +74,7 @@ let client: QueryClient
 beforeEach(async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, ResizeObserver: class { observe() {} disconnect() {} } })
   calls.calculations = 0
+  calls.devilPreview = false
   calls.daily.mockClear()
   calls.period.mockClear()
   calls.payloads = []
@@ -96,7 +112,7 @@ const fill = async (label: string, value: string) => {
 
 it('shows the compact market trend above the target allocation', async () => {
   const market = host.querySelector('[aria-label="市场环境"]')!
-  const target = [...host.querySelectorAll('h2')].find(heading => heading.textContent === '等待目标仓位')!
+  const target = host.querySelector('[aria-label="仓位结果"]')!
   expect(market.compareDocumentPosition(target) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   expect(market.textContent).not.toContain('上证指数')
   expect(market.textContent).not.toContain('综合趋势分')
@@ -200,6 +216,31 @@ it('defaults a legacy portfolio to the pending scheme and saves it without calcu
   expect(calls.calculations).toBe(1)
   await click('保存配置')
   expect(calls.saved.at(-1)?.body).toMatchObject({ symbols: ['510300.SH'], scheme_id: 'devil_trader' })
+})
+
+it('automatically shows capped ETF allocations and cash, and refreshes on request', async () => {
+  await act(async () => root.unmount())
+  client.clear()
+  calls.devilPreview = true
+  calls.payloads = []
+  root = createRoot(host)
+  await act(async () => root.render(<QueryClientProvider client={client}><AssetAllocation /></QueryClientProvider>))
+  await vi.waitFor(async () => {
+    await act(async () => new Promise(resolve => setTimeout(resolve, 0)))
+    const table = host.querySelector('[aria-label="ETF 目标配比"]')
+    expect(table?.textContent).toContain('数据不足')
+  })
+  expect(calls.payloads).toHaveLength(1)
+  expect(host.textContent).toContain('总仓位上限')
+  expect(host.textContent).toContain('70.00%')
+  expect(host.textContent).toContain('40.50%')
+  expect(host.textContent).toContain('59.50%')
+  expect(host.textContent).toContain('¥59,500.00')
+  expect(host.textContent).not.toContain('使合计可达到 100%')
+  await click('更新目标仓位')
+  expect(calls.payloads).toHaveLength(2)
+  await click('调仓跟踪')
+  expect(host.textContent).toContain('当前方案暂未开放调仓跟踪')
 })
 
 it('uses the selected scheme for estimates, saved tracking and unsaved backtests', async () => {
