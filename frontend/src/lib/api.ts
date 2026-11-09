@@ -2986,7 +2986,7 @@ export interface MarketTrendSummary {
   data_through: string | null
 }
 export interface WatchlistMarketTrends {
-  rows: { symbol: string; periods: Record<'1w' | '1d' | '30m', MarketTrendSummary> }[]
+  rows: { symbol: string; periods: Record<'1w' | '1d' | '30m', MarketTrendSummary>; composite_score?: number | null }[]
   as_of: string | null
 }
 

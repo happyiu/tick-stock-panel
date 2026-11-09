@@ -468,7 +468,7 @@ class MarketTrendsRequest(BaseModel):
 
 @router.post('/market-trends')
 def watchlist_market_trends(body: MarketTrendsRequest, request: Request):
-    from app.services.watchlist_market_trends import symbol_trends
+    from app.services.watchlist_market_trends import empty_summary, symbol_trends
 
     allowed = {entry['symbol'] for entry in watchlist.list_symbols()}
     now = cn_now()
@@ -476,7 +476,12 @@ def watchlist_market_trends(body: MarketTrendsRequest, request: Request):
     for symbol in dict.fromkeys(body.symbols):
         if symbol not in allowed or request.app.state.repo.resolve_asset_type(symbol) != body.asset_type:
             continue
-        rows.append({'symbol': symbol, 'periods': symbol_trends(request.app.state, symbol, body.asset_type, now)})
+        trends = symbol_trends(request.app.state, symbol, body.asset_type, now)
+        rows.append({
+            'symbol': symbol,
+            'periods': {period: trends.get(period, empty_summary()) for period in ('1w', '1d', '30m')},
+            'composite_score': trends.get('composite_score'),
+        })
     return {'rows': rows, 'as_of': now.isoformat()}
 
 

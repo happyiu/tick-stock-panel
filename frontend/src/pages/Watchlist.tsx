@@ -666,11 +666,23 @@ const StockCard = React.memo(function StockCard({
           )}
         </span>
         {trendCols.length > 0 && <div className="flex w-full basis-full flex-wrap items-start gap-y-2 border-t border-border/50 pt-2">
-        {trendCols.map(col => col.source.type === 'builtin' && (
-          <div key={col.id} className="shrink-0 border-l border-border px-3 first:border-l-0 first:pl-0">
-            <MarketTrendSignal compact summary={r[col.source.key]} period={col.source.key.slice(13)} loading={r.market_trend_loading} error={r.market_trend_error} />
-          </div>
-        ))}
+        <div className="flex min-w-0 flex-wrap items-start">
+          {trendCols.map(col => col.source.type === 'builtin' && (
+            <div key={col.id} className="shrink-0 border-l border-border px-3 first:border-l-0 first:pl-0">
+              <MarketTrendSignal compact summary={r[col.source.key]} period={col.source.key.slice(13)} loading={r.market_trend_loading} error={r.market_trend_error} />
+            </div>
+          ))}
+        </div>
+        {resolveWatchlistAssetType(r.asset_type) === 'etf' && <div
+          className="ml-auto flex shrink-0 items-center gap-2 pl-3"
+          title={r.market_trend_composite_score == null
+            ? '综合趋势分暂不可计算（数据不足或加载失败）'
+            : `多空强弱评分，越高越偏多，非上涨概率；${r.market_trend_composite_score}/100`}
+        >
+          <span className="inline-flex h-9 w-9 items-center justify-center rounded-full border-[3px] border-accent font-mono text-sm text-accent">
+            {r.market_trend_score_loading ? '…' : r.market_trend_composite_score == null ? '—' : r.market_trend_composite_score}
+          </span>
+        </div>}
         </div>}
         {/* 扩展数据列展示在卡片中 */}
         {extCols.some(col => col.source.type === 'ext' && r[`${col.source.configId}__${col.source.fieldName}`] != null) && (
@@ -907,7 +919,7 @@ export function Watchlist({ assetType }: { assetType: WatchlistScope }) {
     staleTime: 30_000,
     refetchInterval: 60_000,
   })
-  const trendsBySymbol = useMemo(() => new Map(marketTrends.data?.rows.map(row => [row.symbol, row.periods]) ?? []), [marketTrends.data])
+  const trendsBySymbol = useMemo(() => new Map(marketTrends.data?.rows.map(row => [row.symbol, row]) ?? []), [marketTrends.data])
 
   // 指数无本地分钟K数据, 分时批量请求剔除指数 symbol (省请求, 避免逐只 404)
   const minuteSymbols = useMemo(
@@ -1159,9 +1171,11 @@ export function Watchlist({ assetType }: { assetType: WatchlistScope }) {
   )
   const rowsWithGroup = useMemo(
     () => rows.map(row => ({ ...row, group_ids: groupBySymbol.get(row.symbol) ?? [],
-      market_trend_1w: trendsBySymbol.get(row.symbol)?.['1w'],
-      market_trend_1d: trendsBySymbol.get(row.symbol)?.['1d'],
-      market_trend_30m: trendsBySymbol.get(row.symbol)?.['30m'],
+      market_trend_1w: trendsBySymbol.get(row.symbol)?.periods['1w'],
+      market_trend_1d: trendsBySymbol.get(row.symbol)?.periods['1d'],
+      market_trend_30m: trendsBySymbol.get(row.symbol)?.periods['30m'],
+      market_trend_composite_score: trendsBySymbol.get(row.symbol)?.composite_score,
+      market_trend_score_loading: marketTrends.isFetching && !marketTrends.data,
       market_trend_loading: marketTrends.isFetching,
       market_trend_error: marketTrends.isError,
     })),

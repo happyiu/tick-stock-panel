@@ -65,6 +65,7 @@ def symbol_trends(state, symbol: str, asset: str, now: datetime):
     except ValueError:
         start = end.replace(year=end.year-3, month=3, day=1)
     result = {}
+    daily = None
     try:
         daily = wave_daily_snapshot(state, symbol, asset, start, end).frame
         result['1d'] = summarize(daily.to_dicts(), '1d', end, now)
@@ -95,4 +96,41 @@ def symbol_trends(state, symbol: str, asset: str, now: datetime):
     except Exception:
         logger.exception('Watchlist 30F trend unavailable for %s', symbol)
         result['30m'] = empty_summary('error')
+    if asset == 'etf' and daily is not None and not daily.is_empty():
+        result['composite_score'] = None
+        try:
+            import polars as pl
+
+            from app.services.kline_periods import annotate_bar_closure
+            from app.services.market_trend_composite import composite_trend_score
+            from app.services.technical_scoring import (
+                TECHNICAL_SCORE_WARMUP_DAYS,
+                latest_technical_categories,
+            )
+
+            closed = [row for row in annotate_bar_closure(daily.to_dicts(), '1d', end, now=now) if row['is_closed']]
+            if closed and all({'open', 'high', 'low', 'close', 'volume'} <= row.keys() for row in closed[-1:]):
+                score_frame = pl.DataFrame(closed, infer_schema_length=None)
+                if 'symbol' not in score_frame.columns:
+                    score_frame = score_frame.with_columns(pl.lit(symbol).alias('symbol'))
+                score_frame = (
+                    score_frame
+                    .with_columns(pl.col('date').cast(pl.Date, strict=False))
+                    .sort('date')
+                )
+                latest_date = score_frame['date'].max()
+                score_frame = (
+                    score_frame
+                    .filter(pl.col('date') >= pl.lit(latest_date - timedelta(days=TECHNICAL_SCORE_WARMUP_DAYS)))
+                    .select('symbol', 'date', 'open', 'high', 'low', 'close', 'volume')
+                )
+                categories = latest_technical_categories(score_frame)
+                result['composite_score'] = composite_trend_score(
+                    categories,
+                    result.get('1w', {}).get('signal'),
+                    result.get('1d', {}).get('signal'),
+                    result.get('30m', {}).get('signal'),
+                )
+        except Exception:
+            logger.exception('Watchlist composite trend score unavailable for %s', symbol)
     return result
