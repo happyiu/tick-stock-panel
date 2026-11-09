@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Combine, Save, Search } from 'lucide-react'
 import { toast } from '@/components/Toast'
+import { NumericInput } from '@/components/NumericInput'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 
@@ -150,12 +151,11 @@ export function FactorComposite() {
                   </span>
                   {mode === 'manual' ? (
                     <>
-                      <input
-                        type="number"
+                      <NumericInput
                         step="0.1"
                         min="0.1"
                         value={rawWeight}
-                        onChange={event => setWeight(id, Math.max(0.1, Number(event.target.value) || 0.1))}
+                        onValueChange={value => value != null && setWeight(id, Math.max(0.1, value || 0.1))}
                         className="w-20 rounded-input border border-border bg-surface px-2 py-1 text-right font-mono text-xs"
                         aria-label={`${labelOf(id)} 权重`}
                       />

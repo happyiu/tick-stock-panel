@@ -8,6 +8,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { NumericInput } from '@/components/NumericInput'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -425,15 +426,15 @@ export function Review() {
               {draft.enabled && (
                 <div className="mt-3 flex items-center gap-2 rounded-btn bg-elevated/40 px-3 py-2.5">
                   <span className="text-[11px] text-muted">每日</span>
-                  <input
-                    type="number" min={0} max={23} value={draft.hour}
-                    onChange={e => setDraft(d => ({ ...d, hour: Math.max(0, Math.min(23, Number(e.target.value))) }))}
+                  <NumericInput
+                    min={0} max={23} value={draft.hour}
+                    onValueChange={value => value != null && setDraft(d => ({ ...d, hour: Math.max(0, Math.min(23, value)) }))}
                     className="w-12 px-1.5 py-1 rounded-btn bg-base border border-border text-xs font-mono text-foreground text-center focus:outline-none focus:border-accent/50"
                   />
                   <span className="text-xs text-muted">:</span>
-                  <input
-                    type="number" min={0} max={59} value={draft.minute}
-                    onChange={e => setDraft(d => ({ ...d, minute: Math.max(0, Math.min(59, Number(e.target.value))) }))}
+                  <NumericInput
+                    min={0} max={59} value={draft.minute}
+                    onValueChange={value => value != null && setDraft(d => ({ ...d, minute: Math.max(0, Math.min(59, value)) }))}
                     className="w-12 px-1.5 py-1 rounded-btn bg-base border border-border text-xs font-mono text-foreground text-center focus:outline-none focus:border-accent/50"
                   />
                   <span className="text-[10px] text-muted/70">不早于 15:00 · 工作日执行</span>

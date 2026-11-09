@@ -3,6 +3,7 @@
 
 from collections.abc import Callable, Sequence
 from decimal import Decimal
+from math import isclose
 
 import numpy as np
 
@@ -21,20 +22,20 @@ SCHEMES: dict[str, tuple[str, AllocationFunction | None]] = {
 def total_position_for_score(score):
     if isinstance(score, bool) or not isinstance(score, (int, float)) or not np.isfinite(score) or not 0 <= score <= 100:
         raise ValueError("市场环境得分不可用，无法确定总仓位")
-    if score < 35:
-        return 0.5, "熊市"
-    if score < 65:
+    if score <= 60:
         return 0.7, "中性"
     return 0.9, "牛市"
 
 
 def score_allocation(symbols, scores, total_position, max_weight, capital):
-    """Allocate against total capital; capped weights and fractional cents stay in cash."""
-    score_sum = sum(score for score in scores if score is not None)
+    """Allocate by squared score; capped weights and fractional cents stay in cash."""
+    precise_scores = [Decimal(str(score)) if score is not None else Decimal(0) for score in scores]
+    score_square_sum = sum((score * score for score in precise_scores), Decimal(0))
     budget, cap = Decimal(str(total_position)), Decimal(str(max_weight))
     weights = [
-        min(cap, budget * score / score_sum) if score is not None and score_sum else Decimal(0)
-        for score in scores
+        min(cap, budget * score_value * score_value / score_square_sum)
+        if score is not None and score_square_sum else Decimal(0)
+        for score, score_value in zip(scores, precise_scores, strict=True)
     ]
     rows = [
         {"symbol": symbol, "score": score, "weight": float(weight)}
@@ -49,6 +50,56 @@ def score_allocation(symbols, scores, total_position, max_weight, capital):
             remaining_cents -= cents
         result["cash_amount"] = remaining_cents / 100
     return result
+
+
+def replay_tracking(days, market, symbols, score_series, max_weight, threshold):
+    events, skipped = [], []
+    previous_position = None
+    previous_weights = [0.0] * len(symbols)
+    previous_cash = 1.0
+    for day in days:
+        market_score = market.get(day)
+        scores = [series.get(day) for series in score_series]
+        missing = [symbol for symbol, score in zip(symbols, scores, strict=True) if score is None]
+        if market_score is None or missing:
+            skipped.append({"date": day, "market_missing": market_score is None, "symbols": missing})
+            continue
+
+        position, _ = total_position_for_score(market_score)
+        allocation = score_allocation(symbols, scores, position, max_weight, None)
+        rows = allocation["etf_allocations"]
+        changes = [row["weight"] - old for row, old in zip(rows, previous_weights, strict=True)]
+        deviation = max(map(abs, changes))
+        if previous_position is None:
+            reason = "initial"
+        elif position != previous_position:
+            reason = "position_change"
+        elif deviation > threshold and not isclose(deviation, threshold, rel_tol=0, abs_tol=1e-12):
+            reason = "deviation"
+        else:
+            continue
+
+        cash = allocation["cash_weight"]
+        equal_weight = min(max_weight, position / len(symbols))
+        events.append({
+            "date": day,
+            "reason": reason,
+            "market_score": market_score,
+            "previous_position": previous_position,
+            "total_position": position,
+            "max_deviation": deviation if previous_position is not None else None,
+            "etf_allocations": [
+                {**row, "previous_weight": old, "change": change, "equal_weight": equal_weight}
+                for row, old, change in zip(rows, previous_weights, changes, strict=True)
+            ],
+            "previous_cash": previous_cash,
+            "cash_weight": cash,
+            "equal_cash_weight": 1 - equal_weight * len(symbols),
+        })
+        previous_position = position
+        previous_weights = [row["weight"] for row in rows]
+        previous_cash = cash
+    return {"events": events, "skipped": skipped}
 
 
 def scheme_unavailability(scheme_id):
@@ -76,15 +127,114 @@ def weights(symbols, returns, cap, scheme_id):
     return result
 
 
-def performance(nav, dates):
+def performance(nav, dates, *, include_daily_drawdown=False):
     values = np.asarray(nav)
+    peaks = np.maximum.accumulate(values)
+    if include_daily_drawdown:
+        peaks = np.maximum(1.0, peaks)
+    drawdowns = values / peaks - 1
     return {
         "return": float(values[-1] - 1),
-        "drawdown": float((values / np.maximum.accumulate(values) - 1).min()),
+        "drawdown": float(drawdowns.min()),
         "points": [
-            {"date": d, "value": float(v)} for d, v in zip(dates, values, strict=True)
+            {"date": day, "value": float(value), **({"drawdown": float(drawdown)} if include_daily_drawdown else {})}
+            for day, value, drawdown in zip(dates, values, drawdowns, strict=True)
         ],
     }
+
+
+def tracking_performance(days, close, dividend, split, signals, events, rate):
+    """Trade only on per-ETF signals, using the latest allocation target for entries."""
+    close, dividend, split = (np.asarray(matrix, dtype=float) for matrix in (close, dividend, split))
+    by_day = {event["date"]: event for event in events}
+    symbols = [row["symbol"] for row in events[0]["etf_allocations"]]
+    histories = {}
+    trades = []
+    for model, weight_key in (("scheme", "weight"), ("equal", "equal_weight")):
+        shares = np.zeros(close.shape[1])
+        cost_basis = np.zeros(close.shape[1])
+        accrued_dividends = np.zeros(close.shape[1])
+        active = np.zeros(len(symbols), dtype=bool)
+        target = np.zeros(len(symbols))
+        position = 0.0
+        cash = 1.0
+        nav = []
+        for i, (day, daily_signals) in enumerate(zip(days, signals, strict=True)):
+            dividends_today = shares * dividend[i]
+            cash += float(dividends_today.sum())
+            accrued_dividends += dividends_today
+            shares *= split[i]
+            prices = close[i]
+            held = shares * prices
+            equity = cash + float(held.sum())
+            if not np.isfinite(equity) or equity <= 0:
+                raise ValueError(f"{day} 模拟资产金额无效")
+            update = by_day.get(day)
+            if update is not None:
+                target = np.array([row[weight_key] for row in update["etf_allocations"]])
+                position = update["total_position"]
+            signal = np.asarray(daily_signals, dtype=object)
+            enter = (signal == "attack") & ~active
+            retreat = signal == "retreat"
+            active = (active | enter) & ~retreat
+            resize = enter
+            if resize.any() or (retreat & (held > 0)).any():
+                traded = resize | retreat
+                fixed = float(held[~traded].sum())
+                target_weights = target[resize]
+                target_sum = float(target_weights.sum())
+
+                def targets_at(net):
+                    # Leave untouched holdings in place and fit buys within the remaining exposure.
+                    budget = net
+                    if target_sum:
+                        budget = min(net, max(0.0, net * position - fixed) / target_sum)
+                    amounts = held.copy()
+                    amounts[traded] = 0
+                    amounts[resize] = budget * target_weights
+                    return amounts
+
+                net = equity
+                if rate:
+                    low, high = 0.0, equity
+                    for _ in range(60):
+                        mid = (low + high) / 2
+                        costs = rate * np.abs(targets_at(mid) - held).sum()
+                        if mid + costs > equity:
+                            high = mid
+                        else:
+                            low = mid
+                    net = low
+                amounts = targets_at(net)
+                for j in np.flatnonzero(np.abs(amounts - held) > 1e-12):
+                    difference = amounts[j] - held[j]
+                    trade_fee = rate * abs(difference)
+                    side = "buy" if difference > 0 else "sell"
+                    realized_pnl = None
+                    if side == "buy":
+                        cost_basis[j] += difference + trade_fee
+                    else:
+                        sold_fraction = min(1.0, abs(difference) / held[j]) if held[j] > 0 else 0.0
+                        realized_pnl = (
+                            abs(difference) - trade_fee
+                            - cost_basis[j] * sold_fraction
+                            + accrued_dividends[j] * sold_fraction
+                        )
+                        cost_basis[j] *= 1 - sold_fraction
+                        accrued_dividends[j] *= 1 - sold_fraction
+                    trades.append({
+                        "date": day, "model": model, "symbol": symbols[j],
+                        "side": side,
+                        "reason": "retreat" if retreat[j] else "attack",
+                        "price": float(prices[j]), "weight": float(amounts[j] / net),
+                        "realized_pnl": float(realized_pnl) if realized_pnl is not None else None,
+                    })
+                shares[traded] = amounts[traded] / prices[traded]
+                cash = max(0.0, net - float(amounts.sum()))
+                equity = net
+            nav.append(equity)
+        histories[model] = performance(nav, days, include_daily_drawdown=True)
+    return histories, sorted(trades, key=lambda trade: trade["date"])
 
 
 def calculate(p):
@@ -162,7 +312,7 @@ def signal_backtest(p, dates, close, dividend, split, returns, window, cap, equa
             equity = float(cash + shares @ prices)
             amounts = shares * prices
             deviation = float(np.max(np.abs(amounts / equity - target)))
-            triggered = deviation >= p.get("threshold", 0.05) - 1e-10
+            triggered = deviation >= p.get("threshold", 0.10) - 1e-10
             retreat = signals[i] == "retreat"
             attack = signals[i] == "attack"
             reduce = triggered & (amounts > equity * target + 1e-12)

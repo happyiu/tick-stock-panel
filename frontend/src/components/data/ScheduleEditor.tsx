@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { NumericInput } from '@/components/NumericInput'
 
 export function ScheduleEditor({ value, onSave, loading, hint }: {
   value: { hour: number; minute: number }
@@ -19,15 +20,15 @@ export function ScheduleEditor({ value, onSave, loading, hint }: {
   return (
     <div className="flex items-center gap-2 pt-1.5">
       <span className="text-[10px] text-muted">每日</span>
-      <input
-        type="number" min={0} max={23} value={h}
-        onChange={e => setH(Math.max(0, Math.min(23, Number(e.target.value))))}
+      <NumericInput
+        min={0} max={23} value={h}
+        onValueChange={value => value != null && setH(Math.max(0, Math.min(23, value)))}
         className="w-12 px-1.5 py-1 rounded-btn bg-base border border-border text-xs font-mono text-foreground text-center"
       />
       <span className="text-xs text-muted">:</span>
-      <input
-        type="number" min={0} max={59} value={m}
-        onChange={e => setM(Math.max(0, Math.min(59, Number(e.target.value))))}
+      <NumericInput
+        min={0} max={59} value={m}
+        onValueChange={value => value != null && setM(Math.max(0, Math.min(59, value)))}
         className="w-12 px-1.5 py-1 rounded-btn bg-base border border-border text-xs font-mono text-foreground text-center"
       />
       <button

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Search, AlertTriangle, CheckCircle2, XCircle, FlaskConical, Activity, Bell } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
+import { NumericInput } from '@/components/NumericInput'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { QK } from '@/lib/queryKeys'
@@ -84,12 +85,11 @@ function MinuteProbePanel() {
         </div>
         <div className="flex flex-col gap-1">
           <label className="text-xs text-muted">回溯天数</label>
-          <input
-            type="number"
+          <NumericInput
             min={1}
             max={30}
             value={days}
-            onChange={(e) => setDays(Math.max(1, Math.min(30, Number(e.target.value) || 1)))}
+            onValueChange={value => value != null && setDays(Math.max(1, Math.min(30, value || 1)))}
             className="w-24 rounded-btn border border-border bg-base px-3 py-1.5 text-sm text-foreground outline-none focus:border-accent"
           />
         </div>
@@ -239,12 +239,11 @@ function SeedPanel() {
         <div className="flex flex-wrap items-end gap-3">
           <div className="flex flex-col gap-1">
             <label className="text-xs text-muted">生成条数</label>
-            <input
-              type="number"
+            <NumericInput
               min={1}
               max={50}
               value={count}
-              onChange={(e) => setCount(Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
+              onValueChange={value => value != null && setCount(Math.max(1, Math.min(50, value || 1)))}
               className="w-24 rounded-btn border border-border bg-base px-3 py-1.5 text-sm text-foreground outline-none focus:border-accent"
             />
           </div>

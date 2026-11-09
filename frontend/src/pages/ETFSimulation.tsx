@@ -4,6 +4,7 @@ import * as echarts from 'echarts'
 import { Link } from 'react-router-dom'
 import { Archive, ChevronDown, ChevronUp, Pause, Play, RotateCcw, Settings, StepForward, X } from 'lucide-react'
 import { Modal } from '@/components/Modal'
+import { NumericInput } from '@/components/NumericInput'
 import { PageHeader } from '@/components/PageHeader'
 import { PaperTradingControls, PaperTradingSymbolField } from '@/components/PaperTradingControls'
 import {
@@ -165,7 +166,7 @@ function AccountForm({ data, done }: { data: PaperSnapshot | null; done: () => v
     onSuccess: done,
   })
   const fields: Array<[Exclude<keyof AccountFormState, 'name'>, string, number]> = [['initial_cash', '初始资金（元）', 10000], ['commission_rate', '佣金率（%）', 0.001], ['minimum_commission', '最低佣金（元）', 0.01], ['slippage_bps', '市价滑点（bps）', 0.1], ['max_positions', '最大持仓数', 1], ['max_exposure_pct', '最大总仓位（%）', 1], ['max_symbol_exposure_pct', '单标的上限（%）', 1]]
-  return <div className="space-y-3"><Field label="账户名称"><input className={input} maxLength={80} placeholder="例如：ETF 实时账户" value={form.name} onChange={e => setForm(x => ({ ...x, name: e.target.value }))} /></Field><div className="grid grid-cols-2 gap-2">{fields.map(([key, label, step]) => <Field key={key} label={label}><input className={input} disabled={hasFills} type="number" step={step} value={form[key]} onChange={e => setForm(x => ({ ...x, [key]: Number(e.target.value) }))} /></Field>)}</div><button className={primary} disabled={!form.name.trim() || save.isPending} onClick={() => save.mutate()}>{data ? '保存账户设置' : '保存并进入模拟交易'}</button><p className="text-xs leading-5 text-muted">{data ? '首次成交后账户基础配置锁定；需要调整时请归档并重建账户。' : '请先设置账户名称；保存后才能进入模拟交易页面。'}</p></div>
+  return <div className="space-y-3"><Field label="账户名称"><input className={input} maxLength={80} placeholder="例如：ETF 实时账户" value={form.name} onChange={e => setForm(x => ({ ...x, name: e.target.value }))} /></Field><div className="grid grid-cols-2 gap-2">{fields.map(([key, label, step]) => <Field key={key} label={label}><NumericInput className={input} disabled={hasFills} step={step} value={form[key]} onValueChange={value => value != null && setForm(x => ({ ...x, [key]: value }))} /></Field>)}</div><button className={primary} disabled={!form.name.trim() || save.isPending} onClick={() => save.mutate()}>{data ? '保存账户设置' : '保存并进入模拟交易'}</button><p className="text-xs leading-5 text-muted">{data ? '首次成交后账户基础配置锁定；需要调整时请归档并重建账户。' : '请先设置账户名称；保存后才能进入模拟交易页面。'}</p></div>
 }
 
 function ManualPositionForm({

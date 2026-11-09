@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, Layers, Plus, Loader2, Search, Settings2 } from 'lucide-react'
+import { NumericInput } from '@/components/NumericInput'
 import { api, type ScreenerStrategy } from '@/lib/api'
 import { toPercentages, normalizeWeights } from '@/lib/weights'
 import { StrategySettingsDialog } from '@/components/screener/StrategySettingsDialog'
@@ -246,11 +247,10 @@ export function CompositeStrategyDialog({ open, onClose, onSavedId, editStrategy
                 </div>
                 <div>
                   <label className="mb-1 block text-xs text-muted">交集最少确认数（0=全部）</label>
-                  <input
-                    type="number"
+                  <NumericInput
                     min={0}
                     value={minConfirm}
-                    onChange={e => setMinConfirm(Math.max(0, parseInt(e.target.value) || 0))}
+                    onValueChange={value => value != null && setMinConfirm(Math.max(0, Math.trunc(value) || 0))}
                     disabled={mergeMode !== 'intersect'}
                     className="w-full rounded-btn border border-border bg-elevated px-2 py-1.5 text-xs text-foreground disabled:opacity-50"
                   />

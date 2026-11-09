@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowDown, ArrowUp, BookmarkCheck, CheckCircle2, Clock3, Link2, Loader2, RotateCcw, Trash2, X, XCircle } from 'lucide-react'
 import { Modal } from '@/components/Modal'
+import { NumericInput } from '@/components/NumericInput'
 import { toast } from '@/components/Toast'
 import { api, type ResearchCandidate, type ResearchCandidateStatus, type ScoringDirection } from '@/lib/api'
 import { fmtPct } from '@/lib/format'
@@ -304,16 +305,15 @@ export function ResearchCandidatesDialog({ onClose, onLoadStrategy }: {
                     {ic != null && <span>{ic < 0 ? 'IC<0 推荐低值' : 'IC≥0 推荐高值'}</span>}
                   </span>
                   <div className="relative">
-                    <input
-                      type="number"
+                    <NumericInput
                       min={1}
                       max={100}
                       step={1}
                       value={linkDraft.weight}
                       aria-label="因子初始权重百分比"
-                      onChange={event => setLinkDraft(current => current ? {
+                      onValueChange={weight => weight != null && setLinkDraft(current => current ? {
                         ...current,
-                        weight: Math.min(100, Math.max(1, Number(event.target.value) || 1)),
+                        weight: Math.min(100, Math.max(1, weight || 1)),
                       } : current)}
                       className="h-8 w-full rounded-input border border-border bg-base px-2 pr-7 text-xs text-foreground focus:border-accent focus:outline-none"
                     />

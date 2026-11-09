@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { NumericInput } from '@/components/NumericInput'
 import { Loader2, Search, Check, Clock, Zap, Settings2, AlertCircle, CheckCircle2, Calendar, History, KeyRound } from 'lucide-react'
 import { api, type ExtDataBackfillResult, type ExtDataConfig, type ExtPullAuth } from '@/lib/api'
 import { toast } from '@/components/Toast'
@@ -325,8 +326,8 @@ export function ExtDataPullPanel({ config, onSaved }: {
           </div>
           <div>
             <div className="text-[10px] text-muted mb-1">调度间隔 (分钟)</div>
-            <input
-              type="number" min={1} value={schedule} onChange={e => setSchedule(Number(e.target.value))}
+            <NumericInput
+              min={1} value={schedule} onValueChange={value => value != null && setSchedule(value)}
               className="w-full rounded-btn border border-border bg-elevated px-2 py-1.5 text-[10px] font-mono text-foreground"
             />
           </div>
@@ -384,10 +385,10 @@ export function ExtDataPullPanel({ config, onSaved }: {
 
         <div>
           <div className="text-[10px] text-muted mb-1">拉取超时 (秒 · 大响应接口可调高)</div>
-          <input
-            type="number" min={5} max={300} step={5}
+          <NumericInput
+            min={5} max={300} step={5}
             value={timeoutSec}
-            onChange={e => setTimeoutSec(Number(e.target.value))}
+            onValueChange={value => value != null && setTimeoutSec(value)}
             title="单次拉取/测试/回补请求的超时, 默认 30 秒, 范围 5~300"
             className="w-full rounded-btn border border-border bg-elevated px-2.5 py-1.5 text-[10px] font-mono text-foreground"
           />
@@ -410,18 +411,18 @@ export function ExtDataPullPanel({ config, onSaved }: {
               title="配合下方每页条数一起发送; 也用于短页判停"
               className="rounded-btn border border-border bg-elevated px-2 py-1.5 text-[10px] font-mono text-foreground placeholder:text-muted/40"
             />
-            <input
-              type="number" min={1}
+            <NumericInput
+              min={1}
               value={pageSize}
-              onChange={e => setPageSize(Number(e.target.value))}
+              onValueChange={value => value != null && setPageSize(value)}
               placeholder="每页条数"
               title="每页条数值 (>0 且已填参数名才发送)"
               className="rounded-btn border border-border bg-elevated px-2 py-1.5 text-[10px] font-mono text-foreground placeholder:text-muted/40"
             />
-            <input
-              type="number" min={1} max={200}
+            <NumericInput
+              min={1} max={200}
               value={maxPages}
-              onChange={e => setMaxPages(Number(e.target.value))}
+              onValueChange={value => value != null && setMaxPages(value)}
               placeholder="最多页数 · 默认 20"
               title="安全上限, 防止接口永远返回数据拖死拉取循环"
               className="rounded-btn border border-border bg-elevated px-2 py-1.5 text-[10px] font-mono text-foreground placeholder:text-muted/40"

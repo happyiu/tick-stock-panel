@@ -8,6 +8,7 @@ import { color } from '@/lib/colors'
 import { SignalPicker } from './SignalPicker'
 import { SignalTriggerActions } from '@/components/signals/SignalTriggerActions'
 import { Modal } from '@/components/Modal'
+import { NumericInput } from '@/components/NumericInput'
 import { ScoringEditor } from '@/components/ScoringEditor'
 import {
   AssetTypePicker,
@@ -102,19 +103,19 @@ export function RangeField({ label, minVal, maxVal, onMinChange, onMaxChange, un
   return (
     <div className="flex items-center gap-1.5">
       <span className="text-[11px] text-secondary w-16 shrink-0 text-right">{label}</span>
-      <input
-        type="number"
-        value={minVal ?? ''}
-        onChange={e => onMinChange(e.target.value === '' ? null : Number(e.target.value))}
+      <NumericInput
+        value={minVal ?? null}
+        allowEmpty
+        onValueChange={onMinChange}
         placeholder="最小"
         step={step}
         className="w-20 px-1.5 py-0.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50"
       />
       <span className="text-[10px] text-muted">~</span>
-      <input
-        type="number"
-        value={maxVal ?? ''}
-        onChange={e => onMaxChange(e.target.value === '' ? null : Number(e.target.value))}
+      <NumericInput
+        value={maxVal ?? null}
+        allowEmpty
+        onValueChange={onMaxChange}
         placeholder="最大"
         step={step}
         className="w-20 px-1.5 py-0.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50"
@@ -185,10 +186,9 @@ function ParamField({ def, value, onChange }: {
   return (
     <div className="flex items-center gap-2">
       <span className="text-[11px] text-secondary w-16 shrink-0 text-right">{def.label}</span>
-      <input
-        type="number"
+      <NumericInput
         value={value ?? def.default}
-        onChange={e => onChange(e.target.value === '' ? def.default : Number(e.target.value))}
+        onValueChange={value => onChange(value ?? def.default)}
         step={def.step ?? 0.1}
         min={def.min}
         max={def.max}
@@ -477,7 +477,7 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
                   </div>
                   <div className="flex items-center gap-1.5 pb-0.5 shrink-0">
                     <span className="text-[10px] text-muted/50">显示上限</span>
-                    <input type="number" value={displayLimit ?? ''} onChange={e => setDisplayLimit(e.target.value ? Number(e.target.value) : null)} step={1} min={10} max={200} placeholder="不限"
+                    <NumericInput value={displayLimit} allowEmpty onValueChange={setDisplayLimit} step={1} min={10} max={200} placeholder="不限"
                       className="w-14 h-8 px-1.5 rounded-lg bg-base border border-border/40 text-xs font-mono text-foreground text-center focus:outline-none focus:border-accent/50" />
                     <span className="text-[10px] text-muted/50">只</span>
                   </div>
@@ -647,13 +647,13 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
                       <div className="space-y-2">
                         <div className="flex items-center gap-1.5">
                           <span className="text-[11px] text-secondary w-12 shrink-0">止损</span>
-                          <input type="number" value={stopLoss ?? ''} onChange={e => setStopLoss(e.target.value === '' ? null : Number(e.target.value))} step={0.01} min={-0.5} max={0}
+                          <NumericInput value={stopLoss} allowEmpty onValueChange={setStopLoss} step={0.01} min={-0.5} max={0}
                             className="w-16 h-6 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50" />
                           <span className="text-[10px] text-muted">{stopLoss != null ? `${(stopLoss * 100).toFixed(1)}%` : '—'}</span>
                         </div>
                         <div className="flex items-center gap-1.5">
                           <span className="text-[11px] text-secondary w-12 shrink-0">持有</span>
-                          <input type="number" value={maxHoldDays ?? ''} onChange={e => setMaxHoldDays(e.target.value === '' ? null : Number(e.target.value))} step={1} min={1}
+                          <NumericInput value={maxHoldDays} allowEmpty onValueChange={setMaxHoldDays} step={1} min={1}
                             className="w-16 h-6 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50" />
                           <span className="text-[10px] text-muted">天</span>
                         </div>

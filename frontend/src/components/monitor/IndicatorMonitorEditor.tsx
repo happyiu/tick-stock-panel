@@ -4,6 +4,7 @@ import { api, type IndicatorMonitorInput, type IndicatorMonitorRule } from '@/li
 import { QK } from '@/lib/queryKeys'
 import { useChartIndicators } from '@/lib/useChartIndicators'
 import { Modal } from '@/components/Modal'
+import { NumericInput } from '@/components/NumericInput'
 
 export const monitorInput = (rule: IndicatorMonitorInput): IndicatorMonitorInput => ({
   symbol: rule.symbol, asset_type: rule.asset_type, indicator_id: rule.indicator_id, period: rule.period,
@@ -50,7 +51,7 @@ export function IndicatorMonitorEditor({ rule, preset, onClose }: { rule?: Indic
       <label className="block text-sm">触发方式<select aria-label="触发方式" className={`${field} mt-1`} value={draft.mode} onChange={e => setDraft(d => ({ ...d, mode: e.target.value as IndicatorMonitorInput['mode'] }))}><option value="both">实时预警＋收盘确认</option><option value="preview">仅实时预警</option><option value="confirmed">仅收盘确认</option></select></label>
       <p className="text-xs leading-5 text-muted">后台每60秒检查。盘中预警可能消失；收盘不成立只更新记录，不再通知。关闭图表不影响后台监控。</p>
       <fieldset><legend className="mb-2 text-sm">通知渠道</legend><p className="mb-2 text-xs text-muted">应用内记录始终开启。其他渠道须先在设置中配置；系统通知受全局开关控制。</p>{[['system','系统通知'],['feishu','飞书'],['wecom','企业微信'],['custom','自定义Webhook'],['email','邮件']].map(([id, label]) => <label key={id} className="mb-2 mr-3 inline-flex items-center gap-1 text-xs"><input type="checkbox" checked={draft.channels.includes(id)} onChange={e => setDraft(d => ({ ...d, channels: e.target.checked ? [...d.channels, id] : d.channels.filter(c => c !== id) }))} />{label}</label>)}</fieldset>
-      <label className="flex items-center gap-2 text-xs">量能对比天数<input aria-label="量能对比天数" type="number" min={1} max={20} className={`${field} !w-20`} value={draft.compare_days} onChange={e => setDraft(d => ({ ...d, compare_days: Number(e.target.value) }))} /></label>
+      <label className="flex items-center gap-2 text-xs">量能对比天数<NumericInput aria-label="量能对比天数" min={1} max={20} className={`${field} !w-20`} value={draft.compare_days} onValueChange={value => value != null && setDraft(d => ({ ...d, compare_days: value }))} /></label>
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.enabled} onChange={e => setDraft(d => ({ ...d, enabled: e.target.checked }))} />开启监控</label>
       {error && <p role="alert" className="text-sm text-danger">{error}</p>}
       <div className="flex justify-end gap-3"><button disabled={busy} onClick={onClose}>取消</button><button disabled={busy || !draft.symbol || !draft.signal_ids.length} onClick={save} className="rounded-btn bg-accent px-4 py-2 text-sm text-white disabled:opacity-50">{busy ? '保存中…' : '保存监控'}</button></div>

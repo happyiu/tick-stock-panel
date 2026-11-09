@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { NumericInput } from '@/components/NumericInput'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Activity, BarChart3, Building2, ChartNoAxesCombined, Check, ChevronDown, ChevronUp, Eraser, Layers3, ListPlus, Plus, RadioTower, Save, Search, Siren, Tags, TrendingUp, Waypoints, X } from 'lucide-react'
 import { api, genRuleId, type MonitorRule, type MonitorCondition, type SectorKind, type SectorMonitorTarget, type StrategyNotifyEvent } from '@/lib/api'
@@ -524,7 +525,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
                     <select value={c.op} onChange={e => updateCond(realIdx, { op: e.target.value })} className="w-12 h-7 px-1 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50">
                       {operators.map(op => <option key={op} value={op}>{op}</option>)}
                     </select>
-                    <input type="number" value={c.value ?? 0} onChange={e => updateCond(realIdx, { value: parseFloat(e.target.value) })} step="any" className="w-24 h-7 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50" />
+                    <NumericInput value={c.value ?? 0} onValueChange={value => value != null && updateCond(realIdx, { value })} step="any" className="w-24 h-7 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50" />
                     <button onClick={() => removeCond(realIdx)} className="p-1 rounded text-muted hover:text-danger hover:bg-danger/10 cursor-pointer">
                       <X className="h-3.5 w-3.5" />
                     </button>
@@ -837,13 +838,12 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
             <label className="space-y-1.5">
               <span className="text-[11px] text-muted">{draft.sector_trigger === 'momentum' ? '窗口变化阈值' : '板块涨跌幅阈值'}</span>
               <span className="relative block">
-                <input
-                  type="number"
+                <NumericInput
                   min="0.01"
                   max="20"
                   step="0.1"
                   value={draft.threshold_pct ?? 1}
-                  onChange={event => setDraft(d => ({ ...d, threshold_pct: Number(event.target.value) }))}
+                  onValueChange={value => value != null && setDraft(d => ({ ...d, threshold_pct: value }))}
                   className="h-9 w-full rounded-btn border border-border bg-base pl-3 pr-8 text-xs font-mono text-foreground"
                 />
                 <span className="absolute right-3 top-2.5 text-xs text-muted">%</span>
@@ -866,13 +866,12 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
             <label className="space-y-1.5">
               <span className="text-[11px] text-muted">接近度阈值</span>
               <span className="relative block">
-                <input
-                  type="number"
+                <NumericInput
                   min="1"
                   max="150"
                   step="5"
                   value={draft.threshold_pct ?? 70}
-                  onChange={event => setDraft(d => ({ ...d, threshold_pct: Number(event.target.value) }))}
+                  onValueChange={value => value != null && setDraft(d => ({ ...d, threshold_pct: value }))}
                   className="h-9 w-full rounded-btn border border-border bg-base pl-3 pr-8 text-xs font-mono text-foreground"
                 />
                 <span className="absolute right-3 top-2.5 text-xs text-muted">%</span>
@@ -960,15 +959,14 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
                 单轮放量阈值{draft.metric === 'amount' ? ' (万元)' : ' (手)'}
               </span>
               <span className="relative block">
-                <input
-                  type="number"
+                <NumericInput
                   min="1"
                   step={draft.metric === 'amount' ? 10 : 1000}
                   value={draft.metric === 'amount'
                     ? Math.round((draft.threshold_amount ?? 1e6) / 1e4)
                     : (draft.threshold_volume ?? 9000)}
-                  onChange={event => setDraft(d => {
-                    const v = Number(event.target.value)
+                  onValueChange={value => value != null && setDraft(d => {
+                    const v = value
                     return d.metric === 'amount'
                       ? { ...d, threshold_amount: v * 1e4 }
                       : { ...d, threshold_volume: v }
@@ -992,43 +990,43 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
               <label className="space-y-1">
                 <span className="text-[10px] text-muted/70">股价区间 (元)</span>
                 <div className="flex items-center gap-1">
-                  <input type="number" min="0" step="0.5" placeholder="下限"
-                    value={draft.basic_filter?.price_min ?? ''}
-                    onChange={e => setDraft(d => ({ ...d, basic_filter: { ...d.basic_filter, price_min: e.target.value === '' ? null : Number(e.target.value) } }))}
+                  <NumericInput min="0" step="0.5" placeholder="下限" allowEmpty
+                    value={draft.basic_filter?.price_min ?? null}
+                    onValueChange={value => setDraft(d => ({ ...d, basic_filter: { ...d.basic_filter, price_min: value } }))}
                     className="h-8 w-full rounded border border-border bg-base px-2 text-xs font-mono text-foreground" />
                   <span className="text-[10px] text-muted">—</span>
-                  <input type="number" min="0" step="0.5" placeholder="上限"
-                    value={draft.basic_filter?.price_max ?? ''}
-                    onChange={e => setDraft(d => ({ ...d, basic_filter: { ...d.basic_filter, price_max: e.target.value === '' ? null : Number(e.target.value) } }))}
+                  <NumericInput min="0" step="0.5" placeholder="上限" allowEmpty
+                    value={draft.basic_filter?.price_max ?? null}
+                    onValueChange={value => setDraft(d => ({ ...d, basic_filter: { ...d.basic_filter, price_max: value } }))}
                     className="h-8 w-full rounded border border-border bg-base px-2 text-xs font-mono text-foreground" />
                 </div>
               </label>
               <label className="space-y-1">
                 <span className="text-[10px] text-muted/70">总市值下限 (亿元)</span>
-                <input type="number" min="0" step="1" placeholder="不限"
-                  value={draft.basic_filter?.market_cap_min != null ? draft.basic_filter.market_cap_min / 1e8 : ''}
-                  onChange={e => setDraft(d => ({ ...d, basic_filter: { ...d.basic_filter, market_cap_min: e.target.value === '' ? null : Number(e.target.value) * 1e8 } }))}
+                <NumericInput min="0" step="1" placeholder="不限" allowEmpty
+                  value={draft.basic_filter?.market_cap_min != null ? draft.basic_filter.market_cap_min / 1e8 : null}
+                  onValueChange={value => setDraft(d => ({ ...d, basic_filter: { ...d.basic_filter, market_cap_min: value == null ? null : value * 1e8 } }))}
                   className="h-8 w-full rounded border border-border bg-base px-2 text-xs font-mono text-foreground" />
               </label>
               <label className="space-y-1">
                 <span className="text-[10px] text-muted/70">当日成交额下限 (万元)</span>
-                <input type="number" min="0" step="100" placeholder="不限"
-                  value={draft.basic_filter?.amount_min != null ? draft.basic_filter.amount_min / 1e4 : ''}
-                  onChange={e => setDraft(d => ({ ...d, basic_filter: { ...d.basic_filter, amount_min: e.target.value === '' ? null : Number(e.target.value) * 1e4 } }))}
+                <NumericInput min="0" step="100" placeholder="不限" allowEmpty
+                  value={draft.basic_filter?.amount_min != null ? draft.basic_filter.amount_min / 1e4 : null}
+                  onValueChange={value => setDraft(d => ({ ...d, basic_filter: { ...d.basic_filter, amount_min: value == null ? null : value * 1e4 } }))}
                   className="h-8 w-full rounded border border-border bg-base px-2 text-xs font-mono text-foreground" />
               </label>
               <label className="space-y-1">
                 <span className="text-[10px] text-muted/70">流通市值下限 (亿元)</span>
-                <input type="number" min="0" step="1" placeholder="不限"
-                  value={draft.basic_filter?.float_cap_min != null ? draft.basic_filter.float_cap_min / 1e8 : ''}
-                  onChange={e => setDraft(d => ({ ...d, basic_filter: { ...d.basic_filter, float_cap_min: e.target.value === '' ? null : Number(e.target.value) * 1e8 } }))}
+                <NumericInput min="0" step="1" placeholder="不限" allowEmpty
+                  value={draft.basic_filter?.float_cap_min != null ? draft.basic_filter.float_cap_min / 1e8 : null}
+                  onValueChange={value => setDraft(d => ({ ...d, basic_filter: { ...d.basic_filter, float_cap_min: value == null ? null : value * 1e8 } }))}
                   className="h-8 w-full rounded border border-border bg-base px-2 text-xs font-mono text-foreground" />
               </label>
               <label className="space-y-1">
                 <span className="text-[10px] text-muted/70">流通市值上限 (亿元)</span>
-                <input type="number" min="0" step="1" placeholder="不限"
-                  value={draft.basic_filter?.float_cap_max != null ? draft.basic_filter.float_cap_max / 1e8 : ''}
-                  onChange={e => setDraft(d => ({ ...d, basic_filter: { ...d.basic_filter, float_cap_max: e.target.value === '' ? null : Number(e.target.value) * 1e8 } }))}
+                <NumericInput min="0" step="1" placeholder="不限" allowEmpty
+                  value={draft.basic_filter?.float_cap_max != null ? draft.basic_filter.float_cap_max / 1e8 : null}
+                  onValueChange={value => setDraft(d => ({ ...d, basic_filter: { ...d.basic_filter, float_cap_max: value == null ? null : value * 1e8 } }))}
                   className="h-8 w-full rounded border border-border bg-base px-2 text-xs font-mono text-foreground" />
               </label>
               <label className="flex items-center gap-2 pt-4">
@@ -1312,7 +1310,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
                     <select value={c.op} onChange={e => updateCond(realIdx, { op: e.target.value })} className="w-12 h-7 px-1 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50">
                       {operators.map(op => <option key={op} value={op}>{op}</option>)}
                     </select>
-                    <input type="number" value={c.value ?? 0} onChange={e => updateCond(realIdx, { value: parseFloat(e.target.value) })} step="any" className="w-24 h-7 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50" />
+                    <NumericInput value={c.value ?? 0} onValueChange={value => value != null && updateCond(realIdx, { value })} step="any" className="w-24 h-7 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50" />
                     <button onClick={() => removeCond(realIdx)} className="p-1 rounded text-muted hover:text-danger hover:bg-danger/10 cursor-pointer">
                       <X className="h-3 w-3" />
                     </button>
@@ -1416,16 +1414,13 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
             <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
               <label className="space-y-1.5">
                 <span className="text-[10px] text-muted">最低分（含）</span>
-                <input
-                  type="number"
+                <NumericInput
                   min={0}
                   max={100}
                   step="any"
-                  value={draft.score_min ?? ''}
-                  onChange={event => setDraft(d => ({
-                    ...d,
-                    score_min: event.target.value === '' ? null : Number(event.target.value),
-                  }))}
+                  value={draft.score_min ?? null}
+                  allowEmpty
+                  onValueChange={value => setDraft(d => ({ ...d, score_min: value }))}
                   placeholder="不限"
                   className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground placeholder:text-muted/50 focus:border-accent/50 focus:outline-none"
                 />
@@ -1433,16 +1428,13 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
               <span className="mt-5 text-xs text-muted">至</span>
               <label className="space-y-1.5">
                 <span className="text-[10px] text-muted">最高分（含）</span>
-                <input
-                  type="number"
+                <NumericInput
                   min={0}
                   max={100}
                   step="any"
-                  value={draft.score_max ?? ''}
-                  onChange={event => setDraft(d => ({
-                    ...d,
-                    score_max: event.target.value === '' ? null : Number(event.target.value),
-                  }))}
+                  value={draft.score_max ?? null}
+                  allowEmpty
+                  onValueChange={value => setDraft(d => ({ ...d, score_max: value }))}
                   placeholder="不限"
                   className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground placeholder:text-muted/50 focus:border-accent/50 focus:outline-none"
                 />
@@ -1488,7 +1480,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         <label className="space-y-1.5">
           <span className="text-[11px] text-muted">冷却期(秒)</span>
-          <input type="number" value={draft.cooldown_seconds} onChange={e => setDraft(d => ({ ...d, cooldown_seconds: parseInt(e.target.value) || 0 }))} min={0} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground" />
+          <NumericInput value={draft.cooldown_seconds} onValueChange={value => value != null && setDraft(d => ({ ...d, cooldown_seconds: Math.trunc(value) || 0 }))} min={0} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground" />
         </label>
         <label className="space-y-1.5">
           <span className="text-[11px] text-muted">严重级别</span>

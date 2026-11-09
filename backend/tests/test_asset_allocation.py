@@ -58,7 +58,7 @@ def test_initial_capital_validation_and_cent_allocation():
 
 @pytest.mark.parametrize(
     ("score", "position", "regime"),
-    [(34, 0.5, "熊市"), (35, 0.7, "中性"), (64, 0.7, "中性"), (65, 0.9, "牛市")],
+    [(0, 0.7, "中性"), (60, 0.7, "中性"), (60.01, 0.9, "牛市"), (100, 0.9, "牛市")],
 )
 def test_environment_score_maps_to_total_position(score, position, regime):
     assert _allocation_calculation.total_position_for_score(score) == (position, regime)
@@ -146,9 +146,9 @@ def test_devil_trader_backtest_returns_daily_position_from_each_score(monkeypatc
 @pytest.mark.parametrize(
     ("scores", "cap", "expected"),
     [
-        ([30, 20, 80], 0.35, [0.7 * 30 / 130, 0.7 * 20 / 130, 0.35]),
-        ([30, 20, 80], 1, [0.7 * 30 / 130, 0.7 * 20 / 130, 0.7 * 80 / 130]),
-        ([None, 20, 80], 0.35, [0, 0.14, 0.35]),
+        ([30, 20, 80], 0.35, [0.7 * 900 / 7700, 0.7 * 400 / 7700, 0.35]),
+        ([30, 20, 80], 1, [0.7 * 900 / 7700, 0.7 * 400 / 7700, 0.7 * 6400 / 7700]),
+        ([None, 20, 80], 0.35, [0, 0.7 * 400 / 6800, 0.35]),
         ([0, None], 0.35, [0, 0]),
         ([], 0.35, []),
     ],
@@ -164,11 +164,11 @@ def test_devil_trader_allocates_scores_without_redistributing_overflow(scores, c
     assert all(row["amount"] / 100_000 <= min(row["weight"], cap) for row in rows)
     assert sum(row["amount"] for row in rows) / 100_000 <= 0.7
     if scores == [30, 20, 80] and cap == 0.35:
-        assert [row["amount"] for row in rows] == [16153.84, 10769.23, 35000.0]
-        assert result["cash_amount"] == 38076.93
+        assert [row["amount"] for row in rows] == [8181.81, 3636.36, 35000.0]
+        assert result["cash_amount"] == 53181.83
 
 
-def test_current_etf_score_uses_aligned_closed_inputs_and_matches_frontend(monkeypatch):
+def test_daily_etf_score_uses_aligned_closed_inputs_and_matches_frontend(monkeypatch):
     import polars as pl
 
     from app.services import technical_scoring, watchlist_market_trends
@@ -204,10 +204,209 @@ def test_current_etf_score_uses_aligned_closed_inputs_and_matches_frontend(monke
 
     monkeypatch.setattr(technical_scoring, "latest_technical_categories", daily_categories)
     monkeypatch.setattr(watchlist_market_trends, "angel_devil_signals", signals)
-    assert service.etf_composite_score(request, "510300.SH", as_of) == sample["composite_score"]
-    assert service.etf_composite_score(request, "510300.SH", date(2026, 11, 9)) is None
+    def daily_scores(day):
+        return service._composite_scores(request, "510300.SH", "etf", day, day)
+
+    assert daily_scores(as_of) == [{"date": str(as_of), "score": sample["composite_score"]}]
+    assert daily_scores(date(2026, 11, 9)) == []
     repo.get_etf_daily.return_value = prices.filter(pl.col("date") < as_of)
-    assert service.etf_composite_score(request, "510300.SH", as_of) is None
+    assert daily_scores(as_of) == []
+
+
+def test_batched_etf_scores_match_single_day_without_reading_future_candles(monkeypatch):
+    from datetime import timedelta
+
+    import polars as pl
+
+    from app.services import technical_scoring
+
+    sample_path = Path(__file__).parents[2] / "frontend/src/lib/fixtures/allocation_score_sample.json"
+    categories = json.loads(sample_path.read_text())["daily"]["categories"]
+    start = date(2024, 1, 1)
+    dates = [start + timedelta(days=i) for i in range(700)]
+    closes = [10 + (i % 55) / 20 for i in range(len(dates))]
+    bars = pl.DataFrame({
+        "date": dates, "open": closes, "high": closes, "low": closes, "close": closes,
+        "volume": [100.0] * len(dates),
+    })
+    request = Mock()
+    request.app.state.chart_data_service = None
+    repo = request.app.state.repo
+    repo.get_etf_daily.return_value = bars
+    repo.get_index_daily.return_value = bars.select("date")
+    repo.get_minute_range.return_value = pl.DataFrame()
+    monkeypatch.setattr(service, "cn_now", lambda: datetime(2026, 1, 1, 16))
+    monkeypatch.setattr(technical_scoring, "latest_technical_categories", lambda frame: categories)
+    days = dates[-12:]
+
+    points = service._composite_scores(request, "510300.SH", "etf", days[0], days[-1], etf_days=days)
+    assert repo.get_etf_daily.call_count == repo.get_minute_range.call_count == 1
+    assert all(point["score"] is not None for point in points)
+    averages = service._rolling_score_averages(days, points)
+    for day in days[4:]:
+        assert averages[str(day)] == service.etf_composite_score(request, "510300.SH", day)
+
+    repo.get_etf_daily.return_value = bars.with_columns(
+        pl.when(pl.col("date") > days[0]).then(1000.0).otherwise(pl.col("close")).alias("close")
+    )
+    changed = service._composite_scores(request, "510300.SH", "etf", days[0], days[-1], etf_days=days)
+    assert changed[0] == points[0]
+
+
+def test_replay_threshold_and_position_change_use_last_successful_allocation():
+    days = [f"2026-11-{i:02}" for i in range(1, 8)]
+    market = dict(zip(days, [60, 60, 60, 60, 60, 61, 61], strict=True))
+    scores = [
+        dict(zip(days, [None, 0, 10, 10, 12, 10, 10], strict=True)),
+        dict(zip(days, [10, 10, 30, 20, 20, None, 20], strict=True)),
+    ]
+    result = _allocation_calculation.replay_tracking(days, market, ["A", "B"], scores, .29, .07)
+    initial, deviation, change = result["events"]
+    assert [(event["date"], event["reason"]) for event in result["events"]] == [
+        (days[1], "initial"), (days[3], "deviation"), (days[6], "position_change"),
+    ]
+    assert initial["previous_cash"] == 1
+    assert deviation["max_deviation"] == pytest.approx(.14)
+    assert change["previous_position"] == .7
+    assert change["total_position"] == .9
+    assert change["etf_allocations"][0]["previous_weight"] == pytest.approx(.14)
+    assert change["cash_weight"] == pytest.approx(.53)
+    assert [row["equal_weight"] for row in change["etf_allocations"]] == pytest.approx([.29, .29])
+    assert change["equal_cash_weight"] == pytest.approx(.42)
+    assert change["max_deviation"] < .07
+    assert [day["date"] for day in result["skipped"]] == [days[0], days[5]]
+    no_scores = _allocation_calculation.replay_tracking(days, {}, ["A"], [{}], .3, .05)
+    assert not no_scores["events"]
+    assert len(no_scores["skipped"]) == len(days)
+    assert no_scores["skipped"][0] == {"date": days[0], "market_missing": True, "symbols": ["A"]}
+
+
+def test_tracking_performance_marks_to_market_and_accounts_for_actions_and_trade_costs():
+    days = [f"2026-11-{i:02}" for i in range(2, 6)]
+    events = [
+        {"date": day, "total_position": .7, "etf_allocations": [
+            {"symbol": symbol, "weight": weight, "equal_weight": .25}
+            for symbol, weight in zip(["A", "B"], weights, strict=True)
+        ]}
+        for day, weights in [(days[0], [.5, 0]), (days[2], [0, .5])]
+    ]
+    result, trades = _allocation_calculation.tracking_performance(
+        days, [[10, 10], [6, 8], [6, 8], [6, 4]],
+        [[0, 0], [1, 0], [0, 0], [0, 0]], [[1, 1], [2, 1], [1, 1], [1, 1]],
+        [["attack", None], [None, None], ["retreat", "attack"], [None, None]],
+        events, .02,
+    )
+    initial = 1 / 1.01
+    equal_initial = 1 / 1.005
+    scheme_rebalance = initial * (1.15 - .012) / 1.01
+    equal_rebalance = equal_initial * (1.075 - .006) / 1.005
+    assert [(t["date"], t["symbol"], t["side"], t["price"]) for t in trades if t["model"] == "scheme"] == [
+        (days[0], "A", "buy", 10), (days[2], "A", "sell", 6), (days[2], "B", "buy", 8),
+    ]
+    assert next(t["realized_pnl"] for t in trades if t["model"] == "scheme" and t["side"] == "sell") == pytest.approx(.1267326732673268)
+    assert next(t["realized_pnl"] for t in trades if t["model"] == "equal" and t["side"] == "sell") == pytest.approx(.063681592039801)
+    for model, initial, before, rebalance, end in [
+        ("scheme", initial, 1.15 * initial, scheme_rebalance, .75 * scheme_rebalance),
+        ("equal", equal_initial, 1.075 * equal_initial, equal_rebalance, .875 * equal_rebalance),
+    ]:
+        history = result[model]
+        assert [p["date"] for p in history["points"]] == days
+        assert [p["value"] for p in history["points"]] == pytest.approx([initial, before, rebalance, end])
+        assert history["points"][0]["drawdown"] == pytest.approx(initial - 1)
+        assert history["return"] == pytest.approx(end - 1)
+        assert history["drawdown"] == pytest.approx(end / before - 1)
+
+
+def test_tracking_target_updates_wait_for_each_etf_signal():
+    days = [f"2026-11-{i:02}" for i in range(1, 8)]
+    events = [
+        {"date": days[i], "total_position": .7, "etf_allocations": [
+            {"symbol": "A", "weight": weight, "equal_weight": .35},
+            {"symbol": "B", "weight": .1, "equal_weight": .35},
+        ]}
+        for i, weight in [(0, .25), (2, .15), (3, .4), (4, .45), (5, .5)]
+    ]
+    result, trades = _allocation_calculation.tracking_performance(
+        days, [[10, 10]] * 7, [[0, 0]] * 7, [[1, 1]] * 7,
+        [[None, None], ["attack", None], [None, None], [None, None],
+         ["retreat", None], [None, None], ["attack", None]],
+        events, 0,
+    )
+    scheme = [t for t in trades if t["model"] == "scheme"]
+    assert [(t["date"], t["symbol"], t["side"], t["reason"]) for t in scheme] == [
+        (days[1], "A", "buy", "attack"), (days[4], "A", "sell", "retreat"),
+        (days[6], "A", "buy", "attack"),
+    ]
+    assert [t["weight"] for t in scheme] == pytest.approx([.25, 0, .5])
+    assert result["scheme"]["return"] == pytest.approx(0)
+
+
+def test_tracking_attack_uses_remaining_exposure_without_resizing_other_etfs():
+    days = ["2026-11-05", "2026-11-06"]
+    events = [{"date": days[0], "total_position": .7, "etf_allocations": [
+        {"symbol": symbol, "weight": .35, "equal_weight": .35} for symbol in ("A", "B")
+    ]}]
+    _, trades = _allocation_calculation.tracking_performance(
+        days, [[10, 10], [20, 10]], [[0, 0]] * 2, [[1, 1]] * 2,
+        [["attack", None], [None, "attack"]], events, 0,
+    )
+    scheme = [t for t in trades if t["model"] == "scheme"]
+    assert [(t["date"], t["symbol"]) for t in scheme] == [(days[0], "A"), (days[1], "B")]
+    assert scheme[-1]["weight"] == pytest.approx(.7 - .7 / 1.35)
+
+
+def test_tracking_history_uses_closed_index_sessions_and_current_draft(monkeypatch):
+    import polars as pl
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    app.include_router(service.router)
+    repo = app.state.repo = Mock()
+    repo.get_etf_symbol_set.return_value = {"A"}
+    repo.get_name_map.return_value = {"A": "ETF A"}
+    from app.services import watchlist_market_trends
+
+    days = [date(2026, 11, 5), date(2026, 11, 6)]
+    warmup = [date.fromordinal(days[0].toordinal() - offset) for offset in range(21, 0, -1)]
+    repo.get_index_daily.return_value = pl.DataFrame({"date": warmup + days})
+    repo.get_etf_daily.return_value = pl.DataFrame({"date": warmup + days, "raw_close": [10.] * 22 + [12.]})
+    actions = Mock(return_value=[])
+    monkeypatch.setattr(service, "etf_action_rows", actions)
+    monkeypatch.setattr(service, "cn_now", lambda: datetime(2026, 11, 6, 10))
+    indicator = Mock(side_effect=lambda rows: ["attack" if row["date"] == str(days[0]) else None for row in rows])
+    monkeypatch.setattr(watchlist_market_trends, "angel_devil_signals", indicator)
+    score = Mock(side_effect=lambda request, symbol, *args, **kwargs: [
+        {"date": str(day), "score": 37 if symbol == "000001.SH" else 50} for day in [*warmup[-4:], days[0]]
+    ])
+    monkeypatch.setattr(service, "_composite_scores", score)
+    with TestClient(app) as client:
+        body = {"symbols": ["A"], "start": str(days[0]), "end": str(days[1]), "fee": .01, "slippage": .01}
+        response = client.post("/api/asset-allocation/tracking-history", json=body)
+        assert response.status_code == 200
+        result = response.json()
+        assert result["start"] == result["end"] == str(days[0])
+        assert result["sessions"] == result["requested_sessions"] == 1
+        assert result["events"][0]["cash_weight"] == pytest.approx(.65)
+        assert result["history"]["equal"]["drawdown"] == pytest.approx(1 / 1.007 - 1)
+        assert score.call_args.kwargs["etf_days"] == [*warmup[-4:], days[0]]
+        assert indicator.call_args.args[0][-1]["date"] == str(days[0])
+        assert result["trades"][0]["reason"] == "attack"
+        monkeypatch.setattr(service, "cn_now", lambda: datetime(2026, 11, 6, 16))
+        result = client.post("/api/asset-allocation/tracking-history", json=body).json()
+        assert result["skipped"][0]["date"] == str(days[1])
+        assert result["history"]["scheme"]["points"][1]["value"] == pytest.approx(1.07 / 1.007)
+
+        actions.side_effect = ValueError("事件覆盖无法确认")
+        result = client.post("/api/asset-allocation/tracking-history", json=body).json()
+        assert result["events"] and "事件覆盖无法确认" in result["performance_error"]
+        repo.get_etf_daily.return_value = pl.DataFrame({"date": days[:1], "raw_close": [10.]})
+        actions.side_effect = None
+        result = client.post("/api/asset-allocation/tracking-history", json=body).json()
+        assert result["events"] and "2026-11-06 缺少有效的未复权收盘价" in result["performance_error"]
+        assert "history" not in result
+        assert client.post("/api/asset-allocation/tracking-history", json={**body, "fee": -.01}).status_code == 422
+        assert client.post("/api/asset-allocation/tracking-history", json={"symbols": ["A", "A"]}).status_code == 422
 
 
 def test_optimize_returns_scores_in_portfolio_order_and_invalidates_on_score_change(monkeypatch):
@@ -240,7 +439,7 @@ def test_optimize_returns_scores_in_portfolio_order_and_invalidates_on_score_cha
         assert "cash_amount" not in first
         scores[symbols[1]] = 30
         second = client.post("/api/asset-allocation/optimize", json=body).json()
-        assert second["cash_weight"] == 0.6
+        assert second["cash_weight"] == pytest.approx(1 - .2 - .7 * 900 / 5800)
         assert second["data_version"] != first["data_version"]
         bad = client.post("/api/asset-allocation/optimize", json={"symbols": [symbols[0]] * 2})
         assert bad.status_code == 422

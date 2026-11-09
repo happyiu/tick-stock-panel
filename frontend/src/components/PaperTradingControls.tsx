@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { ArrowLeftRight, CircleAlert, Link as LinkIcon, X } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { NumericInput } from '@/components/NumericInput'
 import { api, type EtfTradingRule, type PaperSnapshot } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 
@@ -96,8 +97,8 @@ function RuleEditor({
           <option value="T1">T+1</option>
           <option value="T0">T+0</option>
         </select>
-        <input title="每手股数" className={input} type="number" value={lot} onChange={event => setLot(Number(event.target.value))} />
-        <input title="价格步长" className={input} type="number" step="0.001" value={tick} onChange={event => setTick(Number(event.target.value))} />
+        <NumericInput title="每手股数" className={input} value={lot} onValueChange={value => value != null && setLot(value)} />
+        <NumericInput title="价格步长" className={input} step="0.001" value={tick} onValueChange={value => value != null && setTick(value)} />
       </div>
       <button type="button" className={`${button} mt-2 h-8 text-xs`} disabled={save.isPending} onClick={() => save.mutate()}>
         {initialRule ? '保存修改' : `确认 ${symbol} 制度`}
@@ -187,13 +188,12 @@ function OrderForm({
       </div>
       <div className="grid grid-cols-[1fr_92px] gap-2">
         <Field label={`数量（${quantityUnit === 'lots' ? '手' : '股'}）`}>
-          <input
+          <NumericInput
             className={input}
-            type="number"
             min={1}
             step={quantityUnit === 'lots' ? 1 : rule?.lot_size ?? 100}
             value={quantity}
-            onChange={event => setQuantity(Number(event.target.value))}
+            onValueChange={value => value != null && setQuantity(value)}
           />
         </Field>
         <Field label="单位">
@@ -305,7 +305,7 @@ function ConditionForm({
       )}
       <div className="grid grid-cols-[1fr_92px] gap-2">
         <Field label={`数量（${quantityUnit === 'lots' ? '手' : '股'}）`}>
-          <input className={input} type="number" min={1} step={quantityUnit === 'lots' ? 1 : 100} value={quantity} onChange={event => setQuantity(Number(event.target.value))} />
+          <NumericInput className={input} min={1} step={quantityUnit === 'lots' ? 1 : 100} value={quantity} onValueChange={value => value != null && setQuantity(value)} />
         </Field>
         <Field label="单位">
           <select

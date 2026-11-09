@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as echarts from 'echarts'
 import { ChevronLeft, Dices, Grip, RotateCcw, X } from 'lucide-react'
+import { NumericInput } from '@/components/NumericInput'
 import { type KlinePeriod, type KlineRow } from '@/lib/api'
 import { normalizeKlineBarKey } from '@/lib/kline'
 import { useChartTheme } from '@/lib/theme'
@@ -467,13 +468,13 @@ export function FindFeelDialog({
                       <label htmlFor="find-feel-buy-quantity" className="text-secondary">买入数量</label>
                       <span className="text-muted">可买 {buyMaxQuantity.toLocaleString()} 股</span>
                     </div>
-                    <input
+                    <NumericInput
                       id="find-feel-buy-quantity"
-                      type="number"
                       min={FIND_FEEL_QUANTITY}
                       step={FIND_FEEL_QUANTITY}
-                      value={buyQuantity > 0 ? buyQuantity : ''}
-                      onChange={event => setBuyQuantity(Number(event.target.value))}
+                      value={buyQuantity > 0 ? buyQuantity : null}
+                      allowEmpty
+                      onValueChange={value => setBuyQuantity(value ?? 0)}
                       className="mt-1 h-8 w-full rounded-btn border border-border bg-base px-2 font-mono text-xs text-foreground outline-none focus:border-accent"
                     />
                     <div className="mt-1 grid grid-cols-3 gap-1">
@@ -493,13 +494,13 @@ export function FindFeelDialog({
                       <label htmlFor="find-feel-sell-quantity" className="text-secondary">卖出数量</label>
                       <span className="text-muted">可卖 {sellMaxQuantity.toLocaleString()} 股</span>
                     </div>
-                    <input
+                    <NumericInput
                       id="find-feel-sell-quantity"
-                      type="number"
                       min={FIND_FEEL_QUANTITY}
                       step={FIND_FEEL_QUANTITY}
-                      value={sellQuantity > 0 ? sellQuantity : ''}
-                      onChange={event => setSellQuantity(Number(event.target.value))}
+                      value={sellQuantity > 0 ? sellQuantity : null}
+                      allowEmpty
+                      onValueChange={value => setSellQuantity(value ?? 0)}
                       className="mt-1 h-8 w-full rounded-btn border border-border bg-base px-2 font-mono text-xs text-foreground outline-none focus:border-accent"
                     />
                     <div className="mt-1 grid grid-cols-3 gap-1">

@@ -8,6 +8,7 @@
  */
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { NumericInput } from '@/components/NumericInput'
 import {
   DndContext, closestCenter, KeyboardSensor, PointerSensor,
   useSensor, useSensors, type DragEndEvent,
@@ -393,11 +394,12 @@ export function ListColumnCustomizerInner({
         {(col.extDisplay?.displayMode ?? 'tag') === 'tag' && (
           <label className="flex items-center gap-2 text-xs">
             <span className="text-secondary w-16 shrink-0">显示前N个</span>
-            <input
-              type="number" min={0}
-              value={col.extDisplay?.maxTags ?? ''}
-              onChange={e => {
-                const v = e.target.value ? Number(e.target.value) : undefined
+            <NumericInput
+              min={0}
+              value={col.extDisplay?.maxTags}
+              allowEmpty
+              onValueChange={value => {
+                const v = value || undefined
                 updateExtDisplay(col.id, { maxTags: v, ...(v ? {} : { hiddenIndices: undefined }) })
               }}
               placeholder="0=全部"
@@ -487,10 +489,10 @@ export function ListColumnCustomizerInner({
             {(col.extDisplay?.unitConvert ?? 'none') !== 'none' && (
               <label className="flex items-center gap-2 text-xs">
                 <span className="text-secondary w-16 shrink-0">小数位</span>
-                <input
-                  type="number" min={0} max={6} step={1}
+                <NumericInput
+                  min={0} max={6} step={1}
                   value={col.extDisplay?.unitDecimals ?? 2}
-                  onChange={e => updateExtDisplay(col.id, { unitDecimals: Math.max(0, Math.min(6, Number(e.target.value) || 0)) })}
+                  onValueChange={value => updateExtDisplay(col.id, { unitDecimals: Math.max(0, Math.min(6, value ?? 0)) })}
                   className="w-16 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 text-center focus:outline-none focus:border-accent/50"
                 />
                 <span className="text-[10px] text-muted">换算后保留几位</span>
@@ -521,11 +523,12 @@ export function ListColumnCustomizerInner({
       <div className="pl-10 pr-3 py-2 space-y-2 border-l-2 border-accent/20 ml-[18px]">
         <label className="flex items-center gap-2 text-xs">
           <span className="text-secondary w-16 shrink-0">显示前N个</span>
-          <input
-            type="number" min={0}
-            value={col.extDisplay?.maxTags ?? ''}
-            onChange={e => {
-              const v = e.target.value ? Number(e.target.value) : undefined
+          <NumericInput
+            min={0}
+            value={col.extDisplay?.maxTags}
+            allowEmpty
+            onValueChange={value => {
+              const v = value || undefined
               updateExtDisplay(col.id, { maxTags: v, ...(v ? {} : { hiddenIndices: undefined }) })
             }}
             placeholder="0=全部"
@@ -596,13 +599,12 @@ export function ListColumnCustomizerInner({
     ) => (
       <label key={field} className="flex items-center gap-2 text-xs">
         <span className="text-secondary w-16 shrink-0">{label}</span>
-        <input
-          type="number"
+        <NumericInput
           value={col.candleConfig?.[field] ?? cfg[field]}
-          onChange={e => {
-            const raw = e.target.value
+          allowEmpty
+          onValueChange={value => {
             // 空字符串 → 存 undefined (回退到默认值显示); 否则存原始数字 (不钳制)
-            updateCandleConfig(col.id, { [field]: raw === '' ? undefined : Number(raw) } as Partial<CandleColumnConfig>)
+            updateCandleConfig(col.id, { [field]: value ?? undefined } as Partial<CandleColumnConfig>)
           }}
           onBlur={e => {
             const raw = e.target.value
@@ -651,12 +653,11 @@ export function ListColumnCustomizerInner({
     ) => (
       <label key={field} className="flex items-center gap-2 text-xs">
         <span className="text-secondary w-16 shrink-0">{label}</span>
-        <input
-          type="number"
+        <NumericInput
           value={col.intradayConfig?.[field] ?? cfg[field]}
-          onChange={e => {
-            const raw = e.target.value
-            updateIntradayConfig(col.id, { [field]: raw === '' ? undefined : Number(raw) } as Partial<IntradayColumnConfig>)
+          allowEmpty
+          onValueChange={value => {
+            updateIntradayConfig(col.id, { [field]: value ?? undefined } as Partial<IntradayColumnConfig>)
           }}
           onBlur={e => {
             const raw = e.target.value

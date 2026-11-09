@@ -3601,6 +3601,10 @@ export const api = {
   etfRadarJob: (id: string) => request<{ status: string; error?: string; log: { msg: string }[] }>(`/api/kline/etf-pool/radar/jobs/${encodeURIComponent(id)}`),
   allocationSchemes: () => request<{ default_scheme_id: string; schemes: Record<string, { name: string; ready: boolean; position_ready?: boolean; current_weights_ready?: boolean }> }>('/api/asset-allocation/schemes'),
   allocationTracking: () => request<Record<string, AllocationTracking>>('/api/asset-allocation/tracking'),
+  allocationTrackingHistory: (body: AllocationPortfolio & { start: string; end: string; fee?: number; slippage?: number }) =>
+    request<AllocationTrackingHistory>('/api/asset-allocation/tracking-history', {
+      method: 'POST', body: JSON.stringify(body), timeoutMs: COMPUTE_REQUEST_TIMEOUT_MS, quiet: true,
+    }),
   allocationRefresh: (id: string) => request<AllocationTracking>(`/api/asset-allocation/portfolios/${id}/refresh`, { method: 'POST' }),
   allocationConfirm: (id: string, checkedAt: string) => request<AllocationTracking>(`/api/asset-allocation/portfolios/${id}/confirm`, { method: 'POST', body: JSON.stringify({ checked_at: checkedAt }) }),
   allocationPortfolios: () => request<Record<string, AllocationPortfolio>>('/api/asset-allocation/portfolios'),
@@ -5666,7 +5670,39 @@ export interface AllocationPortfolio {
 export interface AllocationPerformance {
   return: number
   drawdown: number
-  points: { date: string; value: number }[]
+  points: { date: string; value: number; drawdown?: number }[]
+}
+export interface AllocationTrackingHistory {
+  start: string
+  end: string
+  sessions: number
+  requested_sessions: number
+  names: Record<string, string>
+  history?: AllocationComparison<AllocationPerformance>
+  performance_error?: string
+  trades?: {
+    date: string
+    model: AllocationModel
+    symbol: string
+    side: 'buy' | 'sell'
+    reason: 'attack' | 'retreat'
+    price: number
+    weight: number
+    realized_pnl: number | null
+  }[]
+  events: {
+    date: string
+    reason: 'initial' | 'position_change' | 'deviation'
+    market_score: number
+    previous_position: number | null
+    total_position: number
+    max_deviation: number | null
+    etf_allocations: { symbol: string; score: number; previous_weight: number; weight: number; change: number; equal_weight: number }[]
+    previous_cash: number
+    cash_weight: number
+    equal_cash_weight: number
+  }[]
+  skipped: { date: string; market_missing: boolean; symbols: string[] }[]
 }
 export interface AllocationResult {
   weights?: number[]

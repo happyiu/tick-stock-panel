@@ -10,6 +10,7 @@ import os
 import threading
 import time
 import uuid
+from bisect import bisect_left, bisect_right
 from datetime import date, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -31,6 +32,7 @@ router = APIRouter(prefix="/api/asset-allocation", tags=["asset-allocation"])
 _lock = threading.RLock()
 _cache = {}
 _events = {}
+SCORE_AVERAGE_WINDOW = 5
 
 
 class Portfolio(BaseModel):
@@ -42,7 +44,7 @@ class Portfolio(BaseModel):
     max_weight: float = Field(default=0.35, gt=0, le=1)
     auto_refresh: bool = False
     rebalance: Literal["monthly", "daily_threshold", "angel_devil"] = "monthly"
-    threshold: float = Field(default=0.05, gt=0, le=1)
+    threshold: float = Field(default=0.10, gt=0, le=1)
 
     @field_validator("scheme_id", mode="before")
     @classmethod
@@ -57,12 +59,14 @@ class Portfolio(BaseModel):
         return value
 
 
-class Calculation(Portfolio):
-    start: date | None = None
-    end: date | None = None
+class TrackingCalculation(Portfolio):
     fee: float = Field(default=0, ge=0, lt=0.1)
     slippage: float = Field(default=0, ge=0, lt=0.1)
 
+
+class Calculation(TrackingCalculation):
+    start: date | None = None
+    end: date | None = None
 
 def allocate_amounts(weights, initial_capital):
     cents = int(Decimal(str(initial_capital)) * 100)
@@ -136,8 +140,8 @@ def write_portfolios(request, items):
     temporary.replace(path)
 
 
-def _composite_scores(request, symbol, asset_type, start=None, end=None):
-    """Score index history or a single ETF on the requested closed trading day."""
+def _composite_scores(request, symbol, asset_type, start=None, end=None, *, etf_days=None, replay=False):
+    """Score closed index or ETF candles as of the requested sessions."""
     import polars as pl
 
     from app.services.chart_candles import chart_snapshot
@@ -158,7 +162,7 @@ def _composite_scores(request, symbol, asset_type, start=None, end=None):
     now = cn_now()
     latest_end = now.date() if now.hour >= 16 else now.date() - timedelta(days=1)
     is_etf = asset_type == "etf"
-    if is_etf:
+    if end is not None and (is_etf or replay):
         latest_end = min(end, latest_end)
     requested_start = start or end or latest_end
     # Keep the same three-year warmup as the market-trend panel so weekly EMA signals converge.
@@ -180,27 +184,6 @@ def _composite_scores(request, symbol, asset_type, start=None, end=None):
 
     snapshot = chart_snapshot(state, symbol, asset_type, "1d", history_start, latest_end).frame
     closed_daily_rows = closed_rows(snapshot)
-    if is_etf:
-        if not closed_daily_rows or closed_daily_rows[-1]["date"] != end:
-            closed_daily_rows = closed_rows(state.repo.get_etf_daily(symbol, history_start, latest_end))
-        if not closed_daily_rows or closed_daily_rows[-1]["date"] != end:
-            return []
-        if any(
-            value is None or not math.isfinite(value) or value <= 0
-            for value in (closed_daily_rows[-1][key] for key in ("open", "high", "low", "close", "volume"))
-        ):
-            return []
-    elif snapshot.is_empty():
-        closed_daily_rows = closed_rows(state.repo.get_index_daily(symbol, history_start, latest_end))
-    if not closed_daily_rows:
-        raise ValueError("上证指数没有可用的完整 OHLCV 日线，无法计算市场环境得分")
-    daily = pl.DataFrame(closed_daily_rows, infer_schema_length=None)
-    if is_etf:
-        technical_daily = daily.filter(pl.col("date") >= end - timedelta(days=TECHNICAL_SCORE_WARMUP_DAYS))
-        technical_rows = [{"as_of": str(end), "categories": latest_technical_categories(technical_daily)}]
-    else:
-        technical_rows = technical_score_payload(score_technical_frame(daily, assume_sorted=True))["rows"]
-
     def signal_events(rows, period):
         values = angel_devil_signals(rows)
         width = 16 if period == "30m" else 10
@@ -209,35 +192,6 @@ def _composite_scores(request, symbol, asset_type, start=None, end=None):
             for row, signal in zip(rows, values, strict=True)
             if signal is not None
         ]
-
-    daily_events = signal_events(closed_daily_rows, "1d")
-    weekly_frame = aggregate_daily_period(daily, "1w")
-    weekly_rows = [
-        row for row in annotate_bar_closure(weekly_frame.to_dicts(), "1w", latest_end, now=now)
-        if row["is_closed"]
-    ]
-    weekly_events = signal_events(weekly_rows, "1w")
-
-    # Match the chart's 120-trading-day 30F window for current ETF scores.
-    minute_days = 120
-    minute_start = latest_end - timedelta(days=minute_days * 3 + 20) if is_etf else history_start
-    minute_frame = chart_snapshot(state, symbol, asset_type, "30m", minute_start, latest_end).frame
-    minute_rows = []
-    if not minute_frame.is_empty():
-        minute_rows = prepare_native_30m(minute_frame).to_dicts()
-    elif is_etf:
-        minute = state.repo.get_minute_range([symbol], minute_start, latest_end, asset_type="etf")
-        if not minute.is_empty():
-            minute_rows = aggregate_minute_30m(minute).to_dicts()
-    minute_rows = [
-        row for row in annotate_bar_closure(minute_rows, "30m", latest_end, now=now)
-        if row["is_closed"]
-    ]
-    if is_etf:
-        minute_rows = [row for row in minute_rows if str(row["date"]) <= f"{end} 15:00"]
-        trade_dates = set(sorted({str(row["date"])[:10] for row in minute_rows})[-minute_days:])
-        minute_rows = [row for row in minute_rows if str(row["date"])[:10] in trade_dates]
-    minute_events = signal_events(minute_rows, "30m")
 
     def category(row, category_id):
         return next((item for item in row.get("categories", []) if item.get("id") == category_id), None)
@@ -277,6 +231,117 @@ def _composite_scores(request, symbol, asset_type, start=None, end=None):
         volume_score = volume.get("score") if volume and volume.get("available") is True and volume.get("coverage", 0) >= 100 and valid_score(volume.get("score")) else None
         return macd_score, rsi_score, volume_score
 
+    def composite_score(row, weekly, daily, minute):
+        trend = None
+        if weekly is not None and daily is not None:
+            raw = 55 * (weekly == "attack") + 30 * (daily == "attack") + 15 * (0.5 if minute is None else minute == "attack")
+            trend = math.floor(raw + 0.5)
+        macd, rsi, volume = daily_factor_scores(row)
+        if any(value is None for value in (trend, macd, rsi, volume)):
+            return None
+        return math.floor(trend * 0.4 + macd * 0.2 + rsi * 0.2 + volume * 0.2 + 0.5)
+
+    def weekly_rows(daily, as_of):
+        weekly = aggregate_daily_period(daily, "1w")
+        return [
+            row for row in annotate_bar_closure(weekly.to_dicts(), "1w", as_of, now=now)
+            if row["is_closed"]
+        ]
+
+    def closed_minutes(frame, native):
+        if frame.is_empty():
+            return []
+        bars = prepare_native_30m(frame) if native else aggregate_minute_30m(frame)
+        return [
+            row for row in annotate_bar_closure(bars.to_dicts(), "30m", latest_end, now=now)
+            if row["is_closed"]
+        ]
+
+    if is_etf:
+        days = [day for day in (etf_days or [end]) if day <= latest_end]
+        if not days:
+            return []
+        primary_dates = [row["date"] for row in closed_daily_rows]
+        fallback_rows = []
+        fallback_dates = []
+        if set(days) - set(primary_dates):
+            fallback_rows = closed_rows(state.repo.get_etf_daily(symbol, history_start, latest_end))
+            fallback_dates = [row["date"] for row in fallback_rows]
+
+        minute_start = days[0] - timedelta(days=380)
+        minute_frame = chart_snapshot(state, symbol, asset_type, "30m", minute_start, latest_end).frame
+        minutes = closed_minutes(minute_frame, native=True)
+        minute_dates = [str(row["date"]) for row in minutes]
+        fallback_minutes = None
+        fallback_minute_dates = []
+
+        def daily_window(rows, dates, day):
+            return rows[bisect_left(dates, day - timedelta(days=1100)):bisect_right(dates, day)]
+
+        def minute_window(rows, stamps, day):
+            left = bisect_left(stamps, str(day - timedelta(days=380)))
+            right = bisect_right(stamps, f"{day} 15:00")
+            return rows[left:right]
+
+        def last_signal(rows, period):
+            events = signal_events(rows, period)
+            return events[-1][1] if events else None
+
+        points = []
+        for day in days:
+            rows = daily_window(closed_daily_rows, primary_dates, day)
+            if not rows or rows[-1]["date"] != day:
+                rows = daily_window(fallback_rows, fallback_dates, day)
+            if not rows or rows[-1]["date"] != day or any(
+                value is None or not math.isfinite(value) or value <= 0
+                for value in (rows[-1][key] for key in ("open", "high", "low", "close", "volume"))
+            ):
+                continue
+
+            day_minutes = minute_window(minutes, minute_dates, day)
+            if not day_minutes:
+                if fallback_minutes is None:
+                    raw = state.repo.get_minute_range([symbol], minute_start, latest_end, asset_type="etf")
+                    fallback_minutes = closed_minutes(raw, native=False)
+                    fallback_minute_dates = [str(row["date"]) for row in fallback_minutes]
+                day_minutes = minute_window(fallback_minutes, fallback_minute_dates, day)
+            sessions = sorted({str(row["date"])[:10] for row in day_minutes})[-120:]
+            if sessions:
+                day_minutes = [row for row in day_minutes if str(row["date"])[:10] >= sessions[0]]
+
+            daily = pl.DataFrame(rows, infer_schema_length=None)
+            technical_daily = daily.filter(pl.col("date") >= day - timedelta(days=TECHNICAL_SCORE_WARMUP_DAYS))
+            score = composite_score(
+                {"categories": latest_technical_categories(technical_daily)},
+                last_signal(weekly_rows(daily, day), "1w"),
+                last_signal(rows, "1d"),
+                last_signal(day_minutes, "30m"),
+            )
+            points.append({"date": str(day), "score": score})
+        return points
+
+    if snapshot.is_empty():
+        closed_daily_rows = closed_rows(state.repo.get_index_daily(symbol, history_start, latest_end))
+    if not closed_daily_rows:
+        if replay:
+            return []
+        raise ValueError("上证指数没有可用的完整 OHLCV 日线，无法计算市场环境得分")
+    daily = pl.DataFrame(closed_daily_rows, infer_schema_length=None)
+    technical_rows = technical_score_payload(score_technical_frame(daily, assume_sorted=True))["rows"]
+    daily_events = signal_events(closed_daily_rows, "1d")
+    weekly_events = signal_events(weekly_rows(daily, latest_end), "1w")
+    if replay:
+        # A short week cannot use the next week's candles to confirm its own close early.
+        confirmed_events = []
+        for stamp, signal in weekly_events:
+            day = date.fromisoformat(stamp)
+            if day.weekday() < 4:
+                day += timedelta(days=7 - day.weekday())
+            confirmed_events.append((str(day), signal))
+        weekly_events = confirmed_events
+    minute_frame = chart_snapshot(state, symbol, asset_type, "30m", history_start, latest_end).frame
+    minute_events = signal_events(closed_minutes(minute_frame, native=True), "30m")
+
     def latest(events, cutoff, cursor):
         while cursor < len(events) and events[cursor][0] <= cutoff:
             cursor += 1
@@ -293,26 +358,63 @@ def _composite_scores(request, symbol, asset_type, start=None, end=None):
         latest_weekly, weekly_cursor = latest(weekly_events, as_of, weekly_cursor)
         latest_minute, minute_cursor = latest(minute_events, f"{as_of} 15:00", minute_cursor)
 
-        trend_score = None
-        if latest_weekly is not None and latest_daily is not None:
-            raw_trend = 55 * (latest_weekly == "attack") + 30 * (latest_daily == "attack") + 15 * (0.5 if latest_minute is None else latest_minute == "attack")
-            trend_score = math.floor(raw_trend + 0.5)
-        macd_score, rsi_score, volume_score = daily_factor_scores(row)
-        factors = (trend_score, macd_score, rsi_score, volume_score)
-        score = None if any(value is None for value in factors) else math.floor(
-            trend_score * 0.4 + macd_score * 0.2 + rsi_score * 0.2 + volume_score * 0.2 + 0.5
-        )
+        score = composite_score(row, latest_weekly, latest_daily, latest_minute)
         if start and as_of < start.isoformat():
             continue
         points.append({"date": as_of, "score": score})
     return points
 
 
-def market_environment_position_history(request, start=None, end=None):
-    """Return closed daily composite scores and Devil Trader total exposures."""
-    points = _composite_scores(request, "000001.SH", "index", start, end)
-    if not points:
-        raise ValueError("所选日期范围内没有完整的市场环境得分")
+def _trading_sessions(repo, start, end):
+    calendar = repo.get_index_daily("000001.SH", start, end, columns=["date"])
+    if "date" not in calendar.columns:
+        return []
+    return sorted({day for day in calendar.get_column("date").drop_nulls().to_list() if start <= day <= end})
+
+
+def _rolling_score_averages(days, points, window=SCORE_AVERAGE_WINDOW):
+    """Align raw scores to market sessions and require a full consecutive window."""
+    raw_scores = {str(point["date"]): point.get("score") for point in points}
+    recent = []
+    averages = {}
+    for day in days:
+        key = str(day)
+        score = raw_scores.get(key)
+        if score is None or not isinstance(score, (int, float)) or not math.isfinite(score) or not 0 <= score <= 100:
+            recent.clear()
+            averages[key] = None
+            continue
+        recent.append(float(score))
+        if len(recent) > window:
+            recent.pop(0)
+        averages[key] = sum(recent) / window if len(recent) == window else None
+    return averages
+
+
+def market_environment_position_history(request, start=None, end=None, *, replay=False):
+    """Return five-session average scores and Devil Trader total exposures."""
+    now = cn_now()
+    cutoff = now.date() if now.hour >= 16 else now.date() - timedelta(days=1)
+    latest_end = min(end or cutoff, cutoff)
+    visible_start = start or latest_end - timedelta(days=1100)
+    calendar_start = visible_start - timedelta(days=30)
+    calendar_days = _trading_sessions(request.app.state.repo, calendar_start, latest_end)
+    visible_days = [day for day in calendar_days if visible_start <= day <= latest_end]
+    if not visible_days:
+        raise ValueError("所选日期范围内没有完整的市场环境交易日")
+
+    first_index = calendar_days.index(visible_days[0])
+    score_days = calendar_days[max(0, first_index - SCORE_AVERAGE_WINDOW + 1):]
+    raw_points = _composite_scores(
+        request, "000001.SH", "index", score_days[0], latest_end, replay=replay
+    )
+    averages = _rolling_score_averages(score_days, raw_points)
+    points = [
+        {"date": str(day), "score": averages[str(day)]}
+        for day in visible_days
+    ]
+    if not any(point["score"] is not None for point in points):
+        raise ValueError("所选日期范围内没有完整的5日平均市场环境得分")
     for point in points:
         score = point["score"]
         position, regime = _allocation_calculation.total_position_for_score(score) if score is not None else (None, None)
@@ -321,8 +423,14 @@ def market_environment_position_history(request, start=None, end=None):
 
 
 def etf_composite_score(request, symbol, as_of):
-    points = _composite_scores(request, symbol, "etf", start=as_of, end=as_of)
-    return points[-1]["score"] if points else None
+    sessions = _trading_sessions(request.app.state.repo, as_of - timedelta(days=30), as_of)
+    score_days = sessions[-SCORE_AVERAGE_WINDOW:]
+    if not score_days:
+        return None
+    points = _composite_scores(
+        request, symbol, "etf", start=score_days[0], end=as_of, etf_days=score_days
+    )
+    return _rolling_score_averages(score_days, points).get(str(as_of))
 
 
 @router.delete("/portfolios/{portfolio_id}")
@@ -335,6 +443,23 @@ def delete(portfolio_id: uuid.UUID, request: Request):
         write_tracking(request, entries)
         write_portfolios(request, items)
         return items
+
+
+def etf_action_rows(symbol):
+    key = (symbol, int(time.time() // 300))
+    with _lock:
+        event_rows = _events.get(key)
+    if event_rows is None:
+        provider = get_provider(os.getenv("ALLOCATION_ACTION_PROVIDER", "astockdata"))
+        getter = getattr(provider, "get_etf_actions", None)
+        if getter is None:
+            raise ValueError("所选数据源不支持 ETF 分红拆分事件")
+        event_rows = getter(symbol)
+        with _lock:
+            for old in [k for k in _events if k[0] == symbol]:
+                del _events[old]
+            _events[key] = event_rows
+    return event_rows
 
 
 def prepare(body, repo, mode, basis_date=None):
@@ -391,19 +516,7 @@ def prepare(body, repo, mode, basis_date=None):
                 f"{symbol} 缺少 {len(missing)} 个交易日，首个缺口 {missing[0]}，可用区间 {available}"
             )
             continue
-        key = (symbol, int(time.time() // 300))
-        with _lock:
-            event_rows = _events.get(key)
-        if event_rows is None:
-            provider = get_provider(os.getenv("ALLOCATION_ACTION_PROVIDER", "astockdata"))
-            getter = getattr(provider, "get_etf_actions", None)
-            if getter is None:
-                raise ValueError("所选数据源不支持 ETF 分红拆分事件")
-            event_rows = getter(symbol)
-            with _lock:
-                for old in [k for k in _events if k[0] == symbol]:
-                    del _events[old]
-                _events[key] = event_rows
+        event_rows = etf_action_rows(symbol)
         events = {e["date"]: e for e in event_rows}
         with _lock:
             coverage_path = repo.store.data_dir / "user_data/asset_allocation_coverage.json"
@@ -420,36 +533,10 @@ def prepare(body, repo, mode, basis_date=None):
             temporary.write_text(json.dumps(coverage))
             temporary.replace(coverage_path)
         if mode == "backtest":
-            from app.services.watchlist_market_trends import angel_devil_signals
-
-            history_days = sorted(rows)
             first_signal_day = next((d for d in days if d >= body.start), None)
             if first_signal_day is None:
                 raise ValueError("所选区间内没有已闭合交易日")
-            if sum(d < first_signal_day for d in history_days) < 21:
-                raise ValueError(f"{symbol} 天使魔鬼信号至少需要 21 根预热日线")
-            # Use the same proportional event adjustment as the enriched pipeline.
-            # Future splits/dividends only rescale earlier bars uniformly.
-            scale = 1.0
-            adjusted = []
-            previous_close = None
-            for day in history_days:
-                raw = rows[day]["raw_close"]
-                if raw is None or not math.isfinite(raw) or raw <= 0:
-                    raise ValueError(f"{symbol} {day} 信号历史价格无效")
-                event = events.get(str(day))
-                if event and previous_close is not None:
-                    cash = event["dividend"]
-                    if previous_close <= cash:
-                        raise ValueError(f"{symbol} {day} 分红金额无效")
-                    scale *= previous_close * event["split"] / (previous_close - cash)
-                adjusted.append({"date": str(day), "close": raw * scale})
-                previous_close = raw
-            # Gaps inside signal history must not change the indicator's time base.
-            expected = [d for d in calendar["date"].to_list() if history_days[0] <= d <= days[-1]]
-            if set(expected) - set(history_days):
-                raise ValueError(f"{symbol} 天使魔鬼信号历史存在交易日缺口")
-            by_day = dict(zip(history_days, angel_devil_signals(adjusted), strict=True))
+            by_day = daily_allocation_signals(symbol, rows, events, calendar["date"].to_list(), first_signal_day)
             signals.append([by_day[d] for d in days])
         c, o, div, split = [], [], [], []
         for day in days:
@@ -497,6 +584,7 @@ def calculate(body, request, mode):
                 request,
                 start=body.start if mode == "backtest" else None,
                 end=body.end,
+                replay=mode == "backtest",
             )
             if mode == "backtest":
                 unavailable = next((point["date"] for point in points if point["score"] is None), None)
@@ -517,7 +605,7 @@ def calculate(body, request, mode):
                     raise ValueError(f"非 ETF 或未知代码：{', '.join(sorted(unknown))}")
                 as_of = date.fromisoformat(latest_point["date"])
                 etf_scores = [etf_composite_score(request, symbol, as_of) for symbol in body.symbols]
-            rule_version = "devil_trader_etf_scores_v1" if preview else "devil_trader_environment_v1"
+            rule_version = "devil_trader_five_session_average_60_90_v2"
             signature = hashlib.sha256(json.dumps({
                 "mode": mode,
                 "parameters": body.model_dump(mode="json"),
@@ -595,6 +683,139 @@ def backtest(body: Calculation, request: Request):
     return calculate(body, request, "backtest")
 
 
+def daily_allocation_signals(symbol, rows, actions, calendar_days, first_signal_day):
+    from app.services.watchlist_market_trends import angel_devil_signals
+
+    history_days = sorted(rows)
+    if sum(day < first_signal_day for day in history_days) < 21:
+        raise ValueError(f"{symbol} 天使魔鬼信号至少需要 21 根预热日线")
+    if any(day not in rows for day in calendar_days if history_days[0] <= day <= history_days[-1]):
+        raise ValueError(f"{symbol} 天使魔鬼信号历史存在交易日缺口")
+    # Build adjusted closes forward using only corporate actions effective on each date.
+    scale = 1.0
+    adjusted = []
+    previous_close = None
+    for day in history_days:
+        raw = rows[day]["raw_close"]
+        if raw is None or not math.isfinite(raw) or raw <= 0:
+            raise ValueError(f"{symbol} {day} 信号历史价格无效")
+        action = actions.get(str(day))
+        if action and previous_close is not None:
+            cash, split = action["dividend"], action["split"]
+            if not math.isfinite(cash) or not math.isfinite(split) or not 0 <= cash < previous_close or split <= 0:
+                raise ValueError(f"{symbol} {day} 分红拆分数据无效")
+            scale *= previous_close * split / (previous_close - cash)
+        adjusted.append({"date": str(day), "close": raw * scale})
+        previous_close = raw
+    return dict(zip(history_days, angel_devil_signals(adjusted), strict=True))
+
+
+def tracking_price_inputs(repo, symbols, days, calendar_days):
+    closes, dividends, splits, signals = [], [], [], []
+    for symbol in symbols:
+        frame = repo.get_etf_daily(symbol, date(2000, 1, 1), days[-1], columns=["date", "raw_close"])
+        rows = {row["date"]: row for row in frame.to_dicts() if row.get("date") is not None and row["date"] <= days[-1]}
+        prices = []
+        for day in days:
+            price = rows.get(day, {}).get("raw_close")
+            if price is None or not math.isfinite(price) or price <= 0:
+                raise ValueError(f"{symbol} {day} 缺少有效的未复权收盘价")
+            prices.append(price)
+        try:
+            actions = {row["date"]: row for row in etf_action_rows(symbol)}
+        except (RequestException, ValueError, RuntimeError, KeyError, TypeError, OSError) as exc:
+            raise ValueError(f"{symbol} 无法确认分红拆分数据：{exc}") from exc
+        cash, ratios = [], []
+        for day in days:
+            action = actions.get(str(day))
+            dividend, split = (action["dividend"], action["split"]) if action is not None else (0.0, 1.0)
+            if not math.isfinite(dividend) or not math.isfinite(split) or dividend < 0 or split <= 0:
+                raise ValueError(f"{symbol} {day} 分红拆分数据无效")
+            cash.append(dividend)
+            ratios.append(split)
+        closes.append(prices)
+        dividends.append(cash)
+        splits.append(ratios)
+        by_day = daily_allocation_signals(symbol, rows, actions, calendar_days, days[0])
+        signals.append([by_day[day] for day in days])
+    return tuple(list(zip(*matrix, strict=True)) for matrix in (closes, dividends, splits, signals))
+
+
+@router.post("/tracking-history")
+def tracking_history(body: Calculation, request: Request):
+    try:
+        if (body.start is None) != (body.end is None):
+            raise ValueError("请同时选择开始和结束日期")
+        if body.start is not None and body.end is not None and body.start > body.end:
+            raise ValueError("结束日期应晚于或等于开始日期")
+        if body.scheme_id not in _allocation_calculation.CURRENT_SCORE_SCHEMES:
+            raise ValueError("当前方案不支持回看调仓历史")
+        if not body.symbols or len(set(body.symbols)) != len(body.symbols):
+            raise ValueError("请选择 ETF，代码不能重复")
+        repo = request.app.state.repo
+        unknown = set(body.symbols) - repo.get_etf_symbol_set()
+        if unknown:
+            raise ValueError(f"非 ETF 或未知代码：{', '.join(sorted(unknown))}")
+
+        now = cn_now()
+        cutoff = now.date() if now.hour >= 16 else now.date() - timedelta(days=1)
+        calendar = repo.get_index_daily("000001.SH", date(2000, 1, 1), cutoff, columns=["date"])
+        dates = calendar.get_column("date").drop_nulls().to_list() if "date" in calendar.columns else []
+        available_days = sorted({day for day in dates if day <= cutoff})
+        if body.start is not None and body.end is not None:
+            days = [day for day in available_days if body.start <= day <= body.end]
+        else:
+            days = available_days[max(0, len(available_days) - body.lookback):]
+        if not days:
+            if body.start is not None:
+                raise ValueError("所选起止日期范围内没有交易日")
+            raise ValueError("交易日历不足，请同步指数历史")
+        start, end = days[0], days[-1]
+        first_index = available_days.index(start)
+        last_index = available_days.index(end)
+        score_days = available_days[max(0, first_index - SCORE_AVERAGE_WINDOW + 1):last_index + 1]
+        score_start = score_days[0]
+        market_points = _composite_scores(request, "000001.SH", "index", score_start, end, replay=True)
+        market_averages = _rolling_score_averages(score_days, market_points)
+        visible_days = {str(day) for day in days}
+        market = {day: average for day, average in market_averages.items() if day in visible_days}
+        scores = []
+        for symbol in body.symbols:
+            points = _composite_scores(request, symbol, "etf", score_start, end, etf_days=score_days)
+            averages = _rolling_score_averages(score_days, points)
+            scores.append({day: average for day, average in averages.items() if day in visible_days})
+        day_labels = [str(day) for day in days]
+        result = {
+            "start": str(start),
+            "end": str(end),
+            "sessions": len(days),
+            "requested_sessions": body.lookback if body.start is None else len(days),
+            "names": repo.get_name_map(body.symbols),
+            **_allocation_calculation.replay_tracking(
+                day_labels, market, body.symbols, scores, body.max_weight, body.threshold
+            ),
+        }
+        if result["events"]:
+            first = day_labels.index(result["events"][0]["date"])
+            try:
+                inputs = tracking_price_inputs(repo, body.symbols, days[first:], available_days)
+                histories, trades = _allocation_calculation.tracking_performance(
+                    day_labels[first:], *inputs, result["events"], body.fee + body.slippage
+                )
+                for history in histories.values():
+                    history["points"][:0] = [
+                        {"date": day, "value": 1.0, "drawdown": 0.0} for day in day_labels[:first]
+                    ]
+                result.update(history=histories, trades=trades)
+            except (ValueError, RuntimeError, KeyError, TypeError, OSError) as exc:
+                result["performance_error"] = str(exc)
+        return result
+    except RequestException as exc:
+        raise HTTPException(503, "历史行情数据源请求失败，请稍后重试") from exc
+    except (ValueError, RuntimeError, KeyError, OSError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 def setup(registrar: BackendExtensionRegistrar):
     registrar.include_router(router)
 
@@ -623,7 +844,7 @@ def config_signature(portfolio):
         portfolio.get("symbols"),
         portfolio.get("lookback", 252),
         portfolio.get("max_weight", 0.35),
-        portfolio.get("threshold", 0.05),
+        portfolio.get("threshold", 0.10),
     ]
 
 

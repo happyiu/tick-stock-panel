@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import type { AllocationPortfolio, AllocationTrackingHistory } from '@/lib/api'
 import AssetAllocation from './AssetAllocation'
 
 const calls = vi.hoisted(() => ({
@@ -10,6 +11,7 @@ const calls = vi.hoisted(() => ({
   devilPreview: false,
   daily: vi.fn(async () => ({ rows: [] })),
   period: vi.fn(async () => ({ rows: [] })),
+  replay: vi.fn<(body: AllocationPortfolio) => Promise<AllocationTrackingHistory>>(),
   payloads: [] as { mode: string; body: Record<string, unknown> }[],
   saved: [] as { id: string; body: Record<string, unknown> }[],
   messages: [] as { message: string; kind: string }[],
@@ -18,11 +20,13 @@ vi.mock('echarts', () => ({ init: () => ({ setOption() {}, resize() {}, dispose(
 vi.mock('@/components/Toast', () => ({ toast: (message: string, kind = 'error') => calls.messages.push({ message, kind }) }))
 vi.mock('@/lib/api', () => ({ api: {
   klineDaily: calls.daily,
+  indexDaily: async () => ({ rows: [] }),
   klinePeriod: calls.period,
   instrumentNames: async () => ({ names: { '510300.SH': '沪深300 ETF' } }),
   watchlistList: async () => ({ symbols: [] }),
   watchlistGroups: async () => ({ groups: [] }),
   allocationTracking: async () => ({}),
+  allocationTrackingHistory: calls.replay,
   allocationSchemes: async () => ({
     default_scheme_id: 'devil_trader',
     schemes: {
@@ -56,14 +60,8 @@ vi.mock('@/lib/api', () => ({ api: {
     }
     const history = { return: .1, drawdown: -.05, points: [{ date: '2026-01-01', value: 1 }, { date: '2026-11-06', value: 1.1 }] }
     const initialCapital = Number(body.initial_capital)
-    const account = [{ date: '2026-06-01', cash: .2, value: 1.1, weights: [.8], target: [1] }]
-    const backtestData = mode === 'backtest' ? {
-      trades: [{ model: 'scheme', date: '2026-06-01', symbol: '510300.SH', side: 'buy', reason: 'attack', price: 1, amount: .2, cost: .001, weights: [1] }],
-      schedule: [{ date: '2026-06-01', signals: ['attack'], weights: [1] }],
-      accounts: { scheme: account, equal: account },
-    } : {}
     return { weights: [1], risk_contribution: [1], target_amounts: Number.isFinite(initialCapital) ? { scheme: [initialCapital], equal: [initialCapital] } : undefined,
-      parameters: { ...body, symbols: ['510300.SH'] }, history: { scheme: history, equal: history }, ...backtestData,
+      parameters: { ...body, symbols: ['510300.SH'] }, history: { scheme: history, equal: history },
       as_of: '2026-11-06', samples: 126, names: { '510300.SH': '沪深300 ETF' } }
   },
 } }))
@@ -77,6 +75,7 @@ beforeEach(async () => {
   calls.devilPreview = false
   calls.daily.mockClear()
   calls.period.mockClear()
+  calls.replay.mockReset()
   calls.payloads = []
   calls.saved = []
   calls.messages = []
@@ -129,10 +128,10 @@ it('shows the compact market trend above the target allocation', async () => {
 it('restores a saved portfolio and displays its ETF and parameters', async () => {
   await selectSaved()
   expect(host.textContent).toContain('510300.SH')
-  expect(host.querySelector<HTMLInputElement>('[aria-label="回看交易日"]')!.value).toBe('126')
+  expect(host.querySelector('[aria-label="回看交易日"]')).toBeNull()
 })
 
-it('guides new users and keeps tracking and backtest separate from configuration', async () => {
+it('guides new users to the renamed history backtest tab', async () => {
   await click('新建配置')
   await fill('新建配置名称', '测试配置')
   await fill('新建配置资金', '100000')
@@ -143,12 +142,12 @@ it('guides new users and keeps tracking and backtest separate from configuration
   expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain('配置仓位')
   expect(host.textContent).toContain('等待目标仓位')
   expect(host.querySelector<HTMLInputElement>('[aria-label="开始日期"]')).toBeNull()
-  await click('调仓跟踪')
+  await click('历史回测')
   expect(host.textContent).not.toContain('请先保存配置，再更新调仓建议')
   expect([...host.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent?.trim() === '更新调仓建议')?.disabled).toBe(true)
-  await click('历史回测')
-  expect(host.textContent).toContain('填写 0.02 代表')
-  expect([...host.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent?.trim() === '运行历史回测')?.disabled).toBe(true)
+  expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain('历史回测')
+  expect(host.querySelector('[aria-label="开始日期"]')).toBeNull()
+  expect([...host.querySelectorAll<HTMLButtonElement>('button')].some(b => b.textContent?.trim() === '运行历史回测')).toBe(false)
 })
 
 it('keeps selected ETFs across tabs and clears stale calculated results after edits', async () => {
@@ -157,7 +156,7 @@ it('keeps selected ETFs across tabs and clears stale calculated results after ed
   expect(calls.calculations).toBe(2)
   expect(host.textContent).toContain('目标仓位')
   expect(host.textContent).toContain('100.00%')
-  await click('调仓跟踪')
+  await click('历史回测')
   await click('配置仓位')
   expect(host.textContent).toContain('100.00%')
   const remove = host.querySelector<HTMLButtonElement>('[aria-label="移除 510300.SH"]')!
@@ -239,11 +238,79 @@ it('automatically shows capped ETF allocations and cash, and refreshes on reques
   expect(host.textContent).not.toContain('使合计可达到 100%')
   await click('更新目标仓位')
   expect(calls.payloads).toHaveLength(2)
-  await click('调仓跟踪')
-  expect(host.textContent).toContain('当前方案暂未开放调仓跟踪')
+  await click('历史回测')
+  const history: AllocationTrackingHistory = {
+    start: '2026-11-04', end: '2026-11-06', sessions: 3, requested_sessions: 126,
+    names: { '510300.SH': '沪深300 ETF' },
+    history: {
+      scheme: { return: .05, drawdown: -.04, points: [{ date: '2026-11-05', value: 1.05, drawdown: 0 }] },
+      equal: { return: .02, drawdown: -.03, points: [{ date: '2026-11-05', value: 1.02, drawdown: 0 }] },
+    },
+    events: [{
+      date: '2026-11-05', reason: 'initial', market_score: 37, total_position: .7,
+      previous_position: null, max_deviation: null, previous_cash: 1, cash_weight: .7, equal_cash_weight: .75,
+      etf_allocations: [{ symbol: '510300.SH', score: 85, previous_weight: 0, weight: .3, change: .3, equal_weight: .25 }],
+    }],
+    trades: [
+      { date: '2026-11-05', model: 'scheme', symbol: '510300.SH', side: 'buy', reason: 'attack', price: 4.5, weight: .3, realized_pnl: null },
+      { date: '2026-11-06', model: 'scheme', symbol: '510300.SH', side: 'sell', reason: 'retreat', price: 4.7, weight: 0, realized_pnl: .002 },
+      { date: '2026-11-06', model: 'equal', symbol: '510300.SH', side: 'sell', reason: 'retreat', price: 4.7, weight: 0, realized_pnl: -.001 },
+    ],
+    skipped: [{ date: '2026-11-04', market_missing: true, symbols: ['510300.SH'] }],
+  }
+  await fill('触发偏离', '4')
+  await fill('回看单边费率', '0.02')
+  await fill('回看滑点', '0.05')
+  expect(host.querySelector('[aria-label="回看开始日期"]')).toBeTruthy()
+  expect(host.querySelector('[aria-label="回看结束日期"]')).toBeTruthy()
+  calls.replay.mockResolvedValueOnce(history)
+  await click('回看调仓历史')
+  expect(calls.replay).toHaveBeenLastCalledWith(expect.objectContaining({
+    start: expect.any(String), end: expect.any(String), threshold: .04, lookback: 126, fee: .0002, slippage: .0005,
+  }))
+  expect(host.textContent).toContain('初始目标 2026-11-05')
+  expect(host.textContent).toContain('魔鬼操盘手首次买入 2026-11-05')
+  expect(host.querySelector('[aria-label="模拟成交"]')?.textContent).toContain('进攻信号')
+  expect(host.querySelector('[aria-label="模拟成交组合"] [role="tab"][aria-selected="true"]')?.textContent).toBe('方案')
+  expect(host.querySelector('[aria-label="模拟成交"]')?.textContent).toContain('+¥200.00')
+  await click('等权对照')
+  expect(host.querySelector('[aria-label="模拟成交组合"] [role="tab"][aria-selected="true"]')?.textContent).toBe('等权对照')
+  expect(host.querySelector('[aria-label="模拟成交"]')?.textContent).toContain('-¥100.00')
+  expect(host.textContent).toContain('实际覆盖 2026-11-04 至 2026-11-06 · 3 个交易日')
+  expect(host.textContent).toContain('等权对照 · 累计收益')
+  expect(host.textContent).toContain('最大回撤 -4.00%')
+  expect(host.textContent).toContain('¥105,000.00')
+  await click('回撤曲线')
+  expect(host.querySelector('[aria-label="两组回撤曲线"]')).toBeTruthy()
+  await click('仓位明细')
+  expect(host.querySelector('table[aria-label="2026-11-05 仓位明细"]')?.textContent).toContain('75.00%')
+  expect(host.querySelector('details ul')?.textContent).toContain('市场环境评分')
+  expect(host.textContent).not.toContain('少于请求的 126 天')
+
+  let resolveReplay!: (history: AllocationTrackingHistory) => void
+  calls.replay.mockReturnValueOnce(new Promise(resolve => { resolveReplay = resolve }))
+  await click('回看调仓历史')
+  expect(host.querySelector('[role="status"]')?.textContent).toContain('正在计算')
+  await fill('回看单边费率', '0.03')
+  await act(async () => resolveReplay(history))
+  expect(host.textContent).not.toContain('初始目标 2026-11-05')
+
+  calls.replay.mockResolvedValueOnce({ ...history, history: undefined, performance_error: '缺少收盘价' })
+  await click('回看调仓历史')
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain('缺少收盘价')
+  expect(host.textContent).toContain('初始目标 2026-11-05')
+  await selectSaved()
+  expect(host.textContent).not.toContain('初始目标 2026-11-05')
+
+  calls.replay.mockResolvedValueOnce({ ...history, events: [], history: undefined })
+  await click('回看调仓历史')
+  expect(host.textContent).toContain('无法确定目标仓位')
+  calls.replay.mockRejectedValueOnce(new Error('交易日历不足'))
+  await click('回看调仓历史')
+  expect(host.querySelector('[role="alert"]')?.textContent).toBe('交易日历不足')
 })
 
-it('uses the selected scheme for estimates, saved tracking and unsaved backtests', async () => {
+it('uses the selected scheme for estimates and saved tracking', async () => {
   await selectSaved()
   await click('更新目标仓位')
   expect(host.textContent).toContain('测试方案甲 金额')
@@ -260,7 +327,7 @@ it('uses the selected scheme for estimates, saved tracking and unsaved backtests
   expect(calls.payloads.at(-1)?.body.scheme_id).toBe('second')
   expect(host.textContent).toContain('测试方案乙 金额')
   expect(host.textContent).toContain('测试方案乙 · 累计收益')
-  await click('调仓跟踪')
+  await click('历史回测')
   expect(host.textContent).toContain('配置方案：测试方案乙')
   expect(host.textContent).toContain('请先保存配置，再更新调仓建议')
   await click('保存配置')
@@ -269,40 +336,4 @@ it('uses the selected scheme for estimates, saved tracking and unsaved backtests
   await selectSaved()
   await click('配置仓位')
   expect(host.querySelector<HTMLSelectElement>('select')?.value).toBe('second')
-  await chooseScheme('third')
-  await click('历史回测')
-  await fill('开始日期', '2026-06-01')
-  await fill('结束日期', '2026-11-07')
-  await click('运行历史回测')
-  expect(calls.payloads.at(-1)).toMatchObject({ mode: 'backtest', body: { scheme_id: 'third' } })
-  expect(host.textContent).toContain('测试方案丙 · 累计收益')
-  expect(host.textContent).toContain('测试方案丙 实际持仓')
-  await click('配置仓位')
-  await chooseScheme('first')
-  await click('历史回测')
-  expect(host.textContent).not.toContain('测试方案丙 实际持仓')
-})
-
-it('runs the fixed Angel Devil close-price rule with explicit fee units', async () => {
-  await selectSaved()
-  await click('历史回测')
-  expect(host.textContent).toContain('首日没有进攻信号就保持现金')
-  expect(host.querySelector('[aria-label="调仓规则"]')).toBeNull()
-  await fill('开始日期', '2026-06-01')
-  await fill('结束日期', '2026-11-07')
-  await fill('单边费率', '0.02')
-  await click('运行历史回测')
-  expect(calls.payloads.at(-1)).toMatchObject({
-    mode: 'backtest', body: { initial_capital: 100000, rebalance: 'angel_devil', start: '2026-06-01', end: '2026-11-07', fee: .0002 },
-  })
-  expect(host.textContent).toContain('天使魔鬼信号与动态配比回测')
-  const tradesSummary = [...document.body.querySelectorAll<HTMLElement>('details summary')].find(summary => summary.textContent?.startsWith('成交明细'))!
-  await act(async () => tradesSummary.click())
-  expect(host.textContent).toContain('¥20,000.00 / 20.00%')
-  expect(host.textContent).toContain('¥100.00 / 0.10%')
-  const accountSummary = [...document.body.querySelectorAll<HTMLElement>('details summary')].find(summary => summary.textContent?.startsWith('每日配比与持仓'))!
-  await act(async () => accountSummary.click())
-  expect(host.textContent).toContain('¥90,000.00')
-  expect(host.textContent).toContain('¥20,000.00')
-  expect(host.textContent).toContain('¥110,000.00')
 })

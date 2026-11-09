@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { AlertTriangle, RadioTower, Plus, Trash2, Settings2, Zap, Bell, ListChecks, BellRing, TrendingUp, TrendingDown, Flame, Tags } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
+import { NumericInput } from '@/components/NumericInput'
 import { EmptyState } from '@/components/EmptyState'
 import { Skeleton } from '@/components/data/Skeleton'
 import { api, type MonitorRule, type AlertEvent, type MonitorCondition, type MonitorExtFieldItem } from '@/lib/api'
@@ -1230,10 +1231,11 @@ function ExtFieldSection({ label, value, onChange, groups, loading }: {
       {field && (
         <div className="flex items-center gap-2 pl-0.5">
           <span className="text-[10px] text-muted shrink-0">显示前N个</span>
-          <input
-            type="number" min={0} max={20}
-            value={maxTags || ''}
-            onChange={e => setMaxTags(e.target.value ? Number(e.target.value) : 0)}
+          <NumericInput
+            min={0} max={20}
+            value={maxTags || null}
+            allowEmpty
+            onValueChange={value => setMaxTags(value ?? 0)}
             placeholder="不限"
             className="w-14 h-6 bg-elevated border border-border rounded text-[11px] text-foreground px-1.5 focus:outline-none focus:border-accent/50"
           />

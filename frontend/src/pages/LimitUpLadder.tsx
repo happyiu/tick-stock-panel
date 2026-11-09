@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { RefreshCw, ChevronDown, Flame, Settings2, X, Bell, BellOff, AlertCircle } from 'lucide-react'
 import { DatePicker } from '@/components/DatePicker'
+import { NumericInput } from '@/components/NumericInput'
 import { api, type LimitLadderTier, type LimitLadderStock, type MonitorRule } from '@/lib/api'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { toNavItems, type NavItem } from '@/lib/listNav'
@@ -1199,18 +1200,14 @@ function NumInput({ label, value, onChange, min, max, placeholder }: {
   return (
     <label className="flex items-center justify-between gap-2 text-xs">
       <span className="text-secondary">{label}</span>
-      <input
-        type="number"
+      <NumericInput
         min={min}
         max={max}
-        value={value ?? ''}
-        onChange={e => {
-          let v = e.target.value ? Number(e.target.value) : undefined
-          if (v != null) {
-            if (min != null && v < min) v = min
-            if (max != null && v > max) v = max
-          }
-          onChange(v)
+        value={value}
+        allowEmpty
+        onValueChange={v => {
+          if (v == null) { onChange(undefined); return }
+          onChange(Math.max(min ?? -Infinity, Math.min(max ?? Infinity, v)))
         }}
         placeholder={placeholder}
         className="w-16 h-7 bg-elevated border border-border rounded text-xs text-foreground text-center px-1 placeholder:text-muted focus:outline-none focus:border-accent/50"
@@ -1294,11 +1291,12 @@ function ExtFieldSection({ item, onChange, options }: {
           {displayMode === 'tag' && (
             <div className="flex items-center gap-2">
               <span className="text-xs text-secondary shrink-0 w-16">显示前N个</span>
-              <input
-                type="number" min={0}
-                value={cfg?.maxTags ?? ''}
-                onChange={e => {
-                  const v = e.target.value ? Number(e.target.value) : undefined
+              <NumericInput
+                min={0}
+                value={cfg?.maxTags}
+                allowEmpty
+                onValueChange={value => {
+                  const v = value || undefined
                   updateDisplay({ maxTags: v, ...(v ? {} : { hiddenIndices: undefined }) })
                 }}
                 placeholder="不限制"

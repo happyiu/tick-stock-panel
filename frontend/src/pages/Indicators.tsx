@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Code2, Copy, Loader2, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
 import { Modal } from '@/components/Modal'
+import { NumericInput } from '@/components/NumericInput'
 import { api, type ChartIndicatorDefinition, type IndicatorMonitorSignal } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { useChartIndicators } from '@/lib/useChartIndicators'
@@ -61,7 +62,7 @@ function IndicatorEditor({ editor, close, changed }: { editor: Editor; close: ()
           {(['30m', '1d'] as const).map(period => <label key={period} className="flex items-center gap-1 text-xs"><input type="checkbox" disabled={readOnly} checked={signal.periods.includes(period)} onChange={e => setSignals(all => all.map(s => s.id === signal.id ? { ...s, periods: e.target.checked ? [...s.periods, period] : s.periods.filter(p => p !== period) } : s))} />{period === '30m' ? '30f' : '日线'}</label>)}
           {!readOnly && <button aria-label={`删除信号${index+1}`} onClick={() => setSignals(all => all.filter(s => s.id !== signal.id))} className="text-xs text-danger">删除</button>}
         </div>)}
-        <label className="flex items-center gap-2 text-xs text-secondary">最低历史根数<input aria-label="最低历史根数" type="number" min={1} max={20000} className={`${field} !w-24`} readOnly={readOnly} value={minimum} onChange={e => setMinimum(Number(e.target.value))} /></label>
+        <label className="flex items-center gap-2 text-xs text-secondary">最低历史根数<NumericInput aria-label="最低历史根数" min={1} max={20000} className={`${field} !w-24`} readOnly={readOnly} value={minimum} onValueChange={value => value != null && setMinimum(value)} /></label>
       </section>
       {error && <div role="alert" className="whitespace-pre-wrap rounded-md bg-danger/10 p-3 text-sm text-danger">{error}</div>}
       {valid && <p role="status" className="text-sm text-accent">公式校验通过</p>}

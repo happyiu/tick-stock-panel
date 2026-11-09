@@ -3,6 +3,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { KeyRound, Play, Plus, Save, Trash2, X, Zap, Check, ChevronDown } from 'lucide-react'
 import { api, type CustomSourceConfig, type DatasetConfig } from '@/lib/api'
+import { NumericInput } from '@/components/NumericInput'
 import { toast } from '@/components/Toast'
 
 // 暗色适配的标准输入框样式 (与 AI 页统一, bg-base 在暗色下为深色, 不会白底白字)
@@ -401,29 +402,31 @@ function DatasetDetail({
 
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
               <Field label="批量">
-                <input
-                  value={cfg.batch ?? ''}
-                  onChange={e => onUpdate({ batch: e.target.value ? Number(e.target.value) : null })}
+                <NumericInput
+                  value={cfg.batch ?? null}
+                  allowEmpty
+                  onValueChange={batch => onUpdate({ batch })}
                   placeholder="100"
                   className={`${INPUT_CLS} w-full`}
                 />
               </Field>
               <Field label="RPM">
-                <input
-                  value={cfg.rpm ?? ''}
-                  onChange={e => onUpdate({ rpm: e.target.value ? Number(e.target.value) : null })}
+                <NumericInput
+                  value={cfg.rpm ?? null}
+                  allowEmpty
+                  onValueChange={rpm => onUpdate({ rpm })}
                   placeholder="200"
                   className={`${INPUT_CLS} w-full`}
                 />
               </Field>
               <Field label="超时">
-                <input
-                  type="number"
+                <NumericInput
                   min="0.1"
                   max="300"
                   step="any"
-                  value={cfg.timeout ?? ''}
-                  onChange={e => onUpdate({ timeout: e.target.value ? Number(e.target.value) : null })}
+                  value={cfg.timeout ?? null}
+                  allowEmpty
+                  onValueChange={timeout => onUpdate({ timeout })}
                   onWheel={e => e.currentTarget.blur()}
                   placeholder="30"
                   className={`${INPUT_CLS} w-full`}

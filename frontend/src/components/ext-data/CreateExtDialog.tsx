@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
+import { NumericInput } from '@/components/NumericInput'
 import {
   X,
   Loader2,
@@ -509,21 +510,20 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
                 </div>
                 <div>
                   <div className="text-[10px] text-muted mb-1">调度间隔（分钟）</div>
-                  <input
-                    type="number"
+                  <NumericInput
                     min={1}
                     value={schedule}
-                    onChange={(e) => setSchedule(Number(e.target.value) || 1)}
+                    onValueChange={value => value != null && setSchedule(value || 1)}
                     className="w-full h-8 rounded-lg border border-border bg-base px-2 text-[10px] font-mono text-foreground focus:outline-none focus:border-accent/50"
                   />
                 </div>
               </div>
               <div className="w-1/2">
                 <div className="text-[10px] text-muted mb-1">拉取超时（秒 · 大响应接口可调高）</div>
-                <input
-                  type="number" min={5} max={300} step={5}
+                <NumericInput
+                  min={5} max={300} step={5}
                   value={timeoutSec}
-                  onChange={(e) => setTimeoutSec(Number(e.target.value))}
+                  onValueChange={value => value != null && setTimeoutSec(value)}
                   title="测试识别与正式拉取的单次请求超时, 默认 30 秒, 范围 5~300"
                   className="w-full h-8 rounded-lg border border-border bg-base px-2 text-[10px] font-mono text-foreground focus:outline-none focus:border-accent/50"
                 />

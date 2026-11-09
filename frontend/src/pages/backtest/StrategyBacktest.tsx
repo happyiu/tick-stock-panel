@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
+import { NumericInput } from '@/components/NumericInput'
 import { Play, FlaskConical, Clock, Loader2, Square, Search, Plus, X, SlidersHorizontal, BarChart3, Gauge, Zap, ListPlus, HelpCircle, ChevronRight, AlertTriangle, Layers, BookmarkPlus, Download } from 'lucide-react'
 import {
   api,
@@ -1884,13 +1885,12 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
                         <option value="year">年</option>
                         <option value="all">全部</option>
                       </select>
-                      <input
-                        type="number"
+                      <NumericInput
                         min={limits?.min}
                         max={limits?.max}
                         disabled={range.unit === 'all'}
-                        value={range.unit === 'all' ? '' : range.value}
-                        onChange={e => updateQuickRange(range.id, { value: Number(e.target.value) })}
+                        value={range.unit === 'all' ? null : range.value}
+                        onValueChange={value => value != null && updateQuickRange(range.id, { value })}
                         placeholder="—"
                         className={`${INPUT_CLS} ${range.unit === 'all' ? 'opacity-50' : ''}`}
                       />
@@ -2111,8 +2111,8 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
             <span className="text-[10px] text-muted">仅在前一日环境满足时入场(防未来函数)</span>
             <div className="ml-auto flex items-center gap-1">
               <span className="text-[10px] text-muted">最低分</span>
-              <input type="number" min={0} max={100} value={regimeMinScore} placeholder="不限"
-                onChange={e => setRegimeMinScore(e.target.value ? Number(e.target.value) : '')}
+              <NumericInput min={0} max={100} value={regimeMinScore === '' ? null : Number(regimeMinScore)} allowEmpty placeholder="不限"
+                onValueChange={value => setRegimeMinScore(value ?? '')}
                 className="w-14 h-6 px-1 rounded border border-border bg-base text-[11px] text-foreground text-center focus:outline-none focus:border-accent/50" />
             </div>
           </div>

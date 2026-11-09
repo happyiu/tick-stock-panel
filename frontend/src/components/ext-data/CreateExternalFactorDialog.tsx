@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BarChart3, GitCompareArrows, Loader2, X } from 'lucide-react'
 import { Modal } from '@/components/Modal'
+import { NumericInput } from '@/components/NumericInput'
 import { toast } from '@/components/Toast'
 import { api, type ExternalFactorCategory } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
@@ -156,7 +157,7 @@ export function CreateExternalFactorDialog({ onClose }: { onClose: () => void })
             </label>
             <label className="space-y-1.5">
               <span className="text-[11px] font-medium text-secondary">收益窗口</span>
-              <input type="number" min={1} max={512} value={window} onChange={event => setWindow(Number(event.target.value) || 1)} className={`${INPUT_CLS} font-mono`} />
+              <NumericInput min={1} max={512} value={window} onValueChange={value => value != null && setWindow(value || 1)} className={`${INPUT_CLS} font-mono`} />
               <span className="block text-[10px] text-muted">输出 close / close[-N] - 1</span>
             </label>
           </div>

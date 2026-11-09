@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { NumericInput } from '@/components/NumericInput'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, Loader2, Plus, Save, Search, Sparkles, X } from 'lucide-react'
@@ -230,7 +231,7 @@ export function CustomSignalDialog({ open, signal, defaultKind = 'exit', onClose
                       <option value="">校验后选择输出变量</option>{formulaValidation?.variables.map(name => <option key={name} value={name}>{name}</option>)}
                     </select>
                   </label>
-                  <label className="space-y-1 text-xs text-secondary"><span className="block">最低历史根数</span><input aria-label="最低历史根数" type="number" min={1} max={20000} value={draft.min_history_bars ?? 100} onChange={e => setDraft(d => ({ ...d, min_history_bars: Number(e.target.value) }))} className="h-8 w-28 rounded-btn border border-border bg-base px-2 text-foreground" /></label>
+                  <label className="space-y-1 text-xs text-secondary"><span className="block">最低历史根数</span><NumericInput aria-label="最低历史根数" min={1} max={20000} value={draft.min_history_bars ?? 100} onValueChange={value => value != null && setDraft(d => ({ ...d, min_history_bars: value }))} className="h-8 w-28 rounded-btn border border-border bg-base px-2 text-foreground" /></label>
                 </div>
                 {formulaValidation && <p role="status" className="text-xs text-accent">公式校验通过，请确认输出变量。</p>}
                 <p className="text-[11px] leading-5 text-muted">输出非零表示命中，零表示未命中；历史不足或数值无效时不可计算。支持项目现有的 EMA、MA、SLOPE、CROSS、REF 等函数，绘图语句不会作为信号输出。盘中未收盘 K 线上的信号可能变化。</p>
@@ -479,17 +480,12 @@ function DaysInput({ value, max, onChange }: { value: number; max: number; onCha
   return (
     <div className="flex items-center h-7 rounded bg-base border border-border focus-within:border-accent/50 transition-colors shrink-0">
       <span className="pl-1.5 text-[11px] text-muted select-none">前</span>
-      <input
-        type="number"
+      <NumericInput
         min={1}
         max={max}
         value={value}
-        onChange={e => {
-          const raw = e.target.value
-          if (raw === '') { onChange(0); return }
-          const n = Math.max(1, Math.min(max, parseInt(raw) || 1))
-          onChange(n)
-        }}
+        allowEmpty
+        onValueChange={number => onChange(number == null ? 0 : Math.max(1, Math.min(max, Math.trunc(number) || 1)))}
         title={`前 ${value} 个交易日的值`}
         className="w-7 h-full px-0 text-[11px] font-mono text-foreground text-center bg-transparent focus:outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
       />

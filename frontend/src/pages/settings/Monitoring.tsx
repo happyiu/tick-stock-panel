@@ -20,6 +20,7 @@ import { QK } from '@/lib/queryKeys'
 import { useCardFlash, cardFlashCls } from '@/lib/useCardFlash'
 import { toast } from '@/components/Toast'
 import { DepthConfigContent } from '@/components/data/DepthConfigCard'
+import { NumericInput } from '@/components/NumericInput'
 
 // 卡片定位锚点: highlight=<anchor> 时该卡片滚动到视口中央并闪烁高亮。
 // 其他页面用 /settings?tab=monitoring&highlight=<anchor> 精确引导用户到某张卡片。
@@ -850,7 +851,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                     </label>
                     <label className="space-y-1.5">
                       <span className="text-[11px] text-muted">端口</span>
-                      <input type="number" min={1} max={65535} value={emailDraft.port} onChange={e => setEmailDraft(d => ({ ...d, port: Number(e.target.value) }))} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground" />
+                      <NumericInput min={1} max={65535} value={emailDraft.port} onValueChange={value => value != null && setEmailDraft(d => ({ ...d, port: value }))} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground" />
                     </label>
                     <label className="space-y-1.5">
                       <span className="text-[11px] text-muted">加密</span>
