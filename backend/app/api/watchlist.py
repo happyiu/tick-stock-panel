@@ -20,6 +20,7 @@ from app.price_limits import (
     polars_price_limit_pct,
 )
 from app.services import watchlist
+from app.services.index_const import CORE_INDEX_SYMBOLS
 from app.services.watchlist_csv import import_watchlist_codes, import_watchlist_csv
 from app.services.watchlist_ocr import import_watchlist_image
 from app.services.watchlist_ocr.provider import get_ocr_provider
@@ -471,6 +472,8 @@ def watchlist_market_trends(body: MarketTrendsRequest, request: Request):
     from app.services.watchlist_market_trends import empty_summary, symbol_trends
 
     allowed = {entry['symbol'] for entry in watchlist.list_symbols()}
+    if body.asset_type == 'index':
+        allowed.update(CORE_INDEX_SYMBOLS)
     now = cn_now()
     rows = []
     for symbol in dict.fromkeys(body.symbols):

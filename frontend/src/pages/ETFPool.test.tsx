@@ -53,14 +53,14 @@ async function click(label: string) {
 }
 async function select(label: string, value: string) {
   await act(async () => {
-    const element = host.querySelector<HTMLSelectElement>(`[aria-label="${label}"]`)!
+    const element = document.body.querySelector<HTMLSelectElement>(`[aria-label="${label}"]`)!
     element.value = value
     element.dispatchEvent(new Event('change', { bubbles: true }))
   })
   await settle()
 }
 async function pressText(text: string, selector = 'button') {
-  await act(async () => Array.from(host.querySelectorAll<HTMLButtonElement>(selector)).find(b => b.textContent?.includes(text))!.click())
+  await act(async () => Array.from(document.body.querySelectorAll<HTMLButtonElement>(selector)).find(b => b.textContent?.includes(text))!.click())
   await settle()
 }
 it('applies multiple daily signals, changes match mode and preserves sorting', async () => {
@@ -68,19 +68,19 @@ it('applies multiple daily signals, changes match mode and preserves sorting', a
   await click('按涨跌幅排序')
   await click('下一页')
   await click('信号筛选')
-  expect(host.querySelector('[role="dialog"]')?.textContent).toContain('最新可用日线')
-  expect(host.querySelector('[role="dialog"]')?.textContent).not.toContain('分钟信号')
-  expect(host.querySelector('[role="dialog"]')?.textContent).not.toContain('停用信号')
-  const limit = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="checkbox"]')).find(b => b.textContent?.includes('signal_limit_up'))!
+  expect(document.body.querySelector('[role="dialog"]')?.textContent).toContain('最新可用日线')
+  expect(document.body.querySelector('[role="dialog"]')?.textContent).not.toContain('分钟信号')
+  expect(document.body.querySelector('[role="dialog"]')?.textContent).not.toContain('停用信号')
+  const limit = Array.from(document.body.querySelectorAll<HTMLButtonElement>('[role="checkbox"]')).find(b => b.textContent?.includes('signal_limit_up'))!
   expect(limit.disabled).toBe(true)
   await pressText('MACD金叉', '[role="checkbox"]')
   await pressText('自定义日线', '[role="checkbox"]')
   await select('信号组合规则', 'any')
   await pressText('应用 (2)')
   expect(fixtures.request.mock.lastCall?.[0]).toMatchObject({ page: 1, sortChangePct: 'desc', signalIds: ['signal_macd_golden', 'csg_daily_test'], signalMatch: 'any' })
-  expect(host.querySelector('[role="dialog"]')).toBeNull()
+  expect(document.body.querySelector('[role="dialog"]')).toBeNull()
   await click('信号筛选')
-  expect(host.querySelectorAll('[role="checkbox"][aria-checked="true"]').length).toBe(2)
+  expect(document.body.querySelectorAll('[role="checkbox"][aria-checked="true"]').length).toBe(2)
   await pressText('MACD金叉', '[role="checkbox"]')
   await pressText('取消')
   expect(fixtures.request.mock.lastCall?.[0].signalIds).toHaveLength(2)
@@ -104,6 +104,25 @@ it('shows signal date and warnings while retaining results during a filter reque
   expect(host.textContent).toContain('2026-10-22')
   expect(host.textContent).toContain('盘中信号, 可能变化')
   expect(host.textContent).toContain('没有符合条件的 ETF')
+})
+it('toggles strong ETF filtering, resets pagination and clears with other filters', async () => {
+  fixtures.request.mockImplementation(async ({ strongOnly }) => strongOnly
+    ? { ...response(1), signal_date: '2026-10-22' }
+    : response())
+  await render()
+  await click('下一页')
+  await click('强势 ETF')
+  const button = host.querySelector('[aria-label="强势 ETF"]')!
+  expect(button.getAttribute('aria-pressed')).toBe('true')
+  expect(fixtures.request.mock.lastCall?.[0]).toMatchObject({ strongOnly: true, page: 1 })
+  expect(host.textContent).toContain('2026-10-22')
+  expect(host.textContent).toContain('共 1 条')
+  await click('强势 ETF')
+  expect(button.getAttribute('aria-pressed')).toBe('false')
+  await click('强势 ETF')
+  await pressText('重置筛选')
+  expect(button.getAttribute('aria-pressed')).toBe('false')
+  expect(host.textContent).toContain('共 45 条')
 })
 it('paginates and resets the page when filters or page size change', async () => {
   await render()

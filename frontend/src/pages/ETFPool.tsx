@@ -2,7 +2,7 @@ import './ETFPool.css'
 import { EtfRadar } from '@/components/EtfRadar'
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { ArrowDown, ArrowUp, ChevronsUpDown, ChevronDown, ChevronLeft, ChevronRight, Filter, RefreshCw, Search, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, ChevronsUpDown, ChevronDown, ChevronLeft, ChevronRight, Filter, RefreshCw, Search, TrendingUp, X } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { PageHeader } from '@/components/PageHeader'
 import { api, type EtfPoolParams, type EtfPoolRow } from '@/lib/api'
@@ -54,7 +54,7 @@ export function ETFPool() {
   const reset = () => {
     setSearch('')
     setSignals([])
-    setParams(p => ({ ...p, q: '', category: '', page: 1, sortChangePct: undefined, signalIds: [], signalMatch: 'all' }))
+    setParams(p => ({ ...p, q: '', category: '', page: 1, sortChangePct: undefined, signalIds: [], signalMatch: 'all', strongOnly: undefined }))
   }
   const applySignals = (next: ChartSignalSelection[], match = params.signalMatch ?? 'all') => {
     setSignals(next)
@@ -85,14 +85,18 @@ export function ETFPool() {
           <button className={`${control} inline-flex items-center gap-1.5 ${signals.length ? 'text-accent' : ''}`} aria-label="信号筛选" onClick={() => setShowSignalPicker(true)}>
             <Filter className="h-3.5 w-3.5" />信号筛选{signals.length > 0 && ` (${signals.length})`}
           </button>
+          <button type="button" className={`${control} inline-flex items-center gap-1.5 ${params.strongOnly ? 'border-accent bg-accent/10 text-accent' : ''}`} aria-label="强势 ETF" aria-pressed={!!params.strongOnly} title="最新日线价格同时高于 5 日和 21 日均线" onClick={() => update({ strongOnly: params.strongOnly ? undefined : true })}>
+            <TrendingUp className="h-3.5 w-3.5" />强势 ETF
+          </button>
           <button className="text-sm text-muted hover:text-accent" onClick={reset}>重置筛选</button>
         </div>
-        {signals.length > 0 && <div className="flex shrink-0 flex-wrap items-center gap-2 text-xs">
-          <span className="text-secondary">日线 · {params.signalMatch === 'any' ? '任一满足' : '全部满足'}</span>
+        {(params.strongOnly || signals.length > 0) && <div className="flex shrink-0 flex-wrap items-center gap-2 text-xs">
+          {params.strongOnly && <span className="text-secondary">日线价格高于 MA5 和 MA21</span>}
+          {signals.length > 0 && <span className="text-secondary">日线 · {params.signalMatch === 'any' ? '任一满足' : '全部满足'}</span>}
           {signals.map(signal => <button key={signal.id} className="inline-flex max-w-full items-center gap-1 rounded-md bg-accent/10 px-2 py-1 text-accent" aria-label={`移除信号 ${signal.name}`} onClick={() => applySignals(signals.filter(s => s.id !== signal.id))}>
             <span className="truncate">{signal.name}</span><X className="h-3 w-3 shrink-0" />
           </button>)}
-          <button className="text-muted hover:text-accent" onClick={() => applySignals([])}>清空信号</button>
+          {signals.length > 0 && <button className="text-muted hover:text-accent" onClick={() => applySignals([])}>清空信号</button>}
           {!query.isPlaceholderData && data?.signal_date && <span className="text-muted">筛选日期：{data.signal_date}</span>}
           {!query.isPlaceholderData && data?.signal_warnings?.map(warning => <span key={warning} className="text-warning">{warning}</span>)}
         </div>}

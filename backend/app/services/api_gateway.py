@@ -91,6 +91,7 @@ def required_scope(method: str, path: str) -> str | None:
     # Self-selected assets share the panel's list; never prefix-match management routes.
     exact = {
         ("GET", "/api/kline/period"): "read:market",
+        ("GET", "/api/kline/etf-pool"): "read:market",
         ("GET", "/api/watchlist"): "read:watchlist",
         ("GET", "/api/watchlist/enriched"): "read:watchlist",
         ("POST", "/api/watchlist/market-trends"): "read:watchlist",

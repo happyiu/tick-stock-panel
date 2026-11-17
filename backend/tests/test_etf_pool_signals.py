@@ -1,5 +1,5 @@
 """ETF daily signal filtering runs before sorting and pagination."""
-from datetime import date
+from datetime import date, timedelta
 from types import SimpleNamespace
 
 import polars as pl
@@ -70,6 +70,38 @@ def test_missing_signal_column_is_not_silently_ignored(repo, monkeypatch):
     monkeypatch.setattr(ScreenerService, '_load_enriched_history', lambda *_args, **_kwargs: pl.DataFrame())
     with pytest.raises(ValueError, match="计算"):
         list_etfs(repo, signal_ids=["signal_macd_golden"])
+
+
+def test_strong_etf_filter_applies_both_averages_before_pagination(repo):
+    frame, latest = repo.get_enriched_latest_asset("etf")
+    symbols = frame["symbol"].to_list()
+    frame = frame.with_columns(pl.Series("close", [2., 2., 2., 2.]))
+    # A passes; B only passes MA5; C only passes MA21; D has no latest row.
+    history = pl.DataFrame({
+        "symbol": [symbol for symbol in symbols for _ in range(20)],
+        "date": [latest - timedelta(days=n) for n in range(20, 0, -1)] * 4,
+        "close": [1.] * 20 + [3.] * 16 + [1.] * 4 + [1.] * 16 + [3.] * 4 + [1.] * 20,
+    })
+    repo.get_enriched_latest_asset = lambda _: (frame, latest)
+    repo.get_formula_history = lambda *_, **_kwargs: history
+    app = FastAPI()
+    app.include_router(router)
+    app.state.repo = repo
+    with TestClient(app) as client:
+        params = {"strong_only": True, "sort_change_pct": "desc", "page_size": 1}
+        payload = client.get("/api/kline/etf-pool", params=params).json()
+        assert payload["total"] == 1
+        assert payload["signal_date"] == latest.isoformat()
+        assert [row["symbol"] for row in payload["rows"]] == [symbols[0]]
+        payload = client.get("/api/kline/etf-pool", params={
+            **params, "signal_ids": "signal_ma_golden_5_20",
+        }).json()
+        assert payload["total"] == 1
+        assert client.get("/api/kline/etf-pool", params={**params, "page": 2}).json()["rows"] == []
+        repo.get_formula_history = lambda *_, **_kwargs: pl.DataFrame()
+        payload = client.get("/api/kline/etf-pool", params=params).json()
+        assert payload["rows"] == []
+        assert payload["signal_warnings"]
 
 
 @pytest.mark.parametrize("definition_type", ["conditions", "formula"])

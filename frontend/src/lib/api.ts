@@ -43,6 +43,7 @@ export interface EtfPoolParams {
   sortChangePct?: 'asc' | 'desc'
   signalIds?: string[]
   signalMatch?: 'all' | 'any'
+  strongOnly?: boolean
 }
 
 export interface EtfPoolRow {
@@ -3617,6 +3618,7 @@ export const api = {
     if (params.q) query.set('q', params.q)
     if (params.category) query.set('category', params.category)
     if (params.sortChangePct) query.set('sort_change_pct', params.sortChangePct)
+    if (params.strongOnly) query.set('strong_only', 'true')
     if (params.signalIds?.length) {
       query.set('signal_ids', params.signalIds.join(','))
       query.set('signal_match', params.signalMatch ?? 'all')

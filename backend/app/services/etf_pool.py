@@ -1,5 +1,6 @@
 """Read-only ETF catalog over the repository's current instrument snapshot."""
 import json
+from datetime import date
 from typing import Literal
 
 import polars as pl
@@ -20,6 +21,44 @@ _CATEGORY_RULES = (
     ("宽基", "沪深300|中证(50|100|200|300|500|800|1000|2000|A50|A100|A500)|上证(50|180|380)|科创(50|100|200)|创业板(50|100|200|ETF|综)|深证(50|100)|深100|深成|全指ETF|综指"),
     ("行业主题", "黄金股|黄金产业|稀有金属|算力|卫星|粮食|半导体|芯片|医药|医疗|生物|创新药|消费|酒|食品|饮料|家电|汽车|新能源|光伏|电池|电力|能源|煤炭|石油|化工|有色|稀土|钢铁|金融|银行|证券|券商|保险|地产|房地产|基建|建材|工程|机械|军工|国防|航天|航空|科技|信息|计算机|软件|通信|5G|人工智能|智能|机器人|传媒|游戏|互联网|云计算|数据|数字|电子|农业|养殖|畜牧|环保|碳中和|物流|运输|交通|旅游|教育|科创芯片"),
 )
+
+
+def _daily_filter_warnings(latest: date) -> list[str]:
+    now = cn_now()
+    return ["盘中信号, 可能变化"] if latest == now.date() and now.hour < 15 else []
+
+
+def _filter_strong_etfs(repo, df: pl.DataFrame) -> tuple[pl.DataFrame, str | None, list[str]]:
+    current, latest = repo.get_enriched_latest_asset("etf")
+    if latest is None or latest > cn_now().date() or not {"symbol", "date", "close"} <= set(current.columns):
+        return df.head(0), None, ["暂无可用 ETF 日线数据, 请先同步日线数据"]
+
+    columns = ["symbol", "date", "close"]
+    candidates = df.select("symbol")
+    current = current.filter(pl.col("date") == latest).select(columns).join(candidates, on="symbol", how="semi")
+    if current.is_empty():
+        return df.head(0), latest.isoformat(), _daily_filter_warnings(latest)
+    history = repo.get_formula_history("etf", latest, 20, cache_slot="etf_strength")
+    if history.is_empty():
+        return df.head(0), latest.isoformat(), ["ETF 日线历史不足, 需要至少 21 根日线"]
+
+    history = history.select(columns).join(current.select("symbol"), on="symbol", how="semi")
+    close = pl.col("close")
+    frame = (
+        pl.concat([history, current], how="vertical_relaxed")
+        .sort(["symbol", "date"])
+        .with_columns(pl.when(close.is_finite() & (close > 0)).then(close).alias("close"))
+        .with_columns(
+            close.rolling_mean(5).over("symbol").alias("ma5"),
+            close.rolling_mean(21).over("symbol").alias("ma21"),
+        )
+        .filter(pl.col("date") == latest)
+    )
+    warnings = _daily_filter_warnings(latest)
+    if frame["ma21"].null_count() == frame.height:
+        warnings.append("ETF 日线历史不足, 需要至少 21 根有效日线")
+    matches = frame.filter((close > pl.col("ma5")) & (close > pl.col("ma21"))).select("symbol")
+    return df.join(matches, on="symbol", how="semi"), latest.isoformat(), warnings
 
 
 def _filter_signals(repo, df: pl.DataFrame, signal_ids: list[str], match: str) -> tuple[pl.DataFrame, str | None, list[str]]:
@@ -44,9 +83,7 @@ def _filter_signals(repo, df: pl.DataFrame, signal_ids: list[str], match: str) -
     conditions = [pl.col(s).fill_null(False) for s in selected]
     mask = pl.all_horizontal(conditions) if match == "all" else pl.any_horizontal(conditions)
     matches = frame.filter(mask).select("symbol").unique()
-    now = cn_now()
-    warnings = ["盘中信号, 可能变化"] if latest == now.date() and now.hour < 15 else []
-    return df.join(matches, on="symbol", how="semi"), latest.isoformat(), warnings
+    return df.join(matches, on="symbol", how="semi"), latest.isoformat(), _daily_filter_warnings(latest)
 
 
 def etf_catalog(repo) -> pl.DataFrame:
@@ -71,7 +108,7 @@ def etf_catalog(repo) -> pl.DataFrame:
     return df
 
 
-def list_etfs(repo, *, q: str = "", category: str = "", exchange: str = "", page: int = 1, page_size: int = 20, sort_change_pct: Literal["asc", "desc"] | None = None, signal_ids: list[str] | None = None, signal_match: Literal["all", "any"] = "all") -> dict:
+def list_etfs(repo, *, q: str = "", category: str = "", exchange: str = "", page: int = 1, page_size: int = 20, sort_change_pct: Literal["asc", "desc"] | None = None, signal_ids: list[str] | None = None, signal_match: Literal["all", "any"] = "all", strong_only: bool = False) -> dict:
     df = etf_catalog(repo)
     counts = dict(df.group_by("category").len().iter_rows())
     categories = [{"name": label, "count": counts.get(label, 0)} for label in (*[r[0] for r in _CATEGORY_RULES], "其他")]
@@ -87,6 +124,10 @@ def list_etfs(repo, *, q: str = "", category: str = "", exchange: str = "", page
     signal_date, signal_warnings = None, []
     if signal_ids:
         df, signal_date, signal_warnings = _filter_signals(repo, df, signal_ids, signal_match)
+    if strong_only:
+        df, strong_date, warnings = _filter_strong_etfs(repo, df)
+        signal_date = strong_date or signal_date
+        signal_warnings = list(dict.fromkeys([*signal_warnings, *warnings]))
     offset = min((page - 1) * page_size, df.height)
     # 涨跌幅排序需先取得全部筛选标的的快照再分页, 默认路径仍只查当前页。
     page_df = df if sort_change_pct else df.sort("symbol").slice(offset, page_size)

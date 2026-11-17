@@ -266,10 +266,11 @@ def get_etf_pool(
     sort_change_pct: Annotated[Literal["asc", "desc"] | None, Query()] = None,
     signal_ids: str = Query("", max_length=4096),
     signal_match: Literal["all", "any"] = Query("all"),
+    strong_only: bool = Query(False),
 ):
     selected_ids = [s.strip() for s in signal_ids.split(",") if s.strip()]
     try:
-        return list_etfs(request.app.state.repo, q=q, category=category or "", exchange=exchange or "", page=page, page_size=page_size, sort_change_pct=sort_change_pct, signal_ids=selected_ids, signal_match=signal_match)
+        return list_etfs(request.app.state.repo, q=q, category=category or "", exchange=exchange or "", page=page, page_size=page_size, sort_change_pct=sort_change_pct, signal_ids=selected_ids, signal_match=signal_match, strong_only=strong_only)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

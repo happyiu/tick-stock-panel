@@ -388,7 +388,7 @@ class KlineRepository:
         self._etf_symbol_set_cache: set[str] | None = None
         self._index_enriched_cache: pl.DataFrame | None = None
         self._index_enriched_cache_date: date | None = None
-        self._formula_history_cache: dict[str, tuple[tuple, pl.DataFrame]] = {}
+        self._formula_history_cache: dict[tuple[str, str], tuple[tuple, pl.DataFrame]] = {}
 
         # ---- enriched 后台预热 ----
         # 启动时 compute_indicators (107万行, 低配机 50s+) 移出 lifespan 关键路径,
@@ -1628,7 +1628,7 @@ class KlineRepository:
             df = df.select(existing)
         return df
 
-    def get_formula_history(self, asset_type: str, before: date, bars: int) -> pl.DataFrame:
+    def get_formula_history(self, asset_type: str, before: date, bars: int, *, cache_slot: str = "formula") -> pl.DataFrame:
         """公式实时计算的历史 OHLCV; 当日行情更新不重复扫描历史分区。"""
         from datetime import timedelta
 
@@ -1643,7 +1643,8 @@ class KlineRepository:
             if start <= day < before:
                 paths.append(path)
         signature = (before, bars, tuple(sorted((str(p), p.stat().st_mtime_ns, p.stat().st_size) for p in paths)))
-        cached = self._formula_history_cache.get(asset_type)
+        cache_key = (asset_type, cache_slot)
+        cached = self._formula_history_cache.get(cache_key)
         if cached is not None and cached[0] == signature:
             return cached[1]
         frame = pl.DataFrame()
@@ -1652,7 +1653,7 @@ class KlineRepository:
                                     .select("symbol", "date", "open", "high", "low", "close", "volume", "amount")
                                     .sort(["symbol", "date"]))
             frame = frame.group_by("symbol", maintain_order=True).tail(bars)
-        self._formula_history_cache[asset_type] = (signature, frame)
+        self._formula_history_cache[cache_key] = (signature, frame)
         return frame
 
     def get_etf_quote_snapshot(self, symbols: list[str]) -> pl.DataFrame:

@@ -57,6 +57,19 @@ def test_batch_deduplicates_and_keeps_asset_scope(monkeypatch):
     assert [row['symbol'] for row in result['rows']] == calls
 
 
+def test_core_index_trends_do_not_require_watchlist_membership(monkeypatch):
+    monkeypatch.setattr(api.watchlist, 'list_symbols', lambda: [])
+    calls = []
+    monkeypatch.setattr(trends, 'symbol_trends', lambda state, symbol, asset, now: calls.append((symbol, asset)) or {})
+    repo = SimpleNamespace(resolve_asset_type=lambda symbol: 'index')
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(repo=repo)))
+    body = api.MarketTrendsRequest(symbols=['000001.SH', '000001.SH', '000300.SH'], asset_type='index')
+    result = api.watchlist_market_trends(body, request)
+    assert calls == [('000001.SH', 'index')]
+    assert [row['symbol'] for row in result['rows']] == ['000001.SH']
+    assert set(result['rows'][0]['periods']) == {'1w', '1d', '30m'}
+
+
 def test_open_week_and_future_thirty_minute_bar_are_excluded():
     now = datetime(2026, 11, 6, 14, 15)
     weekly = [{'date': date(2026, 3, 20) + timedelta(weeks=i), 'close': 100.} for i in range(34)]
